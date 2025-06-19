@@ -1,0 +1,43 @@
+# Node modules and package manager files
+node_modules
+npm-debug.log
+yarn-error.log
+package-lock.json
+yarn.lock
+
+# Git and version control
+.git
+.gitignore
+
+# Build artifacts
+*.apk
+*.aab
+*.ipa
+*.app
+*.xcarchive
+dist
+build
+web-build
+
+# Test, docs, and local config
+__tests__
+test
+tests
+docs
+coverage
+.env
+.env.*
+
+# Miscellaneous
+*.log
+*.md
+.DS_Store
+Thumbs.db
+
+# Large or raw assets not needed for build
+assets/raw/
+assets/large/
+
+# React Native
+android/
+ios/
