@@ -1,6 +1,7 @@
 import { collection, query, where, getDocs, addDoc, deleteDoc, doc, updateDoc, arrayUnion, arrayRemove, getDoc } from 'firebase/firestore';
 import { auth, db } from '../firebaseConfig';
 import { Activity } from '../data/activitiesData';
+import { removeUserFromChat } from './firestoreChats';
 
 export const getUserJoinedActivities = async (): Promise<string[]> => {
   const user = auth.currentUser;
@@ -26,6 +27,8 @@ export const leaveActivity = async (activityId: string, userId: string) => {
   await updateDoc(activityRef, {
     joinedUserIds: arrayRemove(userId),
   });
+  // Remove user from chat participants as well
+  await removeUserFromChat(activityId, userId);
 };
 
 export const fetchAllActivities = async (): Promise<Activity[]> => {

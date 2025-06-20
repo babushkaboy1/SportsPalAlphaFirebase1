@@ -13,6 +13,7 @@ import {
   TextInput,
   Share,
   StatusBar, // <-- Add this import
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -36,7 +37,8 @@ const ProfileScreen = () => {
   const [activeTab, setActiveTab] = useState<'activities' | 'history' | 'friends'>('activities');
   const [userLocation, setUserLocation] = useState<{ latitude: number, longitude: number } | null>(null);
   const [userJoinedActivities, setUserJoinedActivities] = useState<any[]>([]);
-  const { joinedActivities, toggleJoinActivity, isActivityJoined, allActivities } = useActivityContext();
+  const [isReady, setIsReady] = useState(false);
+  const { joinedActivities, toggleJoinActivity, isActivityJoined, allActivities, profile: contextProfile } = useActivityContext();
 
   const fetchProfile = async () => {
     let uid = userId;
@@ -71,6 +73,12 @@ const ProfileScreen = () => {
   );
 
   useEffect(() => {
+    if (!contextProfile) {
+      fetchProfile();
+    }
+  }, [contextProfile]);
+
+  useEffect(() => {
     (async () => {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
@@ -99,6 +107,12 @@ const ProfileScreen = () => {
     }
   }, [allActivities, profile]);
 
+  useEffect(() => {
+    if (profile) {
+      setIsReady(true);
+    }
+  }, [profile]);
+
   const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
     const R = 6371;
     const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -110,6 +124,8 @@ const ProfileScreen = () => {
 
   const handleJoinLeave = async (item: any) => {
     await toggleJoinActivity(item);
+    // Optionally, force a refresh or navigate to ChatsScreen
+    // navigation.navigate('Chats');
   };
 
   const renderActivity = ({ item }: { item: any }) => {
@@ -189,6 +205,15 @@ const ProfileScreen = () => {
         return "help"; // Fallback icon
     }
   };
+
+  // Show loading indicator until profile is loaded
+  if (!isReady) {
+    return (
+      <SafeAreaView style={[styles.container, { paddingTop: insets.top, justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color="#1ae9ef" />
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={[styles.container, { paddingTop: insets.top }]}>

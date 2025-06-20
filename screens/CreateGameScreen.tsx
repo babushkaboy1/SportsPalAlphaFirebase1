@@ -11,6 +11,7 @@ import {
   Platform,
   StatusBar,
   Modal,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
@@ -64,6 +65,12 @@ const CreateGameScreen = () => {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [showParticipantsPicker, setShowParticipantsPicker] = useState(false);
+  const [isReady, setIsReady] = useState(false);
+
+  useEffect(() => {
+    const timeout = setTimeout(() => setIsReady(true), 500);
+    return () => clearTimeout(timeout);
+  }, []);
 
   useEffect(() => {
     const setAddressFromCoords = async () => {
@@ -188,6 +195,14 @@ const CreateGameScreen = () => {
       setTime(`${hours}:${minutes}`);
     }
   };
+
+  if (!isReady) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color="#1ae9ef" />
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={[styles.container, { paddingTop: insets.top }]}>

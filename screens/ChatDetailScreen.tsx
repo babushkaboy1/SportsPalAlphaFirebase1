@@ -1,5 +1,5 @@
 // screens/ChatDetailScreen.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -11,47 +11,36 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
-  StatusBar,
 } from 'react-native';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import * as NavigationBar from 'expo-navigation-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
-import * as Camera from 'expo-camera';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
+import { listenToMessages, sendMessage } from '../utils/firestoreChats';
+import { doc, getDoc } from 'firebase/firestore';
+import { db, auth } from '../firebaseConfig';
+import { ActivityIcon } from '../components/ActivityIcons'; // Make sure this is imported
+import { StackNavigationProp } from '@react-navigation/stack';
+import { RootStackParamList } from '../types/navigation';
 
-// Define the message type
+// Firestore message type
 type Message = {
   id: string;
-  sender: string;
+  senderId: string;
   text: string;
   type: 'text' | 'image' | 'audio';
-  time: string;
+  timestamp?: any;
 };
-
-// Dummy initial messages
-const initialMessages: Message[] = [
-  {
-    id: '1',
-    sender: 'Alex',
-    text: "Hey! How's it going?",
-    type: 'text',
-    time: '7:45 PM',
-  },
-  {
-    id: '2',
-    sender: 'You',
-    text: 'All good! Ready for the game?',
-    type: 'text',
-    time: '7:46 PM',
-  },
-];
 
 const ChatDetailScreen = () => {
   const insets = useSafeAreaInsets();
-  const navigation = useNavigation();
-  const [messages, setMessages] = useState<Message[]>(initialMessages);
+  const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
+  const route = useRoute<any>();
+  const { chatId } = route.params;
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [profiles, setProfiles] = useState<{ [userId: string]: any }>({});
   const [messageText, setMessageText] = useState('');
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
@@ -59,6 +48,8 @@ const ChatDetailScreen = () => {
   const [playbackInstance, setPlaybackInstance] = useState<Audio.Sound | null>(null);
   const [playbackRate, setPlaybackRate] = useState(1.0);
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
+  const [activityInfo, setActivityInfo] = useState<{ name: string, type: string, date: string, time: string } | null>(null);
+  const flatListRef = useRef<FlatList>(null);
 
   // Set Android navigation bar to dark on mount (only on Android)
   useEffect(() => {
@@ -68,9 +59,58 @@ const ChatDetailScreen = () => {
     }
   }, []);
 
-  // Play an audio message with volume 1.0
+  // Listen to Firestore messages
+  useEffect(() => {
+    const unsubscribe = listenToMessages(chatId, (msgs: any[]) => {
+      // Sort by timestamp
+      const sorted = msgs.sort((a, b) => (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0));
+      setMessages(sorted);
+    });
+    return unsubscribe;
+  }, [chatId]);
+
+  // Fetch sender profiles
+  useEffect(() => {
+    const fetchProfiles = async () => {
+      const uniqueSenderIds = Array.from(new Set(messages.map(m => m.senderId)));
+      const newProfiles: { [userId: string]: any } = { ...profiles };
+      for (const userId of uniqueSenderIds) {
+        if (!newProfiles[userId]) {
+          const docSnap = await getDoc(doc(db, 'profiles', userId));
+          if (docSnap.exists()) {
+            newProfiles[userId] = docSnap.data();
+          }
+        }
+      }
+      setProfiles(newProfiles);
+    };
+    if (messages.length) fetchProfiles();
+    // eslint-disable-next-line
+  }, [messages]);
+
+  // Fetch activity info
+  useEffect(() => {
+    const fetchActivity = async () => {
+      const chatDoc = await getDoc(doc(db, 'chats', chatId));
+      const chatData = chatDoc.data();
+      if (chatData?.activityId) {
+        const activityDoc = await getDoc(doc(db, 'activities', chatData.activityId));
+        if (activityDoc.exists()) {
+          const data = activityDoc.data();
+          setActivityInfo({
+            name: data.activity || data.name || 'Activity',
+            type: data.activity || '',
+            date: data.date || '',
+            time: data.time || '',
+          });
+        }
+      }
+    };
+    fetchActivity();
+  }, [chatId]);
+
+  // Play an audio message
   const handlePlayPauseAudio = async (uri: string, id: string) => {
-    // Set audio mode for playback (speaker, not earpiece)
     await Audio.setAudioModeAsync({
       allowsRecordingIOS: false,
       interruptionModeIOS: 1,
@@ -106,7 +146,7 @@ const ChatDetailScreen = () => {
       if (status.isLoaded && status.didJustFinish) {
         setPlayingAudioId(null);
         setPlaybackInstance(null);
-        setPlaybackRate(1.0); // Reset speed to 1x after playback ends
+        setPlaybackRate(1.0);
       }
     });
     await sound.playAsync();
@@ -120,35 +160,22 @@ const ChatDetailScreen = () => {
     }
   };
 
-  // Send a text message. ("You" messages show black text on a turquoise bubble)
-  const handleSend = () => {
-    if (selectedImages.length > 0) {
-      selectedImages.forEach(uri => {
-        const newMessage: Message = {
-          id: Date.now().toString() + Math.random(),
-          sender: 'You',
-          text: uri,
-          type: 'image',
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        };
-        setMessages(prev => [...prev, newMessage]);
-      });
-      setSelectedImages([]);
+  // Send a message (text, image, audio)
+  const handleSend = async () => {
+    if (!auth.currentUser) return;
+    // Send images
+    for (const uri of selectedImages) {
+      await sendMessage(chatId, auth.currentUser.uid, uri, 'image');
     }
+    setSelectedImages([]);
+    // Send text
     if (messageText.trim()) {
-      const newMessage: Message = {
-        id: Date.now().toString(),
-        sender: 'You',
-        text: messageText,
-        type: 'text',
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      };
-      setMessages(prev => [...prev, newMessage]);
+      await sendMessage(chatId, auth.currentUser.uid, messageText.trim(), 'text');
       setMessageText('');
     }
   };
 
-  // Start recording audio with proper iOS settings.
+  // Start recording audio
   const startRecording = async () => {
     try {
       const { status } = await Audio.requestPermissionsAsync();
@@ -164,59 +191,25 @@ const ChatDetailScreen = () => {
         staysActiveInBackground: false,
       });
       const newRecording = new Audio.Recording();
-      const recordingOptions = {
-        android: {
-          extension: '.m4a',
-          outputFormat: 2,
-          audioEncoder: 3,
-          sampleRate: 44100,
-          bitRate: 128000,
-        },
-        ios: {
-          extension: '.caf',
-          audioQuality: 3,
-          sampleRate: 44100,
-          bitRate: 512000,
-          linearPCMBitDepth: 16,
-          linearPCMIsBigEndian: false,
-          linearPCMIsFloat: false,
-          format: 'lpcm',
-        },
-        web: {
-          mimeType: 'audio/webm',
-        },
-      };
-      await newRecording.prepareToRecordAsync(recordingOptions as any);
+      await newRecording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
       await newRecording.startAsync();
       setRecording(newRecording);
-      console.log('Recording started');
     } catch (error) {
-      console.error('Error starting recording:', error);
       Alert.alert('Recording Error', 'Could not start recording. Please try again.');
     }
   };
 
-  // Stop recording and save as an audio message.
+  // Stop recording and send as audio message
   const stopRecording = async () => {
-    if (!recording) return;
+    if (!recording || !auth.currentUser) return;
     try {
       await recording.stopAndUnloadAsync();
       const uri = recording.getURI();
       setRecording(null);
-      const newMessage: Message = {
-        id: Date.now().toString(),
-        sender: 'You',
-        text: uri || '',
-        type: 'audio',
-        time: new Date().toLocaleTimeString([], {
-          hour: '2-digit',
-          minute: '2-digit',
-        }),
-      };
-      setMessages([...messages, newMessage]);
-      console.log('Recording stopped and saved at:', uri);
+      if (uri) {
+        await sendMessage(chatId, auth.currentUser.uid, uri, 'audio');
+      }
     } catch (error) {
-      console.error('Error stopping recording:', error);
       Alert.alert('Recording Error', 'Could not save the recording.');
     }
   };
@@ -228,11 +221,10 @@ const ChatDetailScreen = () => {
       return;
     }
     let result = await ImagePicker.launchCameraAsync({
-      allowsEditing: false, // <--- No cropping!
+      allowsEditing: false,
       quality: 0.8,
     });
     if (!result.canceled && result.assets && result.assets.length > 0) {
-      // Add to selectedImages for preview/removal, just like gallery
       setSelectedImages(prev => [...prev, result.assets[0].uri]);
     }
   };
@@ -257,6 +249,129 @@ const ChatDetailScreen = () => {
     setSelectedImages(prev => prev.filter(uri => uri !== uriToRemove));
   };
 
+  // Grouping logic: show avatar/username only at the start of a group
+  const renderItem = ({ item, index }: { item: Message; index: number }) => {
+    const prev = messages[index - 1];
+    const next = messages[index + 1];
+    const isFirstOfGroup = !prev || prev.senderId !== item.senderId;
+    const isLastOfGroup = !next || next.senderId !== item.senderId;
+    const sender = profiles[item.senderId] || {};
+    const isOwn = item.senderId === auth.currentUser?.uid;
+
+    return (
+      <View style={{ flexDirection: 'row', alignItems: 'flex-end' }}>
+        {/* Avatar column for others, only on last message of group */}
+        {!isOwn && (
+          <View style={{
+            width: 36,
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+          }}>
+            {isLastOfGroup ? (
+              <TouchableOpacity
+                onPress={() => navigation.navigate('UserProfile', { userId: item.senderId })}
+                activeOpacity={0.7}
+              >
+                <Image
+                  source={{ uri: sender.photo || require('../assets/default-group.png') }}
+                  style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: 14,
+                    borderWidth: 1,
+                    borderColor: '#1ae9ef',
+                    marginBottom: 2,
+                    marginTop: -14,
+                  }}
+                />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        )}
+        {/* Message column */}
+        <View style={{ flex: 1 }}>
+          {isFirstOfGroup && !isOwn && (
+            <Text style={{ color: '#1ae9ef', fontWeight: 'bold', fontSize: 14, marginBottom: 2 }}>
+              {sender.username || 'User'}
+            </Text>
+          )}
+          <View style={[
+            styles.messageBubble,
+            isOwn ? styles.yourMessage : styles.theirMessage,
+          ]}>
+            {item.type === 'text' && (
+              <Text style={[
+                styles.messageText,
+                isOwn && styles.userMessageText,
+              ]}>
+                {item.text}
+              </Text>
+            )}
+            {item.type === 'audio' && (
+              <View style={styles.audioBubbleRow}>
+                <TouchableOpacity
+                  onPress={() => handlePlayPauseAudio(item.text, item.id)}
+                  style={styles.audioPlayButton}
+                  activeOpacity={0.7}
+                >
+                  <MaterialIcons name={playingAudioId === item.id && audioStatus.isLoaded && audioStatus.isPlaying ? "pause" : "play-arrow"} size={18} color="#fff" />
+                </TouchableOpacity>
+                <View style={styles.audioWaveformBar}>
+                  <View style={[styles.audioWaveformFill, {
+                    width: (playingAudioId === item.id && audioStatus.positionMillis && audioStatus.durationMillis)
+                      ? `${(audioStatus.positionMillis / audioStatus.durationMillis) * 100}%`
+                      : '0%',
+                  }]} />
+                </View>
+                <Text style={styles.audioDurationRight}>
+                  {playingAudioId === item.id && audioStatus.durationMillis
+                    ? `${(audioStatus.durationMillis / 1000).toFixed(2)}`
+                    : '0.00'}
+                </Text>
+                <TouchableOpacity
+                  onPress={handleSpeedChange}
+                  style={styles.audioSpeedButton}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.audioSpeedText}>{playbackRate}x</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            {item.type === 'image' && item.text ? (
+              <Image source={{ uri: item.text }} style={styles.media} />
+            ) : item.type === 'image' && !item.text ? (
+              <Text style={styles.placeholderText}>Image not available</Text>
+            ) : null}
+            <Text style={[
+              styles.messageTime,
+              isOwn && styles.userMessageTime,
+            ]}>
+              {item.timestamp
+                ? new Date(item.timestamp.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                : ''}
+            </Text>
+          </View>
+        </View>
+        {/* No spacer for own messages */}
+      </View>
+    );
+  };
+
+  useEffect(() => {
+    const checkAccess = async () => {
+      const chatDoc = await getDoc(doc(db, 'chats', chatId));
+      const chatData = chatDoc.data();
+      if (!chatData?.participants?.includes(auth.currentUser?.uid)) {
+        Alert.alert(
+          "Access Denied",
+          "You are no longer a participant in this group chat.",
+          [{ text: "OK", onPress: () => navigation.goBack() }]
+        );
+      }
+    };
+    checkAccess();
+  }, [chatId]);
+
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: '#121212' }}
@@ -270,89 +385,40 @@ const ChatDetailScreen = () => {
             <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerBack}>
               <Ionicons name="arrow-back" size={26} color="#1ae9ef" />
             </TouchableOpacity>
-            <Image
-              source={require('../assets/default-group.png')}
-              style={styles.headerImage}
-            />
+            {/* Group icon */}
+            <Ionicons name="people" size={28} color="#1ae9ef" style={{ marginLeft: 6, marginRight: 4 }} />
+            {/* Sport icon */}
+            {activityInfo?.type ? (
+              <ActivityIcon activity={activityInfo.type} size={24} color="#1ae9ef" />
+            ) : null}
+            {/* Activity name and schedule */}
             <View style={{ flex: 1, marginLeft: 10 }}>
-              <Text style={styles.headerTitle}>{'Group Name'}</Text>
+              <Text style={{ color: '#1ae9ef', fontWeight: 'bold', fontSize: 17 }}>
+                {activityInfo?.name || 'Group Chat'}
+              </Text>
+              {activityInfo?.date && activityInfo?.time && (
+                <Text style={{ color: '#fff', fontSize: 12, fontWeight: '500' }}>
+                  Scheduled for {formatDate(activityInfo.date)} at {activityInfo.time}
+                </Text>
+              )}
             </View>
             <TouchableOpacity onPress={() => {/* open group info/settings */}} style={styles.headerInfo}>
               <Ionicons name="information-circle-outline" size={26} color="#1ae9ef" />
             </TouchableOpacity>
           </View>
           <FlatList
+            ref={flatListRef}
             data={messages}
             keyExtractor={(item) => item.id.toString()}
             contentContainerStyle={styles.messageList}
-            renderItem={({ item }) => (
-              <View
-                style={[
-                  styles.messageBubble,
-                  item.sender === 'You' ? styles.yourMessage : styles.theirMessage,
-                ]}
-              >
-                {item.type === 'text' && (
-                  <Text
-                    style={[
-                      styles.messageText,
-                      item.sender === 'You' && styles.userMessageText,
-                    ]}
-                  >
-                    {item.text}
-                  </Text>
-                )}
-                {item.type === 'audio' && (
-                  <View style={styles.audioBubbleRow}>
-                    <TouchableOpacity
-                      onPress={() => handlePlayPauseAudio(item.text, item.id)}
-                      style={styles.audioPlayButton}
-                      activeOpacity={0.7}
-                    >
-                      <MaterialIcons name={playingAudioId === item.id && audioStatus.isLoaded && audioStatus.isPlaying ? "pause" : "play-arrow"} size={18} color="#fff" />
-                    </TouchableOpacity>
-                    <View style={styles.audioWaveformBar}>
-                      <View style={[styles.audioWaveformFill, {
-                        width: (playingAudioId === item.id && audioStatus.positionMillis && audioStatus.durationMillis)
-                          ? `${(audioStatus.positionMillis / audioStatus.durationMillis) * 100}%`
-                          : '0%',
-                      }]} />
-                    </View>
-                    <Text style={styles.audioDurationRight}>
-                      {playingAudioId === item.id && audioStatus.durationMillis
-                        ? `${(audioStatus.durationMillis / 1000).toFixed(2)}`
-                        : '0.00'}
-                    </Text>
-                    <TouchableOpacity
-                      onPress={handleSpeedChange}
-                      style={styles.audioSpeedButton}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={styles.audioSpeedText}>{playbackRate}x</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-                {item.type === 'image' && item.text ? (
-                  <Image source={{ uri: item.text }} style={styles.media} />
-                ) : item.type === 'image' && !item.text ? (
-                  <Text style={styles.placeholderText}>Image not available</Text>
-                ) : null}
-                <Text
-                  style={[
-                    styles.messageTime,
-                    item.sender === 'You' && styles.userMessageTime,
-                  ]}
-                >
-                  {item.time}
-                </Text>
-              </View>
-            )}
+            renderItem={renderItem}
+            onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
           />
           {/* Input area wrapped in KeyboardAvoidingView */}
           <View
             style={[
               styles.inputContainer,
-              { paddingBottom: insets.bottom } // This line is key!
+              { paddingBottom: insets.bottom }
             ]}
           >
             <TouchableOpacity style={styles.inputCircleButton} onPress={handleCameraPress}>
@@ -413,6 +479,13 @@ const ChatDetailScreen = () => {
     </KeyboardAvoidingView>
   );
 };
+
+// Helper to format date as dd-mm-yyyy
+function formatDate(dateStr: string) {
+  if (!dateStr) return '';
+  const [yyyy, mm, dd] = dateStr.split('-');
+  return `${dd}-${mm}-${yyyy}`;
+}
 
 const styles = StyleSheet.create({
   flexContainer: {

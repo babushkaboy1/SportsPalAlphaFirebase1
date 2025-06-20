@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { SafeAreaView, View, Text, StyleSheet, Image, TouchableOpacity, Share, FlatList } from 'react-native';
+import { SafeAreaView, View, Text, StyleSheet, Image, TouchableOpacity, Share, FlatList, ActivityIndicator } from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { doc, getDoc } from 'firebase/firestore';
@@ -19,6 +19,7 @@ const UserProfileScreen = () => {
   const { allActivities } = useActivityContext();
   const [activeTab, setActiveTab] = useState<'games' | 'history'>('games');
   const [userJoinedActivities, setUserJoinedActivities] = useState<any[]>([]);
+  const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
     const fetchProfile = async () => {
@@ -38,6 +39,12 @@ const UserProfileScreen = () => {
       );
     }
   }, [allActivities, profile]);
+
+  useEffect(() => {
+    if (profile) {
+      setIsReady(true);
+    }
+  }, [profile]);
 
   const handleShareProfile = async () => {
     try {
@@ -64,6 +71,14 @@ const UserProfileScreen = () => {
       <Text style={styles.cardInfo}>Participants: {item.joinedUserIds ? item.joinedUserIds.length : item.joinedCount} / {item.maxParticipants}</Text>
     </TouchableOpacity>
   );
+
+  if (!isReady) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color="#1ae9ef" />
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={[styles.container, { paddingTop: insets.top }]}>

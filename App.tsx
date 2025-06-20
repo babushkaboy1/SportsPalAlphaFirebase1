@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { NavigationContainer, DarkTheme } from '@react-navigation/native';
+import { NavigationContainer, DarkTheme, createNavigationContainerRef } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { StyleSheet, TouchableOpacity, Alert } from 'react-native';
@@ -8,6 +8,7 @@ import { enableScreens } from 'react-native-screens';
 import { StatusBar } from 'expo-status-bar';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
+import * as Location from 'expo-location';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth } from './firebaseConfig';
 
@@ -43,7 +44,8 @@ const MyTheme = {
 };
 
 const Stack = createStackNavigator<RootStackParamList>();
-const Tab = createBottomTabNavigator();
+const Tab = createBottomTabNavigator<TabParamList>();
+const navRef = createNavigationContainerRef();
 
 const styles = StyleSheet.create({
   tabBarStyle: {
@@ -54,6 +56,7 @@ const styles = StyleSheet.create({
 
 const MainTabs = () => (
   <Tab.Navigator
+    detachInactiveScreens={false}
     screenOptions={({ route }) => ({
       headerShown: false,
       tabBarActiveTintColor: '#1ae9ef',
@@ -212,9 +215,31 @@ export default function App() {
     }),
   });
 
+  useEffect(() => {
+    if (user) {
+      const preloadScreens = () => {
+        if (navRef.isReady()) {
+          
+        }
+      };
+      const timeout = setTimeout(preloadScreens, 1500);
+      return () => clearTimeout(timeout);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (user) {
+      const requestLocation = async () => {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        console.log("Location permission:", status);
+      };
+      requestLocation();
+    }
+  }, [user]);
+
   return (
     <ActivityProvider>
-      <NavigationContainer theme={MyTheme}>
+      <NavigationContainer ref={navRef}>
         <StatusBar style="light" backgroundColor="#121212" />
         <Stack.Navigator
           initialRouteName={user ? "MainTabs" : "Login"}
@@ -238,3 +263,12 @@ export default function App() {
     </ActivityProvider>
   );
 }
+
+// Define your tab param list
+type TabParamList = {
+  Discover: undefined;
+  Calendar: undefined;
+  CreateGame: undefined;
+  Chats: undefined;
+  Profile: undefined;
+};

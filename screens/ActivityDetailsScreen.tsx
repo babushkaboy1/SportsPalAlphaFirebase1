@@ -11,6 +11,8 @@ import {
   Platform,
   StatusBar,
   Image,
+  InteractionManager,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
@@ -19,7 +21,10 @@ import MapView, { Marker, UrlTile, PROVIDER_DEFAULT } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { activities } from '../data/activitiesData';
 import { fetchUsersByIds } from '../utils/firestoreActivities';
+import { getOrCreateChatForActivity } from '../utils/firestoreChats';
 import { auth } from '../firebaseConfig';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '../firebaseConfig';
 
 const ActivityDetailsScreen = ({ route, navigation }: any) => {
   const { activityId } = route.params;
@@ -37,6 +42,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
 
   const [userLocation, setUserLocation] = useState<{ latitude: number, longitude: number } | null>(null);
   const [joinedUsers, setJoinedUsers] = useState<any[]>([]);
+  const [isReady, setIsReady] = useState(false);
   const mapRef = useRef<MapView>(null);
   const insets = useSafeAreaInsets();
 
@@ -63,15 +69,24 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
 
   useEffect(() => {
     const loadUsers = async () => {
-      if (activity?.joinedUserIds?.length) {
-        const users = await fetchUsersByIds(activity.joinedUserIds);
+      // Always fetch the latest activity from Firestore
+      const activityRef = doc(db, 'activities', activity.id);
+      const activitySnap = await getDoc(activityRef);
+      let latestJoinedUserIds: string[] = [];
+      if (activitySnap.exists()) {
+        const data = activitySnap.data();
+        latestJoinedUserIds = Array.isArray(data.joinedUserIds) ? data.joinedUserIds : [];
+      }
+      if (latestJoinedUserIds.length) {
+        const users = await fetchUsersByIds(latestJoinedUserIds);
         setJoinedUsers(users);
       } else {
         setJoinedUsers([]);
       }
+      setIsReady(true);
     };
     loadUsers();
-  }, [activity]);
+  }, [activityId]);
 
   // Calculate distance in km
   const getDistance = () => {
@@ -144,13 +159,84 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
   };
 
   const handleJoinLeave = async () => {
-    try {
-      await toggleJoinActivity(activity);
-      // No need to update local state, context will update UI
-    } catch (error) {
-      console.error('Error joining/leaving activity:', error);
+    await toggleJoinActivity(activity);
+
+    // Refetch the latest activity from Firestore
+    const activityRef = doc(db, 'activities', activity.id);
+    const activitySnap = await getDoc(activityRef);
+    let latestJoinedUserIds: string[] = [];
+    if (activitySnap.exists()) {
+      const data = activitySnap.data();
+      latestJoinedUserIds = Array.isArray(data.joinedUserIds) ? data.joinedUserIds : [];
+    }
+
+    // Now fetch the latest users
+    if (latestJoinedUserIds.length) {
+      const users = await fetchUsersByIds(latestJoinedUserIds);
+      setJoinedUsers(users);
+    } else {
+      setJoinedUsers([]);
     }
   };
+
+  const handleOpenGroupChat = async () => {
+    if (!auth.currentUser) {
+      Alert.alert(
+        "Not Signed In",
+        "You need to be signed in to access the group chat.",
+        [{ text: "OK", style: "destructive" }]
+      );
+      return;
+    }
+
+    if (!isActivityJoined(activity.id)) {
+      Alert.alert(
+        "Join to Access Group Chat",
+        "You need to join this activity to access the group chat.",
+        [
+          {
+            text: "Cancel",
+            style: "destructive",
+          },
+          {
+            text: "Join Activity",
+            style: "default",
+            onPress: async () => {
+              await toggleJoinActivity(activity);
+              // After joining, get or create the chat and navigate
+              if (auth.currentUser) {
+                const chatId = await getOrCreateChatForActivity(activity.id, auth.currentUser.uid);
+                navigation.navigate('ChatDetail', { chatId });
+              }
+            },
+          },
+        ],
+        { cancelable: true }
+      );
+      return;
+    }
+    // If joined, get or create the chat and navigate
+    const chatId = await getOrCreateChatForActivity(activity.id, auth.currentUser.uid);
+    navigation.navigate('ChatDetail', { chatId });
+  };
+
+  useEffect(() => {
+    const setupChat = async () => {
+      if (auth.currentUser && isActivityJoined(activityId)) {
+        await getOrCreateChatForActivity(activityId, auth.currentUser.uid);
+      }
+    };
+
+    setupChat();
+  }, [activityId, isActivityJoined(activityId)]);
+
+  if (!isReady) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color="#1ae9ef" />
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={[styles.safeArea, { paddingTop: insets.top }]}>
@@ -285,9 +371,9 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
               </Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.actionButton} onPress={handleChat}>
-              <Ionicons name="chatbubbles" size={24} style={styles.actionIconBold} />
-              <Text style={styles.actionText}>Chat</Text>
+            <TouchableOpacity style={styles.actionButton} onPress={handleOpenGroupChat}>
+              <Ionicons name="chatbubbles" size={20} style={styles.actionIconBold} />
+              <Text style={styles.actionText}>Group Chat</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.actionButton} onPress={handleGetDirections}>
               <Ionicons name="navigate" size={24} style={styles.actionIconBold} />

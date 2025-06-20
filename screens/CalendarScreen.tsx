@@ -10,6 +10,7 @@ import {
   StatusBar,
   ScrollView,
   RefreshControl,
+  ActivityIndicator,
 } from 'react-native';
 import { Calendar } from 'react-native-calendars';
 import { ActivityProvider, useActivityContext } from '../context/ActivityContext';
@@ -96,10 +97,12 @@ const CalendarScreen = ({ navigation, route }: any) => {
     console.log('Joined Activities:', JSON.stringify(joinedActivities, null, 2));
   }
 
-  
-  if (!joinedActivities) {
-    console.warn('Joined activities not loaded yet.');
-    return null;
+  if (!joinedActivities || !allActivities || allActivities.length === 0) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color="#1ae9ef" />
+      </SafeAreaView>
+    );
   }
 
   return (

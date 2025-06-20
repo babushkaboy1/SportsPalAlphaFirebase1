@@ -13,6 +13,7 @@ import {
   StatusBar,
   Alert,
   Share,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
@@ -130,9 +131,18 @@ const DiscoverGamesScreen = ({ navigation }: any) => {
     const handleToggleJoin = async (item: Activity) => {
       try {
         await toggleJoinActivity(item);
+        // Optionally, force a refresh or navigate to ChatsScreen
+        // navigation.navigate('Chats');
       } catch (error) {
         console.error("Error toggling join state:", error);
       }
+    };
+
+    const handleJoinLeave = async () => {
+      await toggleJoinActivity(item);
+      setTimeout(() => {
+        navigation.goBack(); // or any navigation action
+      }, 150); // 150ms delay to allow state to update
     };
 
     const distance = userLocation
@@ -178,6 +188,14 @@ const DiscoverGamesScreen = ({ navigation }: any) => {
   const toggleSortByDistance = () => {
     setIsSortingByDistance((prev) => !prev);
   };
+
+  if (refreshing || !allActivities || allActivities.length === 0) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color="#1ae9ef" />
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={[styles.safeArea, { paddingTop: insets.top }]}>

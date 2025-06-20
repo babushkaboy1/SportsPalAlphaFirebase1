@@ -6,7 +6,8 @@ import {
   Text, 
   StyleSheet, 
   TextInput, 
-  TouchableOpacity 
+  TouchableOpacity,
+  ActivityIndicator
 } from 'react-native';
 import Logo from '../components/Logo';
 import { AntDesign, FontAwesome } from '@expo/vector-icons';
@@ -16,13 +17,17 @@ import { auth } from '../firebaseConfig';
 const LoginScreen = ({ navigation }: any) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
   const handleLogin = async () => {
+    setIsLoading(true);
     try {
       await signInWithEmailAndPassword(auth, email, password);
       navigation.navigate('Welcome');
     } catch (error) {
       alert("Login error: " + (error as Error).message);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -34,6 +39,14 @@ const LoginScreen = ({ navigation }: any) => {
   const handleSignUp = () => {
     navigation.navigate('CreateProfile');
   };
+
+  if (isLoading) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color="#1ae9ef" />
+      </View>
+    );
+  }
 
   return (
     <ScrollView
@@ -68,8 +81,12 @@ const LoginScreen = ({ navigation }: any) => {
       />
       
       {/* Login Button */}
-      <TouchableOpacity style={styles.button} onPress={handleLogin}>
-        <Text style={styles.buttonText}>Login</Text>
+      <TouchableOpacity style={styles.button} onPress={handleLogin} disabled={isLoading}>
+        {isLoading ? (
+          <ActivityIndicator size="small" color="#fff" />
+        ) : (
+          <Text style={styles.buttonText}>Login</Text>
+        )}
       </TouchableOpacity>
       
       {/* Sign Up Link (directly under Login) */}

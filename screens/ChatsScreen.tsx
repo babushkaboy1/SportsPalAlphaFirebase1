@@ -11,76 +11,172 @@ import {
   TextInput,
   StatusBar,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { fetchUserChats } from '../utils/firestoreChats';
+import { doc, getDoc, collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
+import { db, auth } from '../firebaseConfig';
+import { useFocusEffect } from '@react-navigation/native';
+import { useActivityContext } from '../context/ActivityContext';
+import { ActivityIcon } from '../components/ActivityIcons'; // <-- Add this import
 
-// Dummy Data for Chats
-const chatList = [
-  {
-    id: '1',
-    name: 'Basketball Group',
-    message: 'Game tomorrow at 6!',
-    image: require('../assets/default-group.png'),
-    isGroup: true,
-    isPinned: true,
-  },
-  {
-    id: '2',
-    name: 'Alex',
-    message: "Let's hit the gym",
-    image: require('../assets/default-profile.png'),
-    isGroup: false,
-    isPinned: false,
-  },
-  {
-    id: '3',
-    name: 'Soccer Friends',
-    message: 'Training on Friday',
-    image: require('../assets/default-group.png'),
-    isGroup: true,
-    isPinned: false,
-  },
-  {
-    id: '4',
-    name: 'John',
-    message: 'See you at the court',
-    image: require('../assets/default-profile.png'),
-    isGroup: false,
-    isPinned: false,
-  },
-];
+type Chat = {
+  id: string;
+  activityId?: string;
+  [key: string]: any; // for other fields
+};
+
+const sportIconMap: Record<string, React.ReactNode> = {
+  football: <MaterialCommunityIcons name="soccer" size={28} color="#1ae9ef" />,
+  basketball: <MaterialCommunityIcons name="basketball" size={28} color="#1ae9ef" />,
+  tennis: <MaterialCommunityIcons name="tennis" size={28} color="#1ae9ef" />,
+  // Add more mappings as needed
+};
+
+const TURQUOISE = '#1ae9ef';
 
 const ChatsScreen = ({ navigation }: any) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [isReady, setIsReady] = useState(false);
   const insets = useSafeAreaInsets();
+  const { joinedActivities } = useActivityContext();
 
-  const filteredChats = chatList.filter((chat) =>
-    chat.name.toLowerCase().includes(searchQuery.toLowerCase())
+  const loadChats = async () => {
+    if (auth.currentUser) {
+      const userChats = await fetchUserChats(auth.currentUser.uid);
+
+      // For each chat, fetch activity info and last message
+      const chatsWithDetails = await Promise.all(
+        userChats.map(async (chat: Chat) => {
+          let activityName = 'Group Chat';
+          let activityImage = 'https://via.placeholder.com/50';
+          let activityType = '';
+          let activityDate = '';
+          let activityTime = '';
+          if (chat.activityId) {
+            const activityDoc = await getDoc(doc(db, 'activities', chat.activityId));
+            if (activityDoc.exists()) {
+              const activityData = activityDoc.data();
+              activityName = activityData.activity || activityData.name || 'Group Chat';
+              activityImage = activityData.image || 'https://via.placeholder.com/50';
+              activityType = activityData.activity || '';
+              activityDate = activityData.date || '';
+              activityTime = activityData.time || '';
+            }
+          }
+          // Get last message and sender username
+          let lastMessage = '';
+          let lastSender = '';
+          const messagesRef = collection(db, 'chats', chat.id, 'messages');
+          const lastMsgQuery = query(messagesRef, orderBy('timestamp', 'desc'), limit(1));
+          const lastMsgSnap = await getDocs(lastMsgQuery);
+          if (!lastMsgSnap.empty) {
+            const msg = lastMsgSnap.docs[0].data();
+            if (msg.type === 'image') {
+              lastMessage = 'Sent a photo';
+            } else if (msg.type === 'audio') {
+              lastMessage = '🎤 Voice message';
+            } else if (msg.text) {
+              lastMessage = msg.text;
+            } else {
+              lastMessage = 'New message';
+            }
+            // Fetch sender username
+            if (msg.senderId) {
+              const senderDoc = await getDoc(doc(db, 'profiles', msg.senderId));
+              lastSender = senderDoc.exists() ? senderDoc.data().username || '' : '';
+            }
+          } else {
+            lastMessage = 'No messages yet';
+          }
+          return {
+            ...chat,
+            name: activityName,
+            image: activityImage,
+            activityType,
+            lastMessage,
+            lastSender,
+            date: activityDate,
+            time: activityTime,
+          };
+        })
+      );
+      setChats(chatsWithDetails);
+    }
+    setIsReady(true);
+  };
+
+  useFocusEffect(
+    React.useCallback(() => {
+      setIsReady(false);
+      loadChats();
+    }, [joinedActivities])
+  );
+
+  const filteredChats = chats.filter((chat) =>
+    chat.name?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const renderChatItem = ({ item }: any) => (
     <TouchableOpacity
       style={styles.chatItem}
-      onPress={() =>
-        navigation.navigate('ChatDetail', { chatId: item.id })
-      }
+      onPress={() => navigation.navigate('ChatDetail', { chatId: item.id })}
     >
-      <Image source={item.image} style={styles.avatar} />
-      <View style={styles.chatInfo}>
-        <Text style={styles.chatName}>{item.name}</Text>
-        <Text style={styles.lastMessage}>{item.message}</Text>
+      {/* Group chat icon */}
+      <View style={{ marginRight: 10 }}>
+        <Ionicons name="people" size={32} color={TURQUOISE} />
       </View>
-      {item.isPinned && (
-        <Ionicons
-          name="pin"
-          size={20}
-          color="#1ae9ef"
-          style={styles.pinIcon}
-        />
-      )}
+      {/* Sport/activity icon */}
+      <View style={{ marginRight: 10 }}>
+        <ActivityIcon activity={item.activityType} size={28} color={TURQUOISE} />
+      </View>
+      {/* Chat info and date/time */}
+      <View style={{ flex: 1, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+        <View style={styles.chatInfo}>
+          <Text style={styles.chatName}>
+            <Text style={{ color: TURQUOISE, fontWeight: 'bold', fontSize: 18 }}>
+              {item.name}
+            </Text>
+          </Text>
+          <Text style={styles.lastMessage}>
+            {item.lastSender ? (
+              <Text style={{ color: '#fff', fontWeight: 'bold' }}>{item.lastSender}: </Text>
+            ) : null}
+            <Text style={{ color: '#ccc', fontWeight: 'normal' }}>{item.lastMessage}</Text>
+          </Text>
+        </View>
+        {/* Activity scheduled date/time */}
+        {item.activityId && item.date && item.time && (
+          <View style={{ alignItems: 'flex-end', marginLeft: 8, maxWidth: 120 }}>
+            <Text style={{ color: '#fff', fontSize: 12, fontWeight: '500', textAlign: 'right' }}>
+              Activity scheduled for
+            </Text>
+            <Text style={{ color: '#fff', fontSize: 12, fontWeight: '500', textAlign: 'right' }}>
+              {formatDate(item.date)} at {item.time}
+            </Text>
+          </View>
+        )}
+      </View>
     </TouchableOpacity>
   );
+
+  // Helper to format date as dd-mm-yyyy
+  function formatDate(dateStr: string) {
+    if (!dateStr) return '';
+    const [yyyy, mm, dd] = dateStr.split('-');
+    return `${dd}-${mm}-${yyyy}`;
+  }
+
+  if (!isReady) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color="#1ae9ef" />
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={[styles.container, { paddingTop: insets.top }]}>
@@ -95,18 +191,21 @@ const ChatsScreen = ({ navigation }: any) => {
           onChangeText={setSearchQuery}
         />
       </View>
-      <FlatList
-        data={filteredChats}
-        keyExtractor={(item) => item.id}
-        renderItem={renderChatItem}
-        contentContainerStyle={styles.chatList}
-      />
+      {filteredChats.length === 0 ? (
+        <Text style={{ color: '#bbb', textAlign: 'center', marginTop: 40 }}>No group chats yet.</Text>
+      ) : (
+        <FlatList
+          data={filteredChats}
+          keyExtractor={(item) => item.id}
+          renderItem={renderChatItem}
+          contentContainerStyle={styles.chatList}
+        />
+      )}
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  // For Android, we add some extra top padding using StatusBar.currentHeight to position the content naturally.
   container: {
     flex: 1,
     backgroundColor: '#121212',
@@ -137,7 +236,7 @@ const styles = StyleSheet.create({
     marginLeft: 10,
     color: '#fff',
     fontSize: 16,
-    fontWeight: '500', // Make search text a little bold
+    fontWeight: '500',
   },
   chatList: {
     paddingBottom: 20,
@@ -162,15 +261,12 @@ const styles = StyleSheet.create({
   chatName: {
     fontSize: 18,
     color: '#fff',
-    fontWeight: '500', // Slightly bold for consistency
+    fontWeight: '500',
   },
   lastMessage: {
     fontSize: 14,
     color: '#ccc',
-    fontWeight: '500', // Slightly bold for consistency
-  },
-  pinIcon: {
-    marginLeft: 10,
+    fontWeight: '500',
   },
 });
 

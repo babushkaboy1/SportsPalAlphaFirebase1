@@ -1,5 +1,5 @@
 // screens/CreateProfileScreen.tsx
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,8 @@ import {
   Image,
   Alert,
   ScrollView,
+  ActivityIndicator,
+  SafeAreaView,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { MediaType } from 'expo-image-picker';
@@ -37,7 +39,14 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
   const [location, setLocation] = useState(profileData?.location || '');
   const [photo, setPhoto] = useState<string | null>(profileData?.photo || null);
   const [selectedSports, setSelectedSports] = useState<string[]>(profileData?.selectedSports || []);
+  const [isReady, setIsReady] = useState(false);
   const insets = useSafeAreaInsets();
+
+  // Simulate a loading period for the profile data (remove in production)
+  useEffect(() => {
+    const timeout = setTimeout(() => setIsReady(true), 500);
+    return () => clearTimeout(timeout);
+  }, []);
 
   const pickImage = async () => {
     const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -118,6 +127,13 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
     }
   };
 
+  if (!isReady) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color="#1ae9ef" />
+      </View>
+    );
+  }
 
   return (
     <ScrollView

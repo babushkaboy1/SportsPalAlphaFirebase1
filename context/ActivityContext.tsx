@@ -6,6 +6,9 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../firebaseConfig';
 import { activities as fakeActivities } from '../data/activitiesData';
 import { Alert } from 'react-native';
+import { doc, getDoc, onSnapshot, query, collection, where } from 'firebase/firestore';
+import { db } from '../firebaseConfig';
+import { getOrCreateChatForActivity } from '../utils/firestoreChats';
 
 type ActivityContextType = {
   joinedActivities: string[];
@@ -14,6 +17,7 @@ type ActivityContextType = {
   setJoinedActivities: React.Dispatch<React.SetStateAction<string[]>>;
   allActivities: Activity[];
   reloadAllActivities: () => Promise<void>;
+  profile: any; // <-- Add this line
 };
 
 const ActivityContext = createContext<ActivityContextType | undefined>(undefined);
@@ -30,6 +34,7 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [joinedActivities, setJoinedActivities] = useState<string[]>([]);
   const [allActivities, setAllActivities] = useState<Activity[]>([]);
   const [user, setUser] = useState<any>(null);
+  const [profile, setProfile] = useState<any>(null);
 
   // Listen for auth state changes
   useEffect(() => {
@@ -38,6 +43,20 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     });
     return unsubscribe;
   }, []);
+
+  // Fetch user profile
+  const fetchUserProfile = async (uid: string) => {
+    const userRef = doc(db, 'profiles', uid);
+    const docSnap = await getDoc(userRef);
+    return docSnap.exists() ? docSnap.data() : null;
+  };
+
+  // Load user profile after login
+  useEffect(() => {
+    if (user) {
+      fetchUserProfile(user.uid).then(profile => setProfile(profile));
+    }
+  }, [user]);
 
   // Load joined activities only after user is set
   useEffect(() => {
@@ -69,38 +88,49 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     reloadAllActivities();
   }, []);
 
+  // Sync joined activities with Firestore in real-time
+  useEffect(() => {
+    if (!auth.currentUser) return;
+    const q = query(collection(db, 'activities'), where('joinedUserIds', 'array-contains', auth.currentUser.uid));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setJoinedActivities(snapshot.docs.map(doc => doc.id));
+    });
+    return unsubscribe;
+  }, [auth.currentUser]);
+
   const toggleJoinActivity = async (activity: Activity): Promise<void> => {
     try {
       if (!user) return;
       const isJoined = joinedActivities.includes(activity.id);
       const joinedCount = activity.joinedUserIds?.length || 0;
 
-      // If user is leaving and is the last participant
       if (isJoined && joinedCount === 1 && activity.joinedUserIds?.includes(user.uid)) {
-        Alert.alert(
-          "You're the last participant!",
-          "If you leave, this event will be deleted for everyone. Are you sure you want to leave?",
-          [
-            { text: "Stay", style: "cancel" },
-            { text: "Leave & Delete", style: "destructive", onPress: async () => {
-                await leaveActivity(activity.id, user.uid);
-                // Delete the activity from Firestore
-                await deleteActivity(activity.id);
-                await reloadAllActivities();
-                const joined = await getUserJoinedActivities();
-                setJoinedActivities(joined);
+        return new Promise<void>((resolve) => {
+          Alert.alert(
+            "You're the last participant!",
+            "If you leave, this event will be deleted for everyone. Are you sure you want to leave?",
+            [
+              { text: "Stay", style: "cancel", onPress: () => resolve() },
+              { text: "Leave & Delete", style: "destructive", onPress: async () => {
+                  await leaveActivity(activity.id, user.uid);
+                  await deleteActivity(activity.id);
+                  await reloadAllActivities();
+                  const joined = await getUserJoinedActivities();
+                  setJoinedActivities(joined);
+                  resolve();
+                }
               }
-            }
-          ]
-        );
-        return;
+            ]
+          );
+        });
       }
 
-      // Normal join/leave logic
       if (isJoined) {
         await leaveActivity(activity.id, user.uid);
       } else {
         await joinActivity(activity.id, user.uid);
+        // --- ADD THIS: create the group chat if joining ---
+        await getOrCreateChatForActivity(activity.id, user.uid);
       }
       await reloadAllActivities();
       const joined = await getUserJoinedActivities();
@@ -123,6 +153,7 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setJoinedActivities,
         allActivities,
         reloadAllActivities,
+        profile, // <-- Add this line
       }}
     >
       {children}
