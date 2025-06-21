@@ -17,9 +17,15 @@ export default ({ config }: { config: any }) => ({
   },
   ios: {
     supportsTablet: true,
-    bundleIdentifier: "com.thom.sportspal",
+    bundleIdentifier: "com.sportspal",
     infoPlist: {
-      ITSAppUsesNonExemptEncryption: false
+      ITSAppUsesNonExemptEncryption: false,
+      NSCameraUsageDescription: "This app uses the camera to allow you to take and upload profile pictures and share photos with friends.",
+      NSPhotoLibraryUsageDescription: "This app needs access to your photo library to let you select and upload images.",
+      NSPhotoLibraryAddUsageDescription: "This app needs access to save images to your photo library.",
+      NSLocationWhenInUseUsageDescription: "This app uses your location to show nearby sports events and friends.",
+      NSCalendarsUsageDescription: "This app needs access to your calendar to add and manage sports events.",
+      NSMicrophoneUsageDescription: "This app uses the microphone for recording audio messages and calls."
     }
   },
   android: {
