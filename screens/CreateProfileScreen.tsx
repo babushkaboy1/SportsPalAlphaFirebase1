@@ -40,6 +40,7 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
   const [photo, setPhoto] = useState<string | null>(profileData?.photo || null);
   const [selectedSports, setSelectedSports] = useState<string[]>(profileData?.selectedSports || []);
   const [isReady, setIsReady] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const insets = useSafeAreaInsets();
 
   // Simulate a loading period for the profile data (remove in production)
@@ -83,6 +84,8 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
       return;
     }
 
+    setIsLoading(true);
+
     try {
       if (isEdit) {
         // Only update Firestore profile, do NOT create a new Auth user
@@ -124,8 +127,15 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
       }
     } catch (error) {
       Alert.alert('Error', (error as Error).message);
+    } finally {
+      setIsLoading(false);
     }
   };
+
+  // Detect if the current user is a Google user
+  const isGoogleUser = !!auth.currentUser?.providerData.find(
+    (p) => p.providerId === 'google.com'
+  );
 
   if (!isReady) {
     return (
@@ -138,7 +148,7 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
   return (
     <ScrollView
       style={styles.scrollView}
-      contentContainerStyle={[styles.container, { paddingTop: insets.top + 30 }]} // Add extra top padding
+      contentContainerStyle={[styles.container, { paddingTop: insets.top + 30 }]}
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
     >
@@ -185,6 +195,7 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
           keyboardType="email-address"
           value={email}
           onChangeText={setEmail}
+          editable={!isGoogleUser}
         />
         <TextInput
           style={styles.input}
@@ -194,14 +205,21 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
           value={phone}
           onChangeText={setPhone}
         />
-        <TextInput
-          style={styles.input}
-          placeholder="Password"
-          placeholderTextColor="#999"
-          secureTextEntry
-          value={password}
-          onChangeText={setPassword}
-        />
+        {/* Only show password field if NOT a Google user */}
+        {!isGoogleUser ? (
+          <TextInput
+            style={styles.input}
+            placeholder="Password"
+            placeholderTextColor="#999"
+            secureTextEntry
+            value={password}
+            onChangeText={setPassword}
+          />
+        ) : (
+          <Text style={{ color: '#aaa', marginBottom: 10 }}>
+            You signed up with Google. Log in with Google anytime.
+          </Text>
+        )}
         <TextInput
           style={styles.input}
           placeholder="City / Neighborhood"
@@ -239,6 +257,9 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
       <TouchableOpacity style={styles.continueButton} onPress={handleContinue}>
         <Text style={styles.continueButtonText}>Continue</Text>
       </TouchableOpacity>
+
+      {/* Spinner for loading state */}
+      {isLoading && <ActivityIndicator size="large" color="#1ae9ef" style={styles.loadingIndicator} />}
     </ScrollView>
   );
 };
@@ -375,6 +396,13 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 20,
     fontWeight: '700',
+  },
+  loadingIndicator: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    marginTop: -20,
+    marginLeft: -20,
   },
 });
 

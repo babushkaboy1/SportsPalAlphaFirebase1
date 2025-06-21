@@ -111,9 +111,10 @@ const ChatsScreen = ({ navigation }: any) => {
 
   useFocusEffect(
     React.useCallback(() => {
-      setIsReady(false);
-      loadChats();
-    }, [joinedActivities])
+      if (!chats.length) {
+        loadChats(); // Only fetch if chats are empty
+      }
+    }, [chats])
   );
 
   const filteredChats = chats.filter((chat) =>

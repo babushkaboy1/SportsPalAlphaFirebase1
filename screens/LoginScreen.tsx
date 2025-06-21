@@ -1,5 +1,5 @@
 // screens/LoginScreen.tsx
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   ScrollView, 
   View, 
@@ -11,13 +11,35 @@ import {
 } from 'react-native';
 import Logo from '../components/Logo';
 import { AntDesign, FontAwesome } from '@expo/vector-icons';
-import { signInWithEmailAndPassword } from 'firebase/auth';
+import { signInWithEmailAndPassword, signInWithCredential, GoogleAuthProvider } from 'firebase/auth';
 import { auth } from '../firebaseConfig';
+import * as Google from 'expo-auth-session/providers/google';
 
 const LoginScreen = ({ navigation }: any) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [request, response, promptAsync] = Google.useAuthRequest({
+    androidClientId: '690971568236-d4ijqaml0rt2dv98eve2bckmvtf13l1c.apps.googleusercontent.com',
+    iosClientId: '690971568236-qnqatg8h63re13j433l1oj22aiqktvts.apps.googleusercontent.com',
+    webClientId: '690971568236-1slb2hq568pk1cqnpo44aioi5549avl7.apps.googleusercontent.com',
+  });
+
+  useEffect(() => {
+    if (response?.type === 'success') {
+      const { id_token } = response.params;
+      const credential = GoogleAuthProvider.credential(id_token);
+      signInWithCredential(auth, credential)
+        .then(() => navigation.navigate('Welcome'))
+        .catch(async (err) => {
+          if (err.code === 'auth/account-exists-with-different-credential') {
+            alert('An account already exists with this email. Please log in with your password first, then link Google in your profile settings.');
+          } else {
+            alert('Google sign-in error: ' + err.message);
+          }
+        });
+    }
+  }, [response]);
 
   const handleLogin = async () => {
     setIsLoading(true);
@@ -115,7 +137,7 @@ const LoginScreen = ({ navigation }: any) => {
         </TouchableOpacity>
         <TouchableOpacity 
           style={styles.socialButton}
-          onPress={() => handleSocialLogin('Google')}
+          onPress={() => promptAsync()}
         >
           <AntDesign name="google" size={22} color="white" style={styles.icon} />
           <Text style={styles.socialButtonText}>Continue with Google</Text>

@@ -1,5 +1,5 @@
 export type RootStackParamList = {
-  Login: undefined;
+  Login: undefined; // Ensure this is defined
   CreateProfile: {
     mode?: 'edit' | 'create';
     profileData?: any;
@@ -18,7 +18,7 @@ export type RootStackParamList = {
         time: string;
         maxParticipants: number;
       };
-    } 
+    }; 
   };
   ActivityDetails: { activityId: string };
   ChatDetail: { chatId: string };
@@ -51,4 +51,5 @@ export type RootStackParamList = {
   };
   Profile: { userId?: string };
   UserProfile: { userId: string };
+  Settings: undefined; // Ensure this is defined
 };

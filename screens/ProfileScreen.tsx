@@ -28,8 +28,16 @@ import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../firebaseConfig';
 import { activities } from '../data/activitiesData';
 
+type ProfileStackParamList = {
+  ProfileMain: undefined;
+  ActivityDetails: { activityId: string };
+  UserProfile: { userId: string };
+  Settings: undefined;
+  CreateProfile: { mode: string; profileData: any };
+};
+
 const ProfileScreen = () => {
-  const navigation = useNavigation<StackNavigationProp<RootStackParamList, 'ActivityDetails'>>();
+  const navigation = useNavigation<StackNavigationProp<ProfileStackParamList, 'ProfileMain'>>();
   const route = useRoute<RouteProp<RootStackParamList, 'Profile'>>();
   const userId = route.params?.userId;
   const insets = useSafeAreaInsets();
@@ -219,7 +227,10 @@ const ProfileScreen = () => {
     <SafeAreaView style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.headerRow}>
         <Text style={styles.profileNameHeader}>{profile?.username || 'Username'}</Text>
-        <TouchableOpacity style={styles.settingsButton} onPress={() => {}}>
+        <TouchableOpacity
+          style={styles.settingsButton}
+          onPress={() => navigation.navigate('Settings')} // Navigate to SettingsScreen
+        >
           <Ionicons name="settings-outline" size={28} color="#fff" />
         </TouchableOpacity>
       </View>

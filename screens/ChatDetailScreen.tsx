@@ -50,6 +50,7 @@ const ChatDetailScreen = () => {
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
   const [activityInfo, setActivityInfo] = useState<{ name: string, type: string, date: string, time: string } | null>(null);
   const flatListRef = useRef<FlatList>(null);
+  const progressRef = useRef(0);
 
   // Set Android navigation bar to dark on mount (only on Android)
   useEffect(() => {

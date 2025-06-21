@@ -159,7 +159,7 @@ const MainTabs = () => (
     <Tab.Screen name="Chats" component={ChatsScreen} />
     <Tab.Screen
       name="Profile"
-      component={ProfileStack}
+      component={ProfileStack} // Ensure ProfileStack is passed correctly
       options={{ headerShown: false }}
       listeners={({ navigation, route }) => ({
         tabPress: e => {

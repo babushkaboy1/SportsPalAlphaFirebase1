@@ -9,8 +9,7 @@ const WelcomeScreen = ({ navigation }: any) => {
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
-    const timeout = setTimeout(() => setIsReady(true), 500);
-    return () => clearTimeout(timeout);
+    setIsReady(true); // Render immediately or use skeleton loader
   }, []);
 
   if (!isReady) {
