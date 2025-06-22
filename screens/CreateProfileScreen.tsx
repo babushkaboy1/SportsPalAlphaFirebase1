@@ -20,6 +20,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { doc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../firebaseConfig';
+import { compressImage } from '../utils/imageUtils';
 
 // Sports Options for the grid
 const sportsOptions = [
@@ -87,6 +88,12 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
     setIsLoading(true);
 
     try {
+      let photoToSave = photo;
+      if (photo) {
+        // Compress the image before uploading
+        photoToSave = await compressImage(photo);
+      }
+
       if (isEdit) {
         // Only update Firestore profile, do NOT create a new Auth user
         const userId = auth.currentUser?.uid;
@@ -99,7 +106,7 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
           email,
           phone,
           location,
-          photo,
+          photo: photoToSave,
           sportsPreferences: selectedSports,
         };
         await setDoc(doc(db, "profiles", userId), profileData, { merge: true });
@@ -118,7 +125,7 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
           email,
           phone,
           location,
-          photo,
+          photo: photoToSave,
           sportsPreferences: selectedSports,
         };
         await setDoc(doc(db, "profiles", userId), profileData);
