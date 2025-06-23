@@ -19,8 +19,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { doc, setDoc } from 'firebase/firestore';
-import { auth, db } from '../firebaseConfig';
-import { compressImage } from '../utils/imageUtils';
+import { auth, db, storage } from '../firebaseConfig';
+import { compressImage, uploadProfileImage } from '../utils/imageUtils';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 // Sports Options for the grid
 const sportsOptions = [
@@ -86,46 +87,50 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
     }
 
     setIsLoading(true);
-
     try {
-      let photoToSave = photo;
-      if (photo) {
-        // Compress the image before uploading
-        photoToSave = await compressImage(photo);
-      }
+      let userId: string | undefined = auth.currentUser?.uid;
+      let photoURL: string | null = null;
 
       if (isEdit) {
-        // Only update Firestore profile, do NOT create a new Auth user
-        const userId = auth.currentUser?.uid;
+        userId = auth.currentUser?.uid;
         if (!userId) {
           Alert.alert('Error', 'No user is logged in.');
+          setIsLoading(false);
           return;
+        }
+        if (photo) {
+          const compressedUri = await compressImage(photo);
+          photoURL = await uploadProfileImage(compressedUri, userId);
         }
         const profileData = {
           username,
           email,
           phone,
           location,
-          photo: photoToSave,
+          photo: photoURL,
           sportsPreferences: selectedSports,
         };
         await setDoc(doc(db, "profiles", userId), profileData, { merge: true });
         Alert.alert('Success', 'Your profile has been updated!');
         navigation.goBack();
       } else {
-        // Create new Auth user and Firestore profile
         if (!password) {
           Alert.alert('Missing Info', 'Please enter a password.');
+          setIsLoading(false);
           return;
         }
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-        const userId = userCredential.user.uid;
+        userId = userCredential.user.uid;
+        if (photo) {
+          const compressedUri = await compressImage(photo);
+          photoURL = await uploadProfileImage(compressedUri, userId);
+        }
         const profileData = {
           username,
           email,
           phone,
           location,
-          photo: photoToSave,
+          photo: photoURL,
           sportsPreferences: selectedSports,
         };
         await setDoc(doc(db, "profiles", userId), profileData);

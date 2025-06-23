@@ -237,7 +237,7 @@ const ProfileScreen = () => {
 
       <View style={styles.profileInfo}>
         <View style={styles.profileLeftColumn}>
-          <Image style={styles.profileImage} source={{ uri: profile?.photo || 'https://via.placeholder.com/100' }} />
+          <Image source={{ uri: profile?.photo || 'https://via.placeholder.com/100' }} style={styles.profileImage} />
         </View>
       </View>
 

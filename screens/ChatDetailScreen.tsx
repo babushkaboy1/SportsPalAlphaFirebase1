@@ -24,7 +24,7 @@ import { db, auth } from '../firebaseConfig';
 import { ActivityIcon } from '../components/ActivityIcons'; // Make sure this is imported
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../types/navigation';
-import { compressImage } from '../utils/imageUtils';
+import { compressImage, uploadChatImage } from '../utils/imageUtils';
 
 // Firestore message type
 type Message = {
@@ -168,7 +168,9 @@ const ChatDetailScreen = () => {
     // Send images
     for (const uri of selectedImages) {
       const compressedUri = await compressImage(uri);
-      await sendMessage(chatId, auth.currentUser.uid, compressedUri, 'image');
+      const imageId = Date.now().toString();
+      const downloadUrl = await uploadChatImage(compressedUri, auth.currentUser.uid, imageId);
+      await sendMessage(chatId, auth.currentUser.uid, downloadUrl, 'image');
     }
     setSelectedImages([]);
     // Send text

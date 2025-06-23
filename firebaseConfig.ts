@@ -3,6 +3,7 @@ import { initializeApp, FirebaseApp } from "firebase/app";
 // @ts-ignore
 import { getReactNativePersistence, initializeAuth, Auth } from 'firebase/auth';
 import { getFirestore, Firestore } from "firebase/firestore";
+import { getStorage } from 'firebase/storage';
 import { 
   FIREBASE_API_KEY,
   FIREBASE_AUTH_DOMAIN,
@@ -29,3 +30,4 @@ export const auth: Auth = initializeAuth(app, {
   persistence: getReactNativePersistence(ReactNativeAsyncStorage),
 });
 export const db: Firestore = getFirestore(app);
+export const storage = getStorage(app);
