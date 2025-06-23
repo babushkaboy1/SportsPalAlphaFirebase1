@@ -16,11 +16,13 @@
     "@react-navigation/bottom-tabs": "^7.3.13",
     "@react-navigation/native": "^7.1.9",
     "@react-navigation/stack": "^7.3.2",
+    "base-64": "^1.0.0",
     "expo": "53.0.12",
     "expo-auth-session": "~6.2.0",
     "expo-av": "15.1.6",
     "expo-camera": "16.1.8",
     "expo-device": "~7.1.4",
+    "expo-image-manipulator": "~13.1.7",
     "expo-image-picker": "~16.1.4",
     "expo-location": "~18.1.5",
     "expo-navigation-bar": "4.2.6",
@@ -41,8 +43,7 @@
     "react-native-safe-area-context": "5.4.0",
     "react-native-screens": "4.11.1",
     "react-native-skeleton-placeholder": "^5.2.4",
-    "react-native-vector-icons": "^10.2.0",
-    "expo-image-manipulator": "~13.1.7"
+    "react-native-vector-icons": "^10.2.0"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",

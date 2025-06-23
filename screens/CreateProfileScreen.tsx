@@ -21,7 +21,8 @@ import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { doc, setDoc } from 'firebase/firestore';
 import { auth, db, storage } from '../firebaseConfig';
 import { compressImage, uploadProfileImage } from '../utils/imageUtils';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { ref, uploadBytes, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import * as ImageManipulator from 'expo-image-manipulator';
 
 // Sports Options for the grid
 const sportsOptions = [
@@ -81,6 +82,7 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
 
   // Make handleContinue async so we can await saveProfile
   const handleContinue = async () => {
+    console.log("🚦 handleContinue called");
     if (!email || !username) {
       Alert.alert('Missing Info', 'Please fill in all required fields.');
       return;
@@ -98,21 +100,82 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
           setIsLoading(false);
           return;
         }
+        // Now userId is guaranteed to be a string
+        const profileDocRef = doc(db, "profiles", userId);
         if (photo) {
-          const compressedUri = await compressImage(photo);
-          photoURL = await uploadProfileImage(compressedUri, userId);
+          console.log("📸 Photo exists, preparing to upload:", photo);
+          // Always manipulate the image to ensure fetch() works
+          const manipulated = await ImageManipulator.manipulateAsync(
+            photo,
+            [], // no resize
+            { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
+          );
+          console.log("🖼️ Manipulated URI:", manipulated.uri);
+          try {
+            console.log("🧠 Uploading profile image to Storage...");
+            console.log("🔥 photoToSave URI:", manipulated.uri);
+
+            console.log("🌐 Fetching manipulated URI...");
+            const response = await fetch(manipulated.uri);
+            console.log("✅ Fetch success");
+            const blob = await response.blob();
+
+            console.log("✅ Blob ready. Size:", blob.size);
+
+            const metadata = {
+              contentType: 'image/jpeg',
+            };
+
+            console.log("Current UID:", auth.currentUser?.uid);
+
+            const imageRef = ref(storage, `profilePictures/${userId}/profile.jpg`);
+            console.log("⬆️ Uploading to Firebase Storage...");
+            const uploadTask = uploadBytesResumable(imageRef, blob, metadata);
+
+            uploadTask.on('state_changed',
+              (snapshot) => {
+                const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+                console.log(`Upload ${progress.toFixed(0)}%`);
+              },
+              (error) => {
+                console.error('💥 Upload failed:', error.code, error.message);
+              },
+              async () => {
+                const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+                console.log('✅ File available at:', downloadURL);
+                photoURL = downloadURL;
+
+                const profileData = {
+                  username,
+                  email,
+                  phone,
+                  location,
+                  photo: photoURL,
+                  sportsPreferences: selectedSports,
+                };
+                await setDoc(profileDocRef, profileData, { merge: true });
+                Alert.alert('Success', 'Your profile has been updated!');
+                navigation.goBack();
+              }
+            );
+          } catch (err: any) {
+            console.error("❌ Upload failed:", err.code || err.message, err);
+            Alert.alert('Image Upload Failed', err.message || 'Unknown error');
+            setIsLoading(false);
+            return;
+          }
+        } else {
+          const profileData = {
+            username,
+            email,
+            phone,
+            location,
+            sportsPreferences: selectedSports,
+          };
+          await setDoc(profileDocRef, profileData, { merge: true });
+          Alert.alert('Success', 'Your profile has been updated!');
+          navigation.goBack();
         }
-        const profileData = {
-          username,
-          email,
-          phone,
-          location,
-          photo: photoURL,
-          sportsPreferences: selectedSports,
-        };
-        await setDoc(doc(db, "profiles", userId), profileData, { merge: true });
-        Alert.alert('Success', 'Your profile has been updated!');
-        navigation.goBack();
       } else {
         if (!password) {
           Alert.alert('Missing Info', 'Please enter a password.');

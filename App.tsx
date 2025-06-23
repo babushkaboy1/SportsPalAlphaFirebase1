@@ -32,6 +32,7 @@ import { RootStackParamList } from './types/navigation';
 import DiscoverStack from './navigation/DiscoverStack';
 import CalendarStack from './navigation/CalendarStack';
 import ProfileStack from './navigation/ProfileStack';
+import { decode as atob } from 'base-64';
 
 enableScreens(true);
 
@@ -272,3 +273,7 @@ type TabParamList = {
   Chats: undefined;
   Profile: undefined;
 };
+
+if (typeof global.atob === 'undefined') {
+  global.atob = atob;
+}
