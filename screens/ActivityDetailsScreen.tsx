@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Animated } from 'react-native';
 import {
   View,
   Text,
@@ -43,6 +44,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
   const [userLocation, setUserLocation] = useState<{ latitude: number, longitude: number } | null>(null);
   const [joinedUsers, setJoinedUsers] = useState<any[]>([]);
   const [isReady, setIsReady] = useState(false);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
   const mapRef = useRef<MapView>(null);
   const insets = useSafeAreaInsets();
 
@@ -230,6 +232,16 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
     setupChat();
   }, [activityId, isActivityJoined(activityId)]);
 
+  useEffect(() => {
+    if (isReady) {
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 350,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [isReady]);
+
   if (!isReady) {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }}>
@@ -240,151 +252,153 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
-      {/* Header */}
-  <View style={styles.header}>
-        <TouchableOpacity
-          style={[styles.backButton, { left: 16, position: 'absolute', zIndex: 10 }]}
-          onPress={() => navigation.goBack()}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
-          <Ionicons name="arrow-back" size={28} color="#1ae9ef" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Activity Details</Text>
-      </View>
-      <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
-        {/* Map Overview */}
-        <View style={styles.mapContainer}>
-          <MapView
-            ref={mapRef}
-            style={{ flex: 1, borderRadius: 10 }}
-            provider={Platform.OS === 'android' ? PROVIDER_DEFAULT : undefined}
-            initialRegion={{
-              latitude: activity.latitude,
-              longitude: activity.longitude,
-              latitudeDelta: 0.01,
-              longitudeDelta: 0.01,
-            }}
-            showsUserLocation={!!userLocation}
-            showsMyLocationButton={false}
+      <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
+        {/* Header */}
+        <View style={styles.header}>
+          <TouchableOpacity
+            style={[styles.backButton, { left: 16, position: 'absolute', zIndex: 10 }]}
+            onPress={() => navigation.goBack()}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
-            {Platform.OS === 'android' && (
-              <UrlTile
-                urlTemplate="https://a.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                maximumZ={19}
-                flipY={false}
-              />
-            )}
-            <Marker
-              coordinate={{
+            <Ionicons name="arrow-back" size={28} color="#1ae9ef" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Activity Details</Text>
+        </View>
+        <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
+          {/* Map Overview */}
+          <View style={styles.mapContainer}>
+            <MapView
+              ref={mapRef}
+              style={{ flex: 1, borderRadius: 10 }}
+              provider={Platform.OS === 'android' ? PROVIDER_DEFAULT : undefined}
+              initialRegion={{
                 latitude: activity.latitude,
                 longitude: activity.longitude,
+                latitudeDelta: 0.01,
+                longitudeDelta: 0.01,
               }}
-              title={activity.activity}
-              description={activity.location}
-            />
-          </MapView>
-          {userLocation && (
-            <TouchableOpacity
-              style={styles.myLocationButton}
-              onPress={() => {
-                mapRef.current?.animateToRegion({
-                  latitude: userLocation.latitude,
-                  longitude: userLocation.longitude,
-                  latitudeDelta: 0.01,
-                  longitudeDelta: 0.01,
-                });
-              }}
-              activeOpacity={0.7}
+              showsUserLocation={!!userLocation}
+              showsMyLocationButton={false}
             >
-              <Ionicons name="locate" size={28} color="#1ae9ef" />
-            </TouchableOpacity>
-          )}
-        </View>
-
-        {/* Activity Information */}
-        <View style={styles.infoContainer}>
-          <Text style={styles.title}>{activity.activity}</Text>
-          <Text style={styles.location}>{activity.location}</Text>
-          {userLocation && (
-            <Text style={styles.distanceText}>
-              {getDistance()} km away
-            </Text>
-          )}
-          <Text style={styles.detail}>
-            Date: {activity.date} at {activity.time}
-          </Text>
-          <Text style={styles.detail}>Hosted by: {activity.creator}</Text>
-          <View style={styles.joinContainer}>
-            <Text style={styles.joinText}>
-              {(activity.joinedUserIds?.length ?? activity.joinedCount)}/{activity.maxParticipants} joined
-            </Text>
-          </View>
-          <Text style={styles.description}>
-            Stay active and make new friends by joining this exciting {activity.activity} event!
-          </Text>
-
-          {/* Participants List */}
-          <View style={{ marginVertical: 10 }}>
-            <Text style={{ color: '#1ae9ef', fontWeight: 'bold', fontSize: 16, marginBottom: 8 }}>
-              Participants
-            </Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              {joinedUsers.map(user => (
-                <TouchableOpacity
-                  key={user.uid}
-                  style={{ alignItems: 'center', marginRight: 16 }}
-                  onPress={() => {
-                    if (user.uid === auth.currentUser?.uid) {
-                      navigation.navigate('MainTabs', { screen: 'Profile' });
-                    } else {
-                      navigation.navigate('UserProfile', { userId: user.uid });
-                    }
-                  }}
-                >
-                  <Image
-                    source={{ uri: user.photo || user.photoURL || 'https://ui-avatars.com/api/?name=' + (user.username || 'User') }}
-                    style={{ width: 54, height: 54, borderRadius: 27, borderWidth: 2, borderColor: '#1ae9ef' }}
-                  />
-                  <Text style={{ color: '#fff', marginTop: 6, fontWeight: 'bold' }}>{user.username}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-
-          {/* Action Buttons */}
-          <View style={styles.actionsContainer}>
-            <TouchableOpacity
-              style={[
-                styles.actionButton,
-                isActivityJoined(activity.id) && styles.actionButtonJoined,
-              ]}
-              onPress={handleJoinLeave}
-              activeOpacity={0.85}
-            >
-              <Text
-                style={[
-                  styles.actionText,
-                  isActivityJoined(activity.id) && styles.actionTextJoined,
-                ]}
+              {Platform.OS === 'android' && (
+                <UrlTile
+                  urlTemplate="https://a.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                  maximumZ={19}
+                  flipY={false}
+                />
+              )}
+              <Marker
+                coordinate={{
+                  latitude: activity.latitude,
+                  longitude: activity.longitude,
+                }}
+                title={activity.activity}
+                description={activity.location}
+              />
+            </MapView>
+            {userLocation && (
+              <TouchableOpacity
+                style={styles.myLocationButton}
+                onPress={() => {
+                  mapRef.current?.animateToRegion({
+                    latitude: userLocation.latitude,
+                    longitude: userLocation.longitude,
+                    latitudeDelta: 0.01,
+                    longitudeDelta: 0.01,
+                  });
+                }}
+                activeOpacity={0.7}
               >
-                {isActivityJoined(activity.id) ? 'Leave Activity' : 'Join Activity'}
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.actionButton} onPress={handleOpenGroupChat}>
-              <Ionicons name="chatbubbles" size={20} style={styles.actionIconBold} />
-              <Text style={styles.actionText}>Group Chat</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.actionButton} onPress={handleGetDirections}>
-              <Ionicons name="navigate" size={24} style={styles.actionIconBold} />
-              <Text style={styles.actionText}>Get Directions</Text>
-            </TouchableOpacity>
+                <Ionicons name="locate" size={28} color="#1ae9ef" />
+              </TouchableOpacity>
+            )}
           </View>
-        </View>
-        <TouchableOpacity onPress={() => navigation.navigate("MainTabs", { screen: "Discover" })}>
-          <Text>Go to Discover</Text>
-        </TouchableOpacity>
-      </ScrollView>
+
+          {/* Activity Information */}
+          <View style={styles.infoContainer}>
+            <Text style={styles.title}>{activity.activity}</Text>
+            <Text style={styles.location}>{activity.location}</Text>
+            {userLocation && (
+              <Text style={styles.distanceText}>
+                {getDistance()} km away
+              </Text>
+            )}
+            <Text style={styles.detail}>
+              Date: {activity.date} at {activity.time}
+            </Text>
+            <Text style={styles.detail}>Hosted by: {activity.creator}</Text>
+            <View style={styles.joinContainer}>
+              <Text style={styles.joinText}>
+                {(activity.joinedUserIds?.length ?? activity.joinedCount)}/{activity.maxParticipants} joined
+              </Text>
+            </View>
+            <Text style={styles.description}>
+              Stay active and make new friends by joining this exciting {activity.activity} event!
+            </Text>
+
+            {/* Participants List */}
+            <View style={{ marginVertical: 10 }}>
+              <Text style={{ color: '#1ae9ef', fontWeight: 'bold', fontSize: 16, marginBottom: 8 }}>
+                Participants
+              </Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                {joinedUsers.map(user => (
+                  <TouchableOpacity
+                    key={user.uid}
+                    style={{ alignItems: 'center', marginRight: 16 }}
+                    onPress={() => {
+                      if (user.uid === auth.currentUser?.uid) {
+                        navigation.navigate('MainTabs', { screen: 'Profile' });
+                      } else {
+                        navigation.navigate('UserProfile', { userId: user.uid });
+                      }
+                    }}
+                  >
+                    <Image
+                      source={{ uri: user.photo || user.photoURL || 'https://ui-avatars.com/api/?name=' + (user.username || 'User') }}
+                      style={{ width: 54, height: 54, borderRadius: 27, borderWidth: 2, borderColor: '#1ae9ef' }}
+                    />
+                    <Text style={{ color: '#fff', marginTop: 6, fontWeight: 'bold' }}>{user.username}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+
+            {/* Action Buttons */}
+            <View style={styles.actionsContainer}>
+              <TouchableOpacity
+                style={[
+                  styles.actionButton,
+                  isActivityJoined(activity.id) && styles.actionButtonJoined,
+                ]}
+                onPress={handleJoinLeave}
+                activeOpacity={0.85}
+              >
+                <Text
+                  style={[
+                    styles.actionText,
+                    isActivityJoined(activity.id) && styles.actionTextJoined,
+                  ]}
+                >
+                  {isActivityJoined(activity.id) ? 'Leave Activity' : 'Join Activity'}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.actionButton} onPress={handleOpenGroupChat}>
+                <Ionicons name="chatbubbles" size={20} style={styles.actionIconBold} />
+                <Text style={styles.actionText}>Group Chat</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.actionButton} onPress={handleGetDirections}>
+                <Ionicons name="navigate" size={24} style={styles.actionIconBold} />
+                <Text style={styles.actionText}>Get Directions</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+          <TouchableOpacity onPress={() => navigation.navigate("MainTabs", { screen: "Discover" })}>
+            <Text>Go to Discover</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </Animated.View>
     </SafeAreaView>
   );
 };
