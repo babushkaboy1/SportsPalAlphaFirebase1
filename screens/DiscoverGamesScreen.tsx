@@ -14,6 +14,7 @@ import {
   Share,
   ActivityIndicator,
 } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
@@ -35,6 +36,7 @@ const DiscoverGamesScreen = ({ navigation }: any) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedFilter, setSelectedFilter] = useState('All');
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshLocked, setRefreshLocked] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [isDatePickerVisible, setDatePickerVisible] = useState(false);
   const [isSortingByDistance, setIsSortingByDistance] = useState(false);
@@ -45,6 +47,8 @@ const DiscoverGamesScreen = ({ navigation }: any) => {
   // Load activities from Firestore + fake on mount/refresh
   const loadActivities = async () => {
     setRefreshing(true);
+    setRefreshLocked(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     try {
       const firestoreActivities = await fetchAllActivities();
       const merged = [
@@ -57,7 +61,10 @@ const DiscoverGamesScreen = ({ navigation }: any) => {
     } catch (e) {
       // setAllActivities(fakeActivities);
     }
-    setRefreshing(false);
+    setTimeout(() => {
+      setRefreshing(false);
+      setRefreshLocked(false);
+    }, 1500);
   };
 
   useEffect(() => {
@@ -279,7 +286,12 @@ const DiscoverGamesScreen = ({ navigation }: any) => {
         )}
         keyExtractor={(item) => item.id}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={loadActivities} />
+          <RefreshControl
+            refreshing={refreshing || refreshLocked}
+            onRefresh={loadActivities}
+            colors={["#1ae9ef"]}
+            tintColor="#1ae9ef"
+          />
         }
         contentContainerStyle={styles.listContainer}
       />

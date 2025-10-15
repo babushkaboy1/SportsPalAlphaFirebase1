@@ -12,6 +12,7 @@ import {
   ActivityIndicator,
   Animated,
 } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Calendar } from 'react-native-calendars';
 import { ActivityProvider, useActivityContext } from '../context/ActivityContext';
@@ -31,13 +32,19 @@ const CalendarScreen = ({ navigation, route }: any) => {
     selected.toISOString().split('T')[0]
   );
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshLocked, setRefreshLocked] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
   // Refresh handler
   const onRefresh = async () => {
     setRefreshing(true);
+    setRefreshLocked(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     await reloadAllActivities(); // <-- reload from Firestore
-    setRefreshing(false);
+    setTimeout(() => {
+      setRefreshing(false);
+      setRefreshLocked(false);
+    }, 1500);
   };
 
   const getMarkedDates = () => {
@@ -122,7 +129,12 @@ const CalendarScreen = ({ navigation, route }: any) => {
         <Text style={styles.headerTitle}>Calendar</Text>
         <ScrollView
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+            <RefreshControl
+              refreshing={refreshing || refreshLocked}
+              onRefresh={onRefresh}
+              colors={["#1ae9ef"]}
+              tintColor="#1ae9ef"
+            />
           }
           contentContainerStyle={{ flexGrow: 1 }}
         >
