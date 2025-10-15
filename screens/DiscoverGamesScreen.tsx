@@ -196,7 +196,7 @@ const DiscoverGamesScreen = ({ navigation }: any) => {
     setIsSortingByDistance((prev) => !prev);
   };
 
-  if (refreshing || !allActivities || allActivities.length === 0) {
+  if (!allActivities || allActivities.length === 0) {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }} edges={['top']}>
         <ActivityIndicator size="large" color="#1ae9ef" />
