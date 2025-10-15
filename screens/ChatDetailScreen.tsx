@@ -13,7 +13,7 @@ import {
   Alert,
 } from 'react-native';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
-import { Audio } from 'expo-av';
+import { useAudioRecorder, useAudioPlayer, AudioModule, RecordingPresets } from 'expo-audio';
 import * as NavigationBar from 'expo-navigation-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
@@ -43,10 +43,10 @@ const ChatDetailScreen = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [profiles, setProfiles] = useState<{ [userId: string]: any }>({});
   const [messageText, setMessageText] = useState('');
-  const [recording, setRecording] = useState<Audio.Recording | null>(null);
+  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
   const [audioStatus, setAudioStatus] = useState<any>({});
-  const [playbackInstance, setPlaybackInstance] = useState<Audio.Sound | null>(null);
+  const audioPlayer = useAudioPlayer();
   const [playbackRate, setPlaybackRate] = useState(1.0);
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
   const [activityInfo, setActivityInfo] = useState<{ name: string, type: string, date: string, time: string } | null>(null);
@@ -113,53 +113,24 @@ const ChatDetailScreen = () => {
 
   // Play an audio message
   const handlePlayPauseAudio = async (uri: string, id: string) => {
-    await Audio.setAudioModeAsync({
-      allowsRecordingIOS: false,
-      interruptionModeIOS: 1,
-      playsInSilentModeIOS: true,
-      shouldDuckAndroid: true,
-      staysActiveInBackground: false,
-    });
-
-    if (playingAudioId === id && playbackInstance) {
-      const status = await playbackInstance.getStatusAsync();
-      if (status.isLoaded && status.isPlaying) {
-        await playbackInstance.pauseAsync();
-      } else if (status.isLoaded) {
-        await playbackInstance.playAsync();
+    if (playingAudioId === id) {
+      if (audioPlayer.playing) {
+        audioPlayer.pause();
+      } else {
+        audioPlayer.play();
       }
       return;
     }
 
-    if (playbackInstance) {
-      await playbackInstance.unloadAsync();
-      setPlaybackInstance(null);
-    }
-
     setPlayingAudioId(id);
-    const { sound } = await Audio.Sound.createAsync(
-      { uri },
-      { shouldPlay: true, rate: playbackRate, volume: 1.0 }
-    );
-    setPlaybackInstance(sound);
-
-    sound.setOnPlaybackStatusUpdate((status: any) => {
-      setAudioStatus(status);
-      if (status.isLoaded && status.didJustFinish) {
-        setPlayingAudioId(null);
-        setPlaybackInstance(null);
-        setPlaybackRate(1.0);
-      }
-    });
-    await sound.playAsync();
+    audioPlayer.replace(uri);
+    audioPlayer.play();
   };
 
   const handleSpeedChange = () => {
     let newRate = playbackRate === 1 ? 1.5 : playbackRate === 1.5 ? 2 : 1;
     setPlaybackRate(newRate);
-    if (playbackInstance) {
-      playbackInstance.setRateAsync(newRate, true);
-    }
+    audioPlayer.playbackRate = newRate;
   };
 
   // Send a message (text, image, audio)
@@ -183,22 +154,12 @@ const ChatDetailScreen = () => {
   // Start recording audio
   const startRecording = async () => {
     try {
-      const { status } = await Audio.requestPermissionsAsync();
-      if (status !== 'granted') {
+      const { granted } = await AudioModule.requestRecordingPermissionsAsync();
+      if (!granted) {
         Alert.alert('Permission Denied', 'Please enable audio recording permissions.');
         return;
       }
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        interruptionModeIOS: 1,
-        playsInSilentModeIOS: true,
-        shouldDuckAndroid: true,
-        staysActiveInBackground: false,
-      });
-      const newRecording = new Audio.Recording();
-      await newRecording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-      await newRecording.startAsync();
-      setRecording(newRecording);
+      await audioRecorder.record();
     } catch (error) {
       Alert.alert('Recording Error', 'Could not start recording. Please try again.');
     }
@@ -206,12 +167,10 @@ const ChatDetailScreen = () => {
 
   // Stop recording and send as audio message
   const stopRecording = async () => {
-    if (!recording || !auth.currentUser) return;
+    if (!audioRecorder.isRecording || !auth.currentUser) return;
     try {
-      await recording.stopAndUnloadAsync();
-      const uri = recording.getURI();
-      setRecording(null);
-      if (uri) {
+      const uri = await audioRecorder.stop();
+      if (uri != null) {
         await sendMessage(chatId, auth.currentUser.uid, uri, 'audio');
       }
     } catch (error) {
@@ -319,18 +278,18 @@ const ChatDetailScreen = () => {
                   style={styles.audioPlayButton}
                   activeOpacity={0.7}
                 >
-                  <MaterialIcons name={playingAudioId === item.id && audioStatus.isLoaded && audioStatus.isPlaying ? "pause" : "play-arrow"} size={18} color="#fff" />
+                  <MaterialIcons name={playingAudioId === item.id && audioPlayer.playing ? "pause" : "play-arrow"} size={18} color="#fff" />
                 </TouchableOpacity>
                 <View style={styles.audioWaveformBar}>
                   <View style={[styles.audioWaveformFill, {
-                    width: (playingAudioId === item.id && audioStatus.positionMillis && audioStatus.durationMillis)
-                      ? `${(audioStatus.positionMillis / audioStatus.durationMillis) * 100}%`
+                    width: (playingAudioId === item.id && audioPlayer.duration > 0)
+                      ? `${(audioPlayer.currentTime / audioPlayer.duration) * 100}%`
                       : '0%',
                   }]} />
                 </View>
                 <Text style={styles.audioDurationRight}>
-                  {playingAudioId === item.id && audioStatus.durationMillis
-                    ? `${(audioStatus.durationMillis / 1000).toFixed(2)}`
+                  {playingAudioId === item.id && audioPlayer.duration > 0
+                    ? `${audioPlayer.duration.toFixed(2)}`
                     : '0.00'}
                 </Text>
                 <TouchableOpacity
@@ -432,8 +391,8 @@ const ChatDetailScreen = () => {
             <TouchableOpacity style={styles.inputCircleButton} onPress={handleGalleryPress}>
               <Ionicons name="image" size={22} color="#007575" />
             </TouchableOpacity>
-            <TouchableOpacity style={styles.inputCircleButton} onPress={recording ? stopRecording : startRecording}>
-              <Ionicons name={recording ? "stop" : "mic"} size={22} color="#007575" />
+            <TouchableOpacity style={styles.inputCircleButton} onPress={audioRecorder.isRecording ? stopRecording : startRecording}>
+              <Ionicons name={audioRecorder.isRecording ? "stop" : "mic"} size={22} color="#007575" />
             </TouchableOpacity>
             <TextInput
               style={styles.inputText}

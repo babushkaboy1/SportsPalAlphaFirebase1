@@ -1,7 +1,6 @@
 // screens/ChatsScreen.tsx
 import React, { useState } from 'react';
 import {
-  SafeAreaView,
   View,
   Text,
   StyleSheet,
@@ -13,8 +12,8 @@ import {
   Platform,
   ActivityIndicator,
 } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { fetchUserChats } from '../utils/firestoreChats';
 import { doc, getDoc, collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
 import { db, auth } from '../firebaseConfig';
@@ -173,14 +172,14 @@ const ChatsScreen = ({ navigation }: any) => {
 
   if (!isReady) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }}>
+      <SafeAreaView style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }} edges={['top']}>
         <ActivityIndicator size="large" color="#1ae9ef" />
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={[styles.container, { paddingTop: insets.top }]}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <Text style={styles.headerTitle}>Chats</Text>
       <View style={styles.searchContainer}>
         <Ionicons name="search" size={20} color="#ccc" />
@@ -211,18 +210,12 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#121212',
     padding: 10,
-    paddingTop:
-      Platform.OS === 'android'
-        ? (StatusBar.currentHeight ? StatusBar.currentHeight + 10 : 25)
-        : 10,
   },
   headerTitle: {
     fontSize: 28,
     color: '#1ae9ef',
     fontWeight: 'bold',
     textAlign: 'center',
-    marginTop: 10,
-    marginBottom: 18,
   },
   searchContainer: {
     flexDirection: 'row',

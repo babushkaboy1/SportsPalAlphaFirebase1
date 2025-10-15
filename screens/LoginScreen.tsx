@@ -10,7 +10,7 @@ import {
   ActivityIndicator
 } from 'react-native';
 import Logo from '../components/Logo';
-import { AntDesign, FontAwesome } from '@expo/vector-icons';
+import { AntDesign, FontAwesome, Ionicons } from '@expo/vector-icons';
 import { signInWithEmailAndPassword, signInWithCredential, GoogleAuthProvider } from 'firebase/auth';
 import { auth } from '../firebaseConfig';
 import * as Google from 'expo-auth-session/providers/google';
@@ -125,7 +125,7 @@ const LoginScreen = ({ navigation }: any) => {
           style={styles.socialButton}
           onPress={() => handleSocialLogin('Apple')}
         >
-          <AntDesign name="apple1" size={22} color="white" style={styles.icon} />
+          <AntDesign name="apple" size={22} color="white" style={styles.icon} />
           <Text style={styles.socialButtonText}>Continue with Apple</Text>
         </TouchableOpacity>
         <TouchableOpacity 

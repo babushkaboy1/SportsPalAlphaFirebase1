@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { SafeAreaView, View, Text, StyleSheet, Image, TouchableOpacity, Share, FlatList, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Image, TouchableOpacity, Share, FlatList, ActivityIndicator } from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { doc, getDoc } from 'firebase/firestore';
 import { db, auth } from '../firebaseConfig';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useActivityContext } from '../context/ActivityContext';
 import { ActivityIcon } from '../components/ActivityIcons';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -74,20 +74,20 @@ const UserProfileScreen = () => {
 
   if (!isReady) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }}>
+      <SafeAreaView style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }} edges={['top']}>
         <ActivityIndicator size="large" color="#1ae9ef" />
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={[styles.container, { paddingTop: insets.top }]}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.headerRow}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
           <Ionicons name="arrow-back" size={28} color="#1ae9ef" />
         </TouchableOpacity>
         <Text style={styles.profileNameHeader}>{profile?.username || 'Username'}</Text>
-        <TouchableOpacity style={styles.settingsButton} onPress={handleShareProfile}>
+        <TouchableOpacity style={styles.shareButton} onPress={handleShareProfile}>
           <Ionicons name="share-social-outline" size={28} color="#1ae9ef" />
         </TouchableOpacity>
       </View>
@@ -141,8 +141,16 @@ const styles = StyleSheet.create({
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
+    position: 'relative',
+    paddingLeft: 10,
+    paddingRight: 10,
+    gap: 8,
+  },
+  shareButton: {
+    position: 'absolute',
+    right: 10,
+    top: 0,
+    padding: 5,
   },
   backButton: { padding: 5 },
   profileNameHeader: {
@@ -197,7 +205,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-around',
     paddingVertical: 10,
-    backgroundColor: '#1e1e1e',
+    backgroundColor: '#121212',
   },
   tab: {
     alignItems: 'center',
@@ -208,7 +216,7 @@ const styles = StyleSheet.create({
     borderBottomColor: '#1ae9ef',
   },
   contentContainer: {
-    padding: 20,
+    paddingHorizontal: 20,
     flex: 1,
   },
   tabContent: {
@@ -240,7 +248,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   listContainer: {
-    paddingBottom: 100,
+    paddingBottom: 0,
   },
 });
 

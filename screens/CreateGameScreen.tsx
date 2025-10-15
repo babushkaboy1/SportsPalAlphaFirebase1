@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import {
-  SafeAreaView,
   View,
   Text,
   TextInput,
@@ -13,6 +12,7 @@ import {
   Modal,
   ActivityIndicator,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { ActivityIcon } from '../components/ActivityIcons';
@@ -198,14 +198,14 @@ const CreateGameScreen = () => {
 
   if (!isReady) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }}>
+      <SafeAreaView style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }} edges={['top']}>
         <ActivityIndicator size="large" color="#1ae9ef" />
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={[styles.container, { paddingTop: insets.top }]}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Create Activity</Text>
       </View>
@@ -469,16 +469,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#121212',
-    padding: 10,
-    paddingTop:
-      Platform.OS === 'android'
-        ? (StatusBar.currentHeight ? StatusBar.currentHeight + 10 : 25)
-        : 10,
+    paddingHorizontal: 10,
   },
   header: {
     alignItems: 'center',
-    marginTop: 10,
-    marginBottom: 18,
   },
   headerTitle: {
     fontSize: 28,
@@ -487,7 +481,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   form: {
-    paddingBottom: 20,
+    paddingBottom: 0,
   },
   sectionLabel: {
     color: THEME_COLOR,

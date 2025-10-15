@@ -1,7 +1,6 @@
 // screens/CalendarScreen.tsx
 import React, { useState } from 'react';
 import {
-  SafeAreaView,
   StyleSheet,
   View,
   Text,
@@ -12,10 +11,10 @@ import {
   RefreshControl,
   ActivityIndicator,
 } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Calendar } from 'react-native-calendars';
 import { ActivityProvider, useActivityContext } from '../context/ActivityContext';
 import { convertToCalendarFormat, normalizeDateFormat } from '../utils/storage';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons'; // Import Ionicons
 import { ActivityIcon } from '../components/ActivityIcons'; // ✅ Correct import
 import { activities } from '../data/activitiesData';
@@ -99,14 +98,14 @@ const CalendarScreen = ({ navigation, route }: any) => {
 
   if (!joinedActivities || !allActivities || allActivities.length === 0) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }}>
+      <SafeAreaView style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }} edges={['top']}>
         <ActivityIndicator size="large" color="#1ae9ef" />
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={[styles.safeArea, { paddingTop: insets.top }]}>
+    <SafeAreaView style={styles.safeArea} edges={['top']}>
       <Text style={styles.headerTitle}>Calendar</Text>
       <ScrollView
         refreshControl={

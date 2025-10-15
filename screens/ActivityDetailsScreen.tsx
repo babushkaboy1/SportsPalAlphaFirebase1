@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  SafeAreaView,
   View,
   Text,
   StyleSheet,
@@ -14,6 +13,7 @@ import {
   InteractionManager,
   ActivityIndicator,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useActivityContext } from '../context/ActivityContext';
@@ -239,9 +239,9 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
   }
 
   return (
-    <SafeAreaView style={[styles.safeArea, { paddingTop: insets.top }]}>
+    <SafeAreaView style={styles.safeArea} edges={['top']}>
       {/* Header */}
-      <View style={styles.header}>
+  <View style={styles.header}>
         <TouchableOpacity
           style={[styles.backButton, { left: 16, position: 'absolute', zIndex: 10 }]}
           onPress={() => navigation.goBack()}
@@ -392,11 +392,6 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
 export default ActivityDetailsScreen;
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#121212',
-    paddingTop: Platform.OS === 'android' ? ((StatusBar.currentHeight || 0) + 10) : 0,
-  },
   safeArea: {
     flex: 1,
     backgroundColor: '#121212',
@@ -404,15 +399,12 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingTop: 10,
-    paddingBottom: 18,
     justifyContent: 'center',
     backgroundColor: '#121212',
     position: 'relative',
   },
   backButton: {
     padding: 4,
-    top: 10,
   },
   headerTitle: {
     fontSize: 28,
@@ -420,7 +412,6 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     textAlign: 'center',
     flex: 1,
-    marginLeft: 0,
   },
   mapContainer: {
     height: 250,

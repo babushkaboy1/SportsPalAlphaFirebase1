@@ -50,6 +50,10 @@ export default ({ config }: { config: any }) => ({
   web: {
     favicon: "./assets/favicon.png"
   },
+  plugins: [
+    "expo-font",
+    "expo-audio"
+  ],
   extra: {
     eas: {
       projectId: "c08f930c-531d-4919-ad9b-e99408d8edad"

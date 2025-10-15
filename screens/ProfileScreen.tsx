@@ -1,7 +1,6 @@
 import { RouteProp } from '@react-navigation/native';
 import React, { useState, useCallback, useEffect } from 'react';
 import {
-  SafeAreaView,
   View,
   Text,
   StyleSheet,
@@ -16,7 +15,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { useActivityContext } from '../context/ActivityContext';
 import { ActivityIcon } from '../components/ActivityIcons';
@@ -217,14 +216,14 @@ const ProfileScreen = () => {
   // Show loading indicator until profile is loaded
   if (!isReady) {
     return (
-      <SafeAreaView style={[styles.container, { paddingTop: insets.top, justifyContent: 'center', alignItems: 'center' }]}>
+      <SafeAreaView style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]} edges={['top']}>
         <ActivityIndicator size="large" color="#1ae9ef" />
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={[styles.container, { paddingTop: insets.top }]}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.headerRow}>
         <Text style={styles.profileNameHeader}>{profile?.username || 'Username'}</Text>
         <TouchableOpacity
@@ -356,7 +355,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-around',
     paddingVertical: 10,
-    backgroundColor: '#1e1e1e',
+    backgroundColor: '#121212',
   },
   tab: {
     alignItems: 'center',
@@ -367,7 +366,7 @@ const styles = StyleSheet.create({
     borderBottomColor: '#1ae9ef',
   },
   contentContainer: {
-    padding: 20,
+    paddingHorizontal: 20,
     flex: 1,
   },
   tabContent: {
@@ -438,7 +437,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   listContainer: {
-    paddingBottom: 100,
+    paddingBottom: 0,
   },
   settingsButton: {
     padding: 5,

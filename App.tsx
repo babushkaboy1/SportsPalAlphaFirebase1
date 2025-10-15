@@ -6,8 +6,6 @@ import { StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { enableScreens } from 'react-native-screens';
 import { StatusBar } from 'expo-status-bar';
-import * as Notifications from 'expo-notifications';
-import * as Device from 'expo-device';
 import * as Location from 'expo-location';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth } from './firebaseConfig';
@@ -195,28 +193,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const getPermissions = async () => {
-      if (Device.isDevice) {
-        const { status } = await Notifications.requestPermissionsAsync();
-        if (status !== 'granted') {
-          Alert.alert('Permission required', 'Enable notifications to get reminders.');
-        }
-      }
-    };
-    getPermissions();
-  }, []);
-
-  Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowAlert: true,
-      shouldPlaySound: true,
-      shouldSetBadge: false,
-      shouldShowBanner: true, // <-- add this
-      shouldShowList: true,   // <-- and this
-    }),
-  });
-
-  useEffect(() => {
     if (user) {
       const preloadScreens = () => {
         if (navRef.isReady()) {
@@ -240,7 +216,7 @@ export default function App() {
 
   return (
     <ActivityProvider>
-      <NavigationContainer ref={navRef}>
+  <NavigationContainer ref={navRef} theme={MyTheme}>
         <StatusBar style="light" backgroundColor="#121212" />
         <Stack.Navigator
           initialRouteName={user ? "MainTabs" : "Login"}
