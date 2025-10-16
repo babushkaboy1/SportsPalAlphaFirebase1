@@ -63,22 +63,58 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
   }, []);
 
   const pickImage = async () => {
-    const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permissionResult.granted) {
-      Alert.alert('Permission required', 'Permission to access your media library is needed!');
-      return;
-    }
+    Alert.alert(
+      'Select Profile Picture',
+      'Choose a photo from:',
+      [
+        {
+          text: 'Camera',
+          onPress: async () => {
+            const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
+            if (!permissionResult.granted) {
+              Alert.alert('Permission required', 'Permission to access your camera is needed!');
+              return;
+            }
 
-    let result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: 'images',
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.5,
-    });
+            let result = await ImagePicker.launchCameraAsync({
+              allowsEditing: true,
+              aspect: [1, 1],
+              quality: 0.7,
+            });
 
-    if (!result.canceled && result.assets && result.assets.length > 0) {
-      setPhoto(result.assets[0].uri);
-    }
+            if (!result.canceled && result.assets && result.assets.length > 0) {
+              setPhoto(result.assets[0].uri);
+            }
+          },
+        },
+        {
+          text: 'Gallery',
+          onPress: async () => {
+            const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+            if (!permissionResult.granted) {
+              Alert.alert('Permission required', 'Permission to access your media library is needed!');
+              return;
+            }
+
+            let result = await ImagePicker.launchImageLibraryAsync({
+              mediaTypes: 'images',
+              allowsEditing: true,
+              aspect: [1, 1],
+              quality: 0.7,
+            });
+
+            if (!result.canceled && result.assets && result.assets.length > 0) {
+              setPhoto(result.assets[0].uri);
+            }
+          },
+        },
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+      ],
+      { cancelable: true }
+    );
   };
 
   // Toggle the selection of a sport
@@ -104,100 +140,25 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
       let photoURL: string | null = null;
 
       if (isEdit) {
+        // EDIT MODE
         userId = auth.currentUser?.uid;
         if (!userId) {
           Alert.alert('Error', 'No user is logged in.');
           setIsLoading(false);
           return;
         }
-        // Now userId is guaranteed to be a string
-        const profileDocRef = doc(db, "profiles", userId);
-        if (photo) {
-          console.log("📸 Photo exists, preparing to upload:", photo);
-          // Always manipulate the image to ensure fetch() works
-          const manipulated = await ImageManipulator.manipulateAsync(
-            photo,
-            [], // no resize
-            { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
-          );
-          console.log("🖼️ Manipulated URI:", manipulated.uri);
-          try {
-            console.log("🧠 Uploading profile image to Storage...");
-            console.log("🔥 photoToSave URI:", manipulated.uri);
 
-            console.log("🌐 Fetching manipulated URI...");
-            const response = await fetch(manipulated.uri);
-            console.log("✅ Fetch success");
-            const blob = await response.blob();
-
-            console.log("✅ Blob ready. Size:", blob.size);
-
-            const metadata = {
-              contentType: 'image/jpeg',
-            };
-
-            console.log("Current UID:", auth.currentUser?.uid);
-
-            const imageRef = ref(storage, `profilePictures/${userId}/profile.jpg`);
-            console.log("⬆️ Uploading to Firebase Storage...");
-            const uploadTask = uploadBytesResumable(imageRef, blob, metadata);
-
-            uploadTask.on('state_changed',
-              (snapshot) => {
-                const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-                console.log(`Upload ${progress.toFixed(0)}%`);
-              },
-              (error) => {
-                console.error('💥 Upload failed:', error.code, error.message);
-              },
-              async () => {
-                const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-                console.log('✅ File available at:', downloadURL);
-                photoURL = downloadURL;
-
-                const profileData = {
-                  username,
-                  email,
-                  phone,
-                  location,
-                  photo: photoURL,
-                  sportsPreferences: selectedSports,
-                };
-                await setDoc(profileDocRef, profileData, { merge: true });
-                Alert.alert('Success', 'Your profile has been updated!');
-                navigation.goBack();
-              }
-            );
-          } catch (err: any) {
-            console.error("❌ Upload failed:", err.code || err.message, err);
-            Alert.alert('Image Upload Failed', err.message || 'Unknown error');
-            setIsLoading(false);
-            return;
-          }
-        } else {
-          const profileData = {
-            username,
-            email,
-            phone,
-            location,
-            sportsPreferences: selectedSports,
-          };
-          await setDoc(profileDocRef, profileData, { merge: true });
-          Alert.alert('Success', 'Your profile has been updated!');
-          navigation.goBack();
-        }
-      } else {
-        if (!password) {
-          Alert.alert('Missing Info', 'Please enter a password.');
-          setIsLoading(false);
-          return;
-        }
-        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-        userId = userCredential.user.uid;
-        if (photo) {
+        // Upload photo if it's a new local file (not already a URL)
+        if (photo && !photo.startsWith('http')) {
+          console.log("📸 Uploading new profile photo...");
           const compressedUri = await compressImage(photo);
           photoURL = await uploadProfileImage(compressedUri, userId);
+          console.log("✅ Photo uploaded:", photoURL);
+        } else if (photo && photo.startsWith('http')) {
+          // Keep existing photo URL
+          photoURL = photo;
         }
+
         const profileData = {
           username,
           email,
@@ -206,12 +167,44 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
           photo: photoURL,
           sportsPreferences: selectedSports,
         };
+        
+        await setDoc(doc(db, "profiles", userId), profileData, { merge: true });
+        Alert.alert('Success', 'Your profile has been updated!');
+        navigation.goBack();
+      } else {
+        // CREATE MODE
+        if (!password) {
+          Alert.alert('Missing Info', 'Please enter a password.');
+          setIsLoading(false);
+          return;
+        }
+        
+        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        userId = userCredential.user.uid;
+        
+        if (photo) {
+          console.log("📸 Uploading profile photo for new user...");
+          const compressedUri = await compressImage(photo);
+          photoURL = await uploadProfileImage(compressedUri, userId);
+          console.log("✅ Photo uploaded:", photoURL);
+        }
+        
+        const profileData = {
+          username,
+          email,
+          phone,
+          location,
+          photo: photoURL,
+          sportsPreferences: selectedSports,
+        };
+        
         await setDoc(doc(db, "profiles", userId), profileData);
         Alert.alert('Success', 'Your profile has been created!');
         navigation.navigate('MainTabs');
       }
-    } catch (error) {
-      Alert.alert('Error', (error as Error).message);
+    } catch (error: any) {
+      console.error("❌ Error saving profile:", error);
+      Alert.alert('Error', error.message || 'Failed to save profile. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -249,11 +242,19 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
       <Text style={styles.title}>{isEdit ? 'Edit Profile' : 'Create Your Profile'}</Text>
 
       {/* Profile Photo Section */}
-      <TouchableOpacity style={styles.photoButton} onPress={pickImage}>
+      <TouchableOpacity style={styles.photoButton} onPress={pickImage} activeOpacity={0.7}>
         {photo ? (
-          <Image source={{ uri: photo }} style={styles.photo} />
+          <>
+            <Image source={{ uri: photo }} style={styles.photo} />
+            <View style={styles.photoEditBadge}>
+              <Ionicons name="camera" size={20} color="#fff" />
+            </View>
+          </>
         ) : (
-          <Text style={styles.photoButtonText}>+ Add Photo</Text>
+          <View style={styles.photoPlaceholder}>
+            <Ionicons name="camera" size={40} color="#1ae9ef" />
+            <Text style={styles.photoButtonText}>Add Photo</Text>
+          </View>
         )}
       </TouchableOpacity>
 
@@ -397,16 +398,35 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 4,
     elevation: 5,
+    position: 'relative',
+  },
+  photoPlaceholder: {
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   photoButtonText: {
     color: '#1ae9ef',
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: 'bold',
+    marginTop: 8,
   },
   photo: {
     width: 120,
     height: 120,
     borderRadius: 60,
+  },
+  photoEditBadge: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#1ae9ef',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#121212',
   },
   formContainer: {
     width: '100%',
