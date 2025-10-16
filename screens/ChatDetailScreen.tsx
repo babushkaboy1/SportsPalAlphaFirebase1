@@ -11,6 +11,9 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  Keyboard,
+  Animated,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { useAudioRecorder, useAudioPlayer, AudioModule, RecordingPresets } from 'expo-audio';
@@ -52,13 +55,38 @@ const ChatDetailScreen = () => {
   const [activityInfo, setActivityInfo] = useState<{ name: string, type: string, date: string, time: string } | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const progressRef = useRef(0);
+  const isInitialLoad = useRef(true);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const [isMessagesReady, setIsMessagesReady] = useState(false);
 
   // Set Android navigation bar to dark on mount (only on Android)
   useEffect(() => {
+    if (isMessagesReady) {
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 350,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [isMessagesReady]);
+  useEffect(() => {
     if (Platform.OS === 'android') {
-      NavigationBar.setBackgroundColorAsync('#121212');
+      // NavigationBar.setBackgroundColorAsync is not supported with edge-to-edge enabled
       NavigationBar.setButtonStyleAsync('light');
     }
+  }, []);
+
+  // Keyboard listeners - scroll to bottom when keyboard opens
+  useEffect(() => {
+    const keyboardDidShowListener = Keyboard.addListener('keyboardDidShow', () => {
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 100);
+    });
+
+    return () => {
+      keyboardDidShowListener.remove();
+    };
   }, []);
 
   // Listen to Firestore messages
@@ -66,10 +94,24 @@ const ChatDetailScreen = () => {
     const unsubscribe = listenToMessages(chatId, (msgs: any[]) => {
       // Sort by timestamp
       const sorted = msgs.sort((a, b) => (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0));
+      const prevLength = messages.length;
       setMessages(sorted);
+      
+      // Only auto-scroll if it's not the initial load or if new messages were added
+      if (!isInitialLoad.current && sorted.length > prevLength) {
+        setTimeout(() => {
+          flatListRef.current?.scrollToEnd({ animated: true });
+        }, 100);
+      }
+      
+      // Mark initial load as complete and trigger fade-in
+      if (isInitialLoad.current) {
+        isInitialLoad.current = false;
+        setIsMessagesReady(true);
+      }
     });
     return unsubscribe;
-  }, [chatId]);
+  }, [chatId, messages.length]);
 
   // Fetch sender profiles
   useEffect(() => {
@@ -136,6 +178,7 @@ const ChatDetailScreen = () => {
   // Send a message (text, image, audio)
   const handleSend = async () => {
     if (!auth.currentUser) return;
+    
     // Send images
     for (const uri of selectedImages) {
       const compressedUri = await compressImage(uri);
@@ -144,10 +187,16 @@ const ChatDetailScreen = () => {
       await sendMessage(chatId, auth.currentUser.uid, downloadUrl, 'image');
     }
     setSelectedImages([]);
+    
     // Send text
     if (messageText.trim()) {
       await sendMessage(chatId, auth.currentUser.uid, messageText.trim(), 'text');
       setMessageText('');
+      
+      // Scroll to bottom immediately after sending
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 50);
     }
   };
 
@@ -236,18 +285,33 @@ const ChatDetailScreen = () => {
                 onPress={() => navigation.navigate('UserProfile', { userId: item.senderId })}
                 activeOpacity={0.7}
               >
-                <Image
-                  source={{ uri: sender.photo || require('../assets/default-group.png') }}
-                  style={{
-                    width: 28,
-                    height: 28,
-                    borderRadius: 14,
-                    borderWidth: 1,
-                    borderColor: '#1ae9ef',
-                    marginBottom: 2,
-                    marginTop: -14,
-                  }}
-                />
+                {typeof sender.photo === 'string' && sender.photo ? (
+                  <Image
+                    source={{ uri: sender.photo }}
+                    style={{
+                      width: 28,
+                      height: 28,
+                      borderRadius: 14,
+                      borderWidth: 1,
+                      borderColor: '#1ae9ef',
+                      marginBottom: 2,
+                      marginTop: -14,
+                    }}
+                  />
+                ) : (
+                  <Image
+                    source={require('../assets/default-group.png')}
+                    style={{
+                      width: 28,
+                      height: 28,
+                      borderRadius: 14,
+                      borderWidth: 1,
+                      borderColor: '#1ae9ef',
+                      marginBottom: 2,
+                      marginTop: -14,
+                    }}
+                  />
+                )}
               </TouchableOpacity>
             ) : null}
           </View>
@@ -302,7 +366,13 @@ const ChatDetailScreen = () => {
               </View>
             )}
             {item.type === 'image' && item.text ? (
-              <Image source={{ uri: item.text }} style={styles.media} />
+              (() => {
+                if (typeof item.text === 'string' && item.text) {
+                  return <Image source={{ uri: item.text }} style={styles.media} />;
+                } else {
+                  return <Image source={require('../assets/default-group.png')} style={styles.media} />;
+                }
+              })()
             ) : item.type === 'image' && !item.text ? (
               <Text style={styles.placeholderText}>Image not available</Text>
             ) : null}
@@ -337,12 +407,12 @@ const ChatDetailScreen = () => {
   }, [chatId]);
 
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: '#121212' }}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={0}
-    >
-      <SafeAreaView style={{ flex: 1 }} edges={['top']}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#121212' }} edges={['top']}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={0}
+      >
         <View style={styles.flexContainer}>
           {/* Header with group name and navigation buttons */}
           <View style={styles.header}>
@@ -370,14 +440,30 @@ const ChatDetailScreen = () => {
               <Ionicons name="information-circle-outline" size={26} color="#1ae9ef" />
             </TouchableOpacity>
           </View>
-          <FlatList
-            ref={flatListRef}
-            data={messages}
-            keyExtractor={(item) => item.id.toString()}
-            contentContainerStyle={styles.messageList}
-            renderItem={renderItem}
-            onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
-          />
+          
+          {/* Messages area with loading state */}
+          {!isMessagesReady ? (
+            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#121212' }}>
+              <ActivityIndicator size="large" color="#1ae9ef" />
+            </View>
+          ) : (
+            <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
+              <FlatList
+                ref={flatListRef}
+                data={messages}
+                keyExtractor={(item) => item.id.toString()}
+                contentContainerStyle={styles.messageList}
+                renderItem={renderItem}
+                onLayout={() => {
+                  // Instantly scroll to bottom on initial layout (no animation)
+                  if (messages.length > 0) {
+                    flatListRef.current?.scrollToEnd({ animated: false });
+                  }
+                }}
+                initialNumToRender={20}
+              />
+            </Animated.View>
+          )}
           {/* Input area wrapped in KeyboardAvoidingView */}
           <View
             style={[
@@ -400,6 +486,14 @@ const ChatDetailScreen = () => {
               placeholderTextColor="#888"
               value={messageText}
               onChangeText={setMessageText}
+              autoCapitalize="sentences"
+              autoCorrect={true}
+              textContentType="none"
+              autoComplete="off"
+              keyboardType="default"
+              returnKeyType="send"
+              onSubmitEditing={handleSend}
+              blurOnSubmit={false}
             />
             <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
               <Ionicons name="send" size={24} color="#fff" />
@@ -409,10 +503,11 @@ const ChatDetailScreen = () => {
             <View style={{ flexDirection: 'row', margin: 8 }}>
               {selectedImages.map((uri, idx) => (
                 <View key={uri} style={{ marginRight: 6 }}>
-                  <Image
-                    source={{ uri }}
-                    style={{ width: 60, height: 60, borderRadius: 10 }}
-                  />
+                  {typeof uri === 'string' && uri ? (
+                    <Image source={{ uri }} style={{ width: 60, height: 60, borderRadius: 10 }} />
+                  ) : (
+                    <Image source={require('../assets/default-group.png')} style={{ width: 60, height: 60, borderRadius: 10 }} />
+                  )}
                   <TouchableOpacity
                     onPress={() => handleRemoveImage(uri)}
                     style={{
@@ -439,8 +534,8 @@ const ChatDetailScreen = () => {
             </View>
           )}
         </View>
-      </SafeAreaView>
-    </KeyboardAvoidingView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 };
 

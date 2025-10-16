@@ -1,5 +1,5 @@
 // screens/CreateProfileScreen.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   Alert,
   ScrollView,
   ActivityIndicator,
+  Animated,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
@@ -43,7 +44,17 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
   const [selectedSports, setSelectedSports] = useState<string[]>(profileData?.selectedSports || []);
   const [isReady, setIsReady] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
   const insets = useSafeAreaInsets();
+
+  // Fade in on mount
+  useEffect(() => {
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 350,
+      useNativeDriver: true,
+    }).start();
+  }, []);
 
   // Simulate a loading period for the profile data (remove in production)
   useEffect(() => {
@@ -197,7 +208,7 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
         };
         await setDoc(doc(db, "profiles", userId), profileData);
         Alert.alert('Success', 'Your profile has been created!');
-        navigation.navigate('Welcome');
+        navigation.navigate('MainTabs');
       }
     } catch (error) {
       Alert.alert('Error', (error as Error).message);
@@ -211,16 +222,9 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
     (p) => p.providerId === 'google.com'
   );
 
-  if (!isReady) {
-    return (
-      <View style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator size="large" color="#1ae9ef" />
-      </View>
-    );
-  }
-
   return (
-    <ScrollView
+    <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
+      <ScrollView
       style={styles.scrollView}
       contentContainerStyle={[styles.container, { paddingTop: insets.top + 30 }]}
       keyboardShouldPersistTaps="handled"
@@ -335,6 +339,7 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
       {/* Spinner for loading state */}
       {isLoading && <ActivityIndicator size="large" color="#1ae9ef" style={styles.loadingIndicator} />}
     </ScrollView>
+    </Animated.View>
   );
 };
 

@@ -18,7 +18,6 @@ import CalendarScreen from './screens/CalendarScreen';
 import ProfileScreen from './screens/ProfileScreen';
 import LoginScreen from './screens/LoginScreen';
 import CreateProfileScreen from './screens/CreateProfileScreen';
-import WelcomeScreen from './screens/WelcomeScreen';
 import ActivityDetailsScreen from './screens/ActivityDetailsScreen';
 import ChatDetailScreen from './screens/ChatDetailScreen';
 import PickLocationScreen from './screens/PickLocationScreen';
@@ -229,7 +228,6 @@ export default function App() {
         >
           <Stack.Screen name="Login" component={LoginScreen} />
           <Stack.Screen name="CreateProfile" component={CreateProfileScreen} />
-          <Stack.Screen name="Welcome" component={WelcomeScreen} />
           <Stack.Screen name="MainTabs" component={MainTabs} />
           <Stack.Screen name="ActivityDetails" component={ActivityDetailsScreen} />
           <Stack.Screen name="ChatDetail" component={ChatDetailScreen} />

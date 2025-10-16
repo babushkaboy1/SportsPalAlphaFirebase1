@@ -1,5 +1,5 @@
 // screens/LoginScreen.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   ScrollView, 
   View, 
@@ -7,7 +7,8 @@ import {
   StyleSheet, 
   TextInput, 
   TouchableOpacity,
-  ActivityIndicator
+  ActivityIndicator,
+  Animated
 } from 'react-native';
 import Logo from '../components/Logo';
 import { AntDesign, FontAwesome, Ionicons } from '@expo/vector-icons';
@@ -19,18 +20,28 @@ const LoginScreen = ({ navigation }: any) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
   const [request, response, promptAsync] = Google.useAuthRequest({
     androidClientId: '690971568236-d4ijqaml0rt2dv98eve2bckmvtf13l1c.apps.googleusercontent.com',
     iosClientId: '690971568236-qnqatg8h63re13j433l1oj22aiqktvts.apps.googleusercontent.com',
     webClientId: '690971568236-1slb2hq568pk1cqnpo44aioi5549avl7.apps.googleusercontent.com',
   });
 
+  // Fade in on mount
+  useEffect(() => {
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 350,
+      useNativeDriver: true,
+    }).start();
+  }, []);
+
   useEffect(() => {
     if (response?.type === 'success') {
       const { id_token } = response.params;
       const credential = GoogleAuthProvider.credential(id_token);
       signInWithCredential(auth, credential)
-        .then(() => navigation.navigate('Welcome'))
+        .then(() => navigation.navigate('MainTabs'))
         .catch(async (err) => {
           if (err.code === 'auth/account-exists-with-different-credential') {
             alert('An account already exists with this email. Please log in with your password first, then link Google in your profile settings.');
@@ -45,7 +56,7 @@ const LoginScreen = ({ navigation }: any) => {
     setIsLoading(true);
     try {
       await signInWithEmailAndPassword(auth, email, password);
-      navigation.navigate('Welcome');
+      navigation.navigate('MainTabs');
     } catch (error) {
       alert("Login error: " + (error as Error).message);
     } finally {
@@ -55,23 +66,16 @@ const LoginScreen = ({ navigation }: any) => {
 
   const handleSocialLogin = (provider: string) => {
     console.log(`Login with ${provider}`);
-    navigation.navigate('Welcome');
+    navigation.navigate('MainTabs');
   };
 
   const handleSignUp = () => {
     navigation.navigate('CreateProfile');
   };
 
-  if (isLoading) {
-    return (
-      <View style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator size="large" color="#1ae9ef" />
-      </View>
-    );
-  }
-
   return (
-    <ScrollView
+    <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
+      <ScrollView
       style={styles.scrollView} // Ensures the overscroll area remains dark.
       contentContainerStyle={styles.container}
       keyboardShouldPersistTaps="handled"
@@ -144,6 +148,7 @@ const LoginScreen = ({ navigation }: any) => {
         </TouchableOpacity>
       </View>
     </ScrollView>
+    </Animated.View>
   );
 };
 

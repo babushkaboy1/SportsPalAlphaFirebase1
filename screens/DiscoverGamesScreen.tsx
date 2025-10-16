@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,7 @@ import {
   Alert,
   Share,
   ActivityIndicator,
+  Animated,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -43,6 +44,7 @@ const DiscoverGamesScreen = ({ navigation }: any) => {
   const [userLocation, setUserLocation] = useState<{ latitude: number, longitude: number } | null>(null);
   const [filteredActivities, setFilteredActivities] = useState<Activity[]>([]);
   const insets = useSafeAreaInsets();
+  const fadeAnim = useRef(new Animated.Value(0)).current;
 
   // Load activities from Firestore + fake on mount/refresh
   const loadActivities = async () => {
@@ -71,6 +73,17 @@ const DiscoverGamesScreen = ({ navigation }: any) => {
     loadActivities();
     getUserLocation();
   }, []);
+
+  // Fade in when activities are loaded OR immediately on mount
+  useEffect(() => {
+    if (allActivities && allActivities.length >= 0) {
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 350,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [allActivities]);
 
   // Filtering and sorting
   useEffect(() => {
@@ -196,18 +209,11 @@ const DiscoverGamesScreen = ({ navigation }: any) => {
     setIsSortingByDistance((prev) => !prev);
   };
 
-  if (!allActivities || allActivities.length === 0) {
-    return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }} edges={['top']}>
-        <ActivityIndicator size="large" color="#1ae9ef" />
-      </SafeAreaView>
-    );
-  }
-
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
-      <Text style={styles.headerTitle}>Discover Activities</Text>
-      <View style={styles.topSection}>
+      <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
+        <Text style={styles.headerTitle}>Discover Activities</Text>
+        <View style={styles.topSection}>
         <TextInput
           style={styles.searchInput}
           placeholder="Search by sport or host..."
@@ -291,6 +297,7 @@ const DiscoverGamesScreen = ({ navigation }: any) => {
             onRefresh={loadActivities}
             colors={["#1ae9ef"]}
             tintColor="#1ae9ef"
+            progressBackgroundColor="transparent"
           />
         }
         contentContainerStyle={styles.listContainer}
@@ -301,6 +308,7 @@ const DiscoverGamesScreen = ({ navigation }: any) => {
         onConfirm={(date) => { setSelectedDate(date); setDatePickerVisible(false); }}
         onCancel={() => setDatePickerVisible(false)}
       />
+      </Animated.View>
     </SafeAreaView>
   );
 };

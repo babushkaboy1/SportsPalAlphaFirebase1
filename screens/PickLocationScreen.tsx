@@ -133,7 +133,7 @@ export default function PickLocationScreen({ navigation, route }: Props) {
       >
         {Platform.OS === 'android' && (
           <UrlTile
-            urlTemplate="https://a.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            urlTemplate="https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
             maximumZ={19}
             flipY={false}
           />

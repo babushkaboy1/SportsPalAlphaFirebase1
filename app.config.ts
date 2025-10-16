@@ -41,6 +41,7 @@ export default ({ config }: { config: any }) => ({
       "CAMERA",
       "RECORD_AUDIO"
     ],
+    softwareKeyboardLayoutMode: "pan",
     config: {
       googleMaps: {
         apiKey: process.env.GOOGLE_MAPS_API_KEY

@@ -88,7 +88,16 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
       setIsReady(true);
     };
     loadUsers();
-  }, [activityId]);
+  }, [activity.id]);
+
+  // Fade in immediately on mount
+  useEffect(() => {
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 350,
+      useNativeDriver: true,
+    }).start();
+  }, []);
 
   // Calculate distance in km
   const getDistance = () => {
@@ -242,14 +251,6 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
     }
   }, [isReady]);
 
-  if (!isReady) {
-    return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator size="large" color="#1ae9ef" />
-      </SafeAreaView>
-    );
-  }
-
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
@@ -282,7 +283,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
             >
               {Platform.OS === 'android' && (
                 <UrlTile
-                  urlTemplate="https://a.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                  urlTemplate="https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
                   maximumZ={19}
                   flipY={false}
                 />

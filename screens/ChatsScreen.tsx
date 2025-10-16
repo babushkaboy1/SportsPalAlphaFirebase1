@@ -1,5 +1,5 @@
 // screens/ChatsScreen.tsx
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   TextInput,
   StatusBar,
   Platform,
+  Animated,
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -40,6 +41,7 @@ const ChatsScreen = ({ navigation }: any) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [chats, setChats] = useState<Chat[]>([]);
   const [isReady, setIsReady] = useState(false);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
   const insets = useSafeAreaInsets();
   const { joinedActivities } = useActivityContext();
 
@@ -170,6 +172,16 @@ const ChatsScreen = ({ navigation }: any) => {
     return `${dd}-${mm}-${yyyy}`;
   }
 
+  useEffect(() => {
+    if (isReady) {
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 500,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [isReady]);
+
   if (!isReady) {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }} edges={['top']}>
@@ -180,27 +192,29 @@ const ChatsScreen = ({ navigation }: any) => {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <Text style={styles.headerTitle}>Chats</Text>
-      <View style={styles.searchContainer}>
-        <Ionicons name="search" size={20} color="#ccc" />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search..."
-          placeholderTextColor="#bbb"
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-        />
-      </View>
-      {filteredChats.length === 0 ? (
-        <Text style={{ color: '#bbb', textAlign: 'center', marginTop: 40 }}>No group chats yet.</Text>
-      ) : (
-        <FlatList
-          data={filteredChats}
-          keyExtractor={(item) => item.id}
-          renderItem={renderChatItem}
-          contentContainerStyle={styles.chatList}
-        />
-      )}
+      <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
+        <Text style={styles.headerTitle}>Chats</Text>
+        <View style={styles.searchContainer}>
+          <Ionicons name="search" size={20} color="#ccc" />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search..."
+            placeholderTextColor="#bbb"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+          />
+        </View>
+        {filteredChats.length === 0 ? (
+          <Text style={{ color: '#bbb', textAlign: 'center', marginTop: 40 }}>No group chats yet.</Text>
+        ) : (
+          <FlatList
+            data={filteredChats}
+            keyExtractor={(item) => item.id}
+            renderItem={renderChatItem}
+            contentContainerStyle={styles.chatList}
+          />
+        )}
+      </Animated.View>
     </SafeAreaView>
   );
 };

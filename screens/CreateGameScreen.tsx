@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   Platform,
   StatusBar,
   Modal,
+  Animated,
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -66,6 +67,7 @@ const CreateGameScreen = () => {
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [showParticipantsPicker, setShowParticipantsPicker] = useState(false);
   const [isReady, setIsReady] = useState(false);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     const timeout = setTimeout(() => setIsReady(true), 500);
@@ -196,6 +198,16 @@ const CreateGameScreen = () => {
     }
   };
 
+  useEffect(() => {
+    if (isReady) {
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 500,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [isReady]);
+
   if (!isReady) {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }} edges={['top']}>
@@ -206,259 +218,261 @@ const CreateGameScreen = () => {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Create Activity</Text>
-      </View>
-      <ScrollView contentContainerStyle={styles.form}>
-        <Text style={styles.sectionLabel}>Name your activity</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Activity Name"
-          placeholderTextColor="#ccc"
-          value={activityName}
-          onChangeText={setActivityName}
-        />
+      <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Create Activity</Text>
+        </View>
+        <ScrollView contentContainerStyle={styles.form}>
+          <Text style={styles.sectionLabel}>Name your activity</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Activity Name"
+            placeholderTextColor="#ccc"
+            value={activityName}
+            onChangeText={setActivityName}
+          />
 
-        <Text style={styles.sectionLabel}>Description</Text>
-        <TextInput
-          style={[styles.input, { height: 80 }]}
-          placeholder="Description"
-          placeholderTextColor="#ccc"
-          value={description}
-          onChangeText={setDescription}
-          multiline
-        />
+          <Text style={styles.sectionLabel}>Description</Text>
+          <TextInput
+            style={[styles.input, { height: 80 }]}
+            placeholder="Description"
+            placeholderTextColor="#ccc"
+            value={description}
+            onChangeText={setDescription}
+            multiline
+          />
 
-        <Text style={styles.sectionLabel}>Select Sport</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          {sportOptions.map((option) => (
+          <Text style={styles.sectionLabel}>Select Sport</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            {sportOptions.map((option) => (
+              <TouchableOpacity
+                key={option}
+                style={[styles.sportButton, sport === option && styles.activeButton]}
+                onPress={() => setSport(option)}
+              >
+                <ActivityIcon
+                  activity={option}
+                  size={32}
+                  color={sport === option ? '#fff' : THEME_COLOR}
+                />
+                <Text style={styles.sportText}>{option}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+
+          <Text style={styles.sectionLabel}>Location</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Pick a location"
+            placeholderTextColor="#ccc"
+            value={location}
+            editable={false}
+          />
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
             <TouchableOpacity
-              key={option}
-              style={[styles.sportButton, sport === option && styles.activeButton]}
-              onPress={() => setSport(option)}
+              style={styles.mapButton}
+              onPress={() =>
+                navigation.navigate('PickLocation', {
+                  initialCoords: selectedCoords,
+                  darkMapStyle,
+                  returnTo: 'CreateGame',
+                  formState: {
+                    activityName,
+                    description,
+                    sport,
+                    date,
+                    time,
+                    maxParticipants,
+                  },
+                })
+              }
             >
-              <ActivityIcon
-                activity={option}
-                size={32}
-                color={sport === option ? '#fff' : THEME_COLOR}
-              />
-              <Text style={styles.sportText}>{option}</Text>
+              <Text style={{ color: '#fff', fontWeight: 'bold' }}>
+                {selectedCoords ? 'Change Location on Map' : 'Pick on Map'}
+              </Text>
             </TouchableOpacity>
-          ))}
-        </ScrollView>
+          </View>
 
-        <Text style={styles.sectionLabel}>Location</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Pick a location"
-          placeholderTextColor="#ccc"
-          value={location}
-          editable={false}
-        />
-        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+          <Text style={styles.sectionLabel}>Date</Text>
+          <TouchableOpacity onPress={() => setShowDatePicker(true)} activeOpacity={0.7}>
+            <TextInput
+              style={styles.input}
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor="#ccc"
+              value={date}
+              editable={false}
+              pointerEvents="none"
+            />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.mapButton} onPress={() => setShowDatePicker(true)}>
+            <Text style={{ color: '#fff', fontWeight: 'bold' }}>Choose Date</Text>
+          </TouchableOpacity>
+          {/* Date Picker Modal (iOS only) */}
+          {Platform.OS === 'ios' && (
+            <Modal transparent animationType="slide" visible={showDatePicker} onRequestClose={() => setShowDatePicker(false)}>
+              <View style={styles.pickerModal}>
+                <View style={styles.rollerContainer}>
+                  <View style={styles.rollerHeader}>
+                    <TouchableOpacity onPress={() => setShowDatePicker(false)}>
+                      <Text style={styles.rollerCancel}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setShowDatePicker(false)}>
+                      <Text style={styles.rollerDone}>Done</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <DateTimePicker
+                    value={date ? new Date(date) : new Date()}
+                    mode="date"
+                    display="spinner"
+                    onChange={(event, selectedDate) => {
+                      if (event.type === 'set' && selectedDate) {
+                        setDate(selectedDate.toISOString().split('T')[0]);
+                      }
+                    }}
+                    minimumDate={new Date()}
+                    style={styles.rollerPicker}
+                  />
+                </View>
+              </View>
+            </Modal>
+          )}
+          {Platform.OS === 'android' && showDatePicker && (
+            <DateTimePicker
+              value={date ? new Date(date) : new Date()}
+              mode="date"
+              display="default"
+              onChange={(event, selectedDate) => {
+                setShowDatePicker(false);
+                if (selectedDate) setDate(selectedDate.toISOString().split('T')[0]);
+              }}
+              minimumDate={new Date()}
+            />
+          )}
+
+          <Text style={styles.sectionLabel}>Time</Text>
+          <TouchableOpacity onPress={() => setShowTimePicker(true)} activeOpacity={0.7}>
+            <TextInput
+              style={styles.input}
+              placeholder="HH:MM"
+              placeholderTextColor="#ccc"
+              value={time}
+              editable={false}
+              pointerEvents="none"
+            />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.mapButton} onPress={() => setShowTimePicker(true)}>
+            <Text style={{ color: '#fff', fontWeight: 'bold' }}>Choose Time</Text>
+          </TouchableOpacity>
+          {/* Time Picker Modal (iOS only) */}
+          {Platform.OS === 'ios' && (
+            <Modal transparent animationType="slide" visible={showTimePicker} onRequestClose={() => setShowTimePicker(false)}>
+              <View style={styles.pickerModal}>
+                <View style={styles.rollerContainer}>
+                  <View style={styles.rollerHeader}>
+                    <TouchableOpacity onPress={() => setShowTimePicker(false)}>
+                      <Text style={styles.rollerCancel}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setShowTimePicker(false)}>
+                      <Text style={styles.rollerDone}>Done</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <DateTimePicker
+                    value={time ? new Date(`1970-01-01T${time}:00`) : new Date()}
+                    mode="time"
+                    display="spinner"
+                    onChange={(event, selectedTime) => {
+                      if (event.type === 'set' && selectedTime) {
+                        const hours = selectedTime.getHours().toString().padStart(2, '0');
+                        const minutes = selectedTime.getMinutes().toString().padStart(2, '0');
+                        setTime(`${hours}:${minutes}`);
+                      }
+                    }}
+                    style={styles.rollerPicker}
+                  />
+                </View>
+              </View>
+            </Modal>
+          )}
+          {Platform.OS === 'android' && showTimePicker && (
+            <DateTimePicker
+              value={time ? new Date(`1970-01-01T${time}:00`) : new Date()}
+              mode="time"
+              display="default"
+              onChange={(event, selectedTime) => {
+                setShowTimePicker(false);
+                if (selectedTime) {
+                  const hours = selectedTime.getHours().toString().padStart(2, '0');
+                  const minutes = selectedTime.getMinutes().toString().padStart(2, '0');
+                  setTime(`${hours}:${minutes}`);
+                }
+              }}
+            />
+          )}
+
+          <Text style={styles.sectionLabel}>Max Participants</Text>
           <TouchableOpacity
-            style={styles.mapButton}
-            onPress={() =>
-              navigation.navigate('PickLocation', {
-                initialCoords: selectedCoords,
-                darkMapStyle,
-                returnTo: 'CreateGame',
-                formState: {
-                  activityName,
-                  description,
-                  sport,
-                  date,
-                  time,
-                  maxParticipants,
-                },
-              })
-            }
+            style={styles.input}
+            onPress={() => setShowParticipantsPicker(true)}
+            activeOpacity={0.7}
           >
             <Text style={{ color: '#fff', fontWeight: 'bold' }}>
-              {selectedCoords ? 'Change Location on Map' : 'Pick on Map'}
+              {maxParticipants}
             </Text>
           </TouchableOpacity>
-        </View>
-
-        <Text style={styles.sectionLabel}>Date</Text>
-        <TouchableOpacity onPress={() => setShowDatePicker(true)} activeOpacity={0.7}>
-          <TextInput
-            style={styles.input}
-            placeholder="YYYY-MM-DD"
-            placeholderTextColor="#ccc"
-            value={date}
-            editable={false}
-            pointerEvents="none"
-          />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.mapButton} onPress={() => setShowDatePicker(true)}>
-          <Text style={{ color: '#fff', fontWeight: 'bold' }}>Choose Date</Text>
-        </TouchableOpacity>
-        {/* Date Picker Modal (iOS only) */}
-        {Platform.OS === 'ios' && (
-          <Modal transparent animationType="slide" visible={showDatePicker} onRequestClose={() => setShowDatePicker(false)}>
-            <View style={styles.pickerModal}>
-              <View style={styles.rollerContainer}>
-                <View style={styles.rollerHeader}>
-                  <TouchableOpacity onPress={() => setShowDatePicker(false)}>
-                    <Text style={styles.rollerCancel}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => setShowDatePicker(false)}>
-                    <Text style={styles.rollerDone}>Done</Text>
-                  </TouchableOpacity>
+          {/* Max Participants Picker Modal (iOS only) */}
+          {Platform.OS === 'ios' && (
+            <Modal transparent animationType="slide" visible={showParticipantsPicker} onRequestClose={() => setShowParticipantsPicker(false)}>
+              <View style={styles.pickerModal}>
+                <View style={styles.rollerContainer}>
+                  <View style={styles.rollerHeader}>
+                    <TouchableOpacity onPress={() => setShowParticipantsPicker(false)}>
+                      <Text style={styles.rollerCancel}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setShowParticipantsPicker(false)}>
+                      <Text style={styles.rollerDone}>Done</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <Picker
+                    selectedValue={maxParticipants}
+                    onValueChange={setMaxParticipants}
+                    style={{ width: '100%', color: '#fff' }}
+                    itemStyle={{ color: '#fff', fontSize: 22 }}
+                  >
+                    {[...Array(29)].map((_, i) => (
+                      <Picker.Item key={i + 2} label={`${i + 2}`} value={i + 2} />
+                    ))}
+                  </Picker>
                 </View>
-                <DateTimePicker
-                  value={date ? new Date(date) : new Date()}
-                  mode="date"
-                  display="spinner"
-                  onChange={(event, selectedDate) => {
-                    if (event.type === 'set' && selectedDate) {
-                      setDate(selectedDate.toISOString().split('T')[0]);
-                    }
-                  }}
-                  minimumDate={new Date()}
-                  style={styles.rollerPicker}
-                />
               </View>
-            </View>
-          </Modal>
-        )}
-        {Platform.OS === 'android' && showDatePicker && (
-          <DateTimePicker
-            value={date ? new Date(date) : new Date()}
-            mode="date"
-            display="default"
-            onChange={(event, selectedDate) => {
-              setShowDatePicker(false);
-              if (selectedDate) setDate(selectedDate.toISOString().split('T')[0]);
-            }}
-            minimumDate={new Date()}
-          />
-        )}
-
-        <Text style={styles.sectionLabel}>Time</Text>
-        <TouchableOpacity onPress={() => setShowTimePicker(true)} activeOpacity={0.7}>
-          <TextInput
-            style={styles.input}
-            placeholder="HH:MM"
-            placeholderTextColor="#ccc"
-            value={time}
-            editable={false}
-            pointerEvents="none"
-          />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.mapButton} onPress={() => setShowTimePicker(true)}>
-          <Text style={{ color: '#fff', fontWeight: 'bold' }}>Choose Time</Text>
-        </TouchableOpacity>
-        {/* Time Picker Modal (iOS only) */}
-        {Platform.OS === 'ios' && (
-          <Modal transparent animationType="slide" visible={showTimePicker} onRequestClose={() => setShowTimePicker(false)}>
-            <View style={styles.pickerModal}>
-              <View style={styles.rollerContainer}>
-                <View style={styles.rollerHeader}>
-                  <TouchableOpacity onPress={() => setShowTimePicker(false)}>
-                    <Text style={styles.rollerCancel}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => setShowTimePicker(false)}>
-                    <Text style={styles.rollerDone}>Done</Text>
-                  </TouchableOpacity>
+            </Modal>
+          )}
+          {Platform.OS === 'android' && showParticipantsPicker && (
+            <Modal transparent animationType="slide" visible={showParticipantsPicker} onRequestClose={() => setShowParticipantsPicker(false)}>
+              <View style={styles.pickerModal}>
+                <View style={styles.rollerContainer}>
+                  <Picker
+                    selectedValue={maxParticipants}
+                    onValueChange={(value) => {
+                      setMaxParticipants(value);
+                      setShowParticipantsPicker(false);
+                    }}
+                    style={{ width: '100%' }}
+                    itemStyle={{ fontSize: 22 }}
+                  >
+                    {[...Array(29)].map((_, i) => (
+                      <Picker.Item key={i + 2} label={`${i + 2}`} value={i + 2} />
+                    ))}
+                  </Picker>
                 </View>
-                <DateTimePicker
-                  value={time ? new Date(`1970-01-01T${time}:00`) : new Date()}
-                  mode="time"
-                  display="spinner"
-                  onChange={(event, selectedTime) => {
-                    if (event.type === 'set' && selectedTime) {
-                      const hours = selectedTime.getHours().toString().padStart(2, '0');
-                      const minutes = selectedTime.getMinutes().toString().padStart(2, '0');
-                      setTime(`${hours}:${minutes}`);
-                    }
-                  }}
-                  style={styles.rollerPicker}
-                />
               </View>
-            </View>
-          </Modal>
-        )}
-        {Platform.OS === 'android' && showTimePicker && (
-          <DateTimePicker
-            value={time ? new Date(`1970-01-01T${time}:00`) : new Date()}
-            mode="time"
-            display="default"
-            onChange={(event, selectedTime) => {
-              setShowTimePicker(false);
-              if (selectedTime) {
-                const hours = selectedTime.getHours().toString().padStart(2, '0');
-                const minutes = selectedTime.getMinutes().toString().padStart(2, '0');
-                setTime(`${hours}:${minutes}`);
-              }
-            }}
-          />
-        )}
+            </Modal>
+          )}
 
-        <Text style={styles.sectionLabel}>Max Participants</Text>
-        <TouchableOpacity
-          style={styles.input}
-          onPress={() => setShowParticipantsPicker(true)}
-          activeOpacity={0.7}
-        >
-          <Text style={{ color: '#fff', fontWeight: 'bold' }}>
-            {maxParticipants}
-          </Text>
-        </TouchableOpacity>
-        {/* Max Participants Picker Modal (iOS only) */}
-        {Platform.OS === 'ios' && (
-          <Modal transparent animationType="slide" visible={showParticipantsPicker} onRequestClose={() => setShowParticipantsPicker(false)}>
-            <View style={styles.pickerModal}>
-              <View style={styles.rollerContainer}>
-                <View style={styles.rollerHeader}>
-                  <TouchableOpacity onPress={() => setShowParticipantsPicker(false)}>
-                    <Text style={styles.rollerCancel}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => setShowParticipantsPicker(false)}>
-                    <Text style={styles.rollerDone}>Done</Text>
-                  </TouchableOpacity>
-                </View>
-                <Picker
-                  selectedValue={maxParticipants}
-                  onValueChange={setMaxParticipants}
-                  style={{ width: '100%', color: '#fff' }}
-                  itemStyle={{ color: '#fff', fontSize: 22 }}
-                >
-                  {[...Array(29)].map((_, i) => (
-                    <Picker.Item key={i + 2} label={`${i + 2}`} value={i + 2} />
-                  ))}
-                </Picker>
-              </View>
-            </View>
-          </Modal>
-        )}
-        {Platform.OS === 'android' && showParticipantsPicker && (
-          <Modal transparent animationType="slide" visible={showParticipantsPicker} onRequestClose={() => setShowParticipantsPicker(false)}>
-            <View style={styles.pickerModal}>
-              <View style={styles.rollerContainer}>
-                <Picker
-                  selectedValue={maxParticipants}
-                  onValueChange={(value) => {
-                    setMaxParticipants(value);
-                    setShowParticipantsPicker(false);
-                  }}
-                  style={{ width: '100%' }}
-                  itemStyle={{ fontSize: 22 }}
-                >
-                  {[...Array(29)].map((_, i) => (
-                    <Picker.Item key={i + 2} label={`${i + 2}`} value={i + 2} />
-                  ))}
-                </Picker>
-              </View>
-            </View>
-          </Modal>
-        )}
-
-        <TouchableOpacity style={styles.createButton} onPress={handleCreateGame}>
-          <Text style={styles.createButtonText}>Create Activity</Text>
-        </TouchableOpacity>
-      </ScrollView>
+          <TouchableOpacity style={styles.createButton} onPress={handleCreateGame}>
+            <Text style={styles.createButtonText}>Create Activity</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </Animated.View>
     </SafeAreaView>
   );
 };

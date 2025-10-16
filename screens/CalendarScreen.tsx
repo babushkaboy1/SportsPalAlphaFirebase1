@@ -134,6 +134,7 @@ const CalendarScreen = ({ navigation, route }: any) => {
               onRefresh={onRefresh}
               colors={["#1ae9ef"]}
               tintColor="#1ae9ef"
+              progressBackgroundColor="transparent"
             />
           }
           contentContainerStyle={{ flexGrow: 1 }}

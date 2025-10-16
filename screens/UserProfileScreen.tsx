@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, Share, FlatList, ActivityIndicator } from 'react-native';
+import React, { useEffect, useState, useRef } from 'react';
+import { View, Text, StyleSheet, Image, TouchableOpacity, Share, FlatList, Animated } from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { doc, getDoc } from 'firebase/firestore';
@@ -20,6 +20,7 @@ const UserProfileScreen = () => {
   const [activeTab, setActiveTab] = useState<'games' | 'history'>('games');
   const [userJoinedActivities, setUserJoinedActivities] = useState<any[]>([]);
   const [isReady, setIsReady] = useState(false);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     const fetchProfile = async () => {
@@ -45,6 +46,16 @@ const UserProfileScreen = () => {
       setIsReady(true);
     }
   }, [profile]);
+
+  useEffect(() => {
+    if (isReady) {
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 500,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [isReady]);
 
   const handleShareProfile = async () => {
     try {
@@ -74,15 +85,14 @@ const UserProfileScreen = () => {
 
   if (!isReady) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }} edges={['top']}>
-        <ActivityIndicator size="large" color="#1ae9ef" />
-      </SafeAreaView>
+      <SafeAreaView style={{ flex: 1, backgroundColor: '#121212' }} edges={['top']} />
     );
   }
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <View style={styles.headerRow}>
+      <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
+        <View style={styles.headerRow}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
           <Ionicons name="arrow-back" size={28} color="#1ae9ef" />
         </TouchableOpacity>
@@ -132,6 +142,7 @@ const UserProfileScreen = () => {
           <Text style={styles.tabContent}>Match History</Text>
         )}
       </View>
+      </Animated.View>
     </SafeAreaView>
   );
 };

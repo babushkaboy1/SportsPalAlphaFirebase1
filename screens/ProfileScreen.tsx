@@ -1,5 +1,5 @@
 import { RouteProp } from '@react-navigation/native';
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -12,7 +12,7 @@ import {
   TextInput,
   Share,
   StatusBar, // <-- Add this import
-  ActivityIndicator,
+  Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -45,6 +45,7 @@ const ProfileScreen = () => {
   const [userLocation, setUserLocation] = useState<{ latitude: number, longitude: number } | null>(null);
   const [userJoinedActivities, setUserJoinedActivities] = useState<any[]>([]);
   const [isReady, setIsReady] = useState(false);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
   const { joinedActivities, toggleJoinActivity, isActivityJoined, allActivities, profile: contextProfile } = useActivityContext();
 
   const fetchProfile = async () => {
@@ -119,6 +120,16 @@ const ProfileScreen = () => {
       setIsReady(true);
     }
   }, [profile]);
+
+  useEffect(() => {
+    if (isReady) {
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 500,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [isReady]);
 
   const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
     const R = 6371;
@@ -216,15 +227,14 @@ const ProfileScreen = () => {
   // Show loading indicator until profile is loaded
   if (!isReady) {
     return (
-      <SafeAreaView style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]} edges={['top']}>
-        <ActivityIndicator size="large" color="#1ae9ef" />
-      </SafeAreaView>
+      <SafeAreaView style={styles.container} edges={['top']} />
     );
   }
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <View style={styles.headerRow}>
+      <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
+        <View style={styles.headerRow}>
         <Text style={styles.profileNameHeader}>{profile?.username || 'Username'}</Text>
         <TouchableOpacity
           style={styles.settingsButton}
@@ -286,6 +296,7 @@ const ProfileScreen = () => {
       </View>
 
       <View style={styles.contentContainer}>{renderContent()}</View>
+      </Animated.View>
     </SafeAreaView>
   );
 };
