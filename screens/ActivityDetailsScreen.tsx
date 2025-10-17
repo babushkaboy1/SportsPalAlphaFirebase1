@@ -28,7 +28,7 @@ import { fetchUsersByIds } from '../utils/firestoreActivities';
 import { getOrCreateChatForActivity } from '../utils/firestoreChats';
 import { auth } from '../firebaseConfig';
 import { testStorageConnection } from '../utils/imageUtils';
-import { doc, getDoc, updateDoc, arrayUnion } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, arrayUnion, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import { ActivityIcon } from '../components/ActivityIcons';
 
@@ -104,6 +104,25 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
       setIsReady(true);
     };
     loadUsers();
+    // Live update participants and calendar-added state
+    const activityRef = doc(db, 'activities', activity.id);
+    const unsub = onSnapshot(activityRef, async (snap) => {
+      if (!snap.exists()) return;
+      const data: any = snap.data();
+      const latestJoined = Array.isArray(data.joinedUserIds) ? data.joinedUserIds : [];
+      if (latestJoined.length) {
+        const users = await fetchUsersByIds(latestJoined);
+        setJoinedUsers(users);
+      } else {
+        setJoinedUsers([]);
+      }
+      const currentUserId = auth.currentUser?.uid;
+      if (currentUserId) {
+        const addedToCalendarIds = data.addedToCalendarByUsers || [];
+        setIsAddedToCalendar(addedToCalendarIds.includes(currentUserId));
+      }
+    });
+    return () => unsub();
   }, [activity.id]);
 
   // Fade in immediately on mount
@@ -243,35 +262,103 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
       return;
     }
 
-    if (!isActivityJoined(activity.id)) {
+  if (!isActivityJoined(activity.id)) {
       Alert.alert(
-        "Join to Access Group Chat",
-        "You need to join this activity to access the group chat.",
+        'Join to Access Group Chat',
+        'You need to join this activity to access the group chat.',
         [
-          {
-            text: "Cancel",
-            style: "destructive",
-          },
-          {
-            text: "Join Activity",
-            style: "default",
-            onPress: async () => {
-              await toggleJoinActivity(activity);
-              // After joining, get or create the chat and navigate
-              if (auth.currentUser) {
-                const chatId = await getOrCreateChatForActivity(activity.id, auth.currentUser.uid);
-                navigation.navigate('ChatDetail', { chatId });
-              }
-            },
-          },
+          { text: 'Cancel', style: 'destructive' },
+          { text: 'Join Activity', onPress: joinAndOpenChat },
         ],
         { cancelable: true }
       );
       return;
     }
     // If joined, get or create the chat and navigate
+    // Extra safety: block if somehow not joined
+    if (!isActivityJoined(activity.id)) {
+      Alert.alert("Join required", "Join this activity to access its group chat.");
+      return;
+    }
     const chatId = await getOrCreateChatForActivity(activity.id, auth.currentUser.uid);
+    if (!chatId) {
+      Alert.alert('Chat unavailable', 'Could not open group chat. Please try again in a moment.');
+      return;
+    }
+    try {
+      await waitUntilParticipant(chatId, auth.currentUser.uid);
+    } catch {}
     navigation.navigate('ChatDetail', { chatId });
+  };
+
+  // Reusable: join activity and open chat
+  const joinAndOpenChat = async () => {
+    try {
+      await toggleJoinActivity(activity);
+      if (auth.currentUser) {
+        try {
+          await waitUntilJoinedToActivity(activity.id, auth.currentUser.uid);
+        } catch {}
+        const chatId = await getOrCreateChatForActivity(activity.id, auth.currentUser.uid);
+        if (!chatId) {
+          Alert.alert('Chat unavailable', 'Could not open group chat. Please try again in a moment.');
+          return;
+        }
+        try {
+          await waitUntilParticipant(chatId, auth.currentUser.uid);
+        } catch {}
+        navigation.navigate('ChatDetail', { chatId });
+      }
+    } finally {
+    }
+  };
+
+  // Helper: wait briefly until chat doc shows current user in participants
+  const waitUntilParticipant = (chatId: string, uid: string, timeoutMs = 2000) => {
+    return new Promise<void>((resolve, reject) => {
+      const ref = doc(db, 'chats', chatId);
+      const unsub = onSnapshot(ref, (snap) => {
+        const data: any = snap.data();
+        if (snap.exists() && Array.isArray(data?.participants) && data.participants.includes(uid)) {
+          unsub();
+          resolve();
+        }
+      }, (err) => {
+        unsub();
+        resolve(); // don't block navigation on listener error
+      });
+      setTimeout(() => {
+        try { unsub(); } catch {}
+        resolve();
+      }, timeoutMs);
+    });
+  };
+
+  // Helper: wait until activity doc joinedUserIds includes current user
+  const waitUntilJoinedToActivity = (actId: string, uid: string, timeoutMs = 2000) => {
+    return new Promise<void>((resolve) => {
+      const ref = doc(db, 'activities', actId);
+      const unsub = onSnapshot(
+        ref,
+        (snap) => {
+          if (!snap.exists()) return;
+          const data: any = snap.data();
+          const joined = Array.isArray(data?.joinedUserIds) ? data.joinedUserIds : [];
+          if (joined.includes(uid)) {
+            try { unsub(); } catch {}
+            resolve();
+          }
+        },
+        () => {
+          try { unsub(); } catch {}
+          resolve();
+        }
+      );
+      setTimeout(() => {
+        try { unsub(); } catch {}
+        resolve();
+      }, timeoutMs);
+    });
   };
 
   const handleAddToCalendar = async () => {
@@ -666,7 +753,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
             {/* Participant Count Bar */}
             <View style={styles.joinContainer}>
               <Text style={styles.joinText}>
-                {(activity.joinedUserIds?.length ?? activity.joinedCount)}/{activity.maxParticipants} joined
+                {joinedUsers.length}/{activity.maxParticipants} joined
               </Text>
             </View>
 

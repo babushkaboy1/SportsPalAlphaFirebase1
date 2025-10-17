@@ -157,7 +157,13 @@ const CreateGameScreen = () => {
     const latitude = selectedCoords?.latitude ?? 37.9838;
     const longitude = selectedCoords?.longitude ?? 23.7275;
 
-    // Do NOT include id or isJoined, Firestore will generate id
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+      Alert.alert('Not signed in', 'Please sign in to create an activity.');
+      return;
+    }
+
+    // Firestore create payload must include creatorId and initial joinedUserIds
     const newGame = {
       name: activityName,
       description,
@@ -165,7 +171,9 @@ const CreateGameScreen = () => {
       location,
       date,
       time,
-      creator: 'You', // Replace with user name if available
+      creator: 'You', // display name if available
+      creatorId: uid,
+      joinedUserIds: [uid],
       joinedCount: 1,
       maxParticipants,
       distance: 0,
@@ -174,27 +182,15 @@ const CreateGameScreen = () => {
     };
 
     try {
-      await createActivity(newGame); // Save to Firestore
-
-      // Fetch the new game from Firestore (to get its id)
-      const allGames = await fetchAllActivities();
-      const createdGame = allGames.find(
-        g =>
-          g.creator === 'You' && // or use userId if you have it
-          g.activity === sport &&
-          g.date === date &&
-          g.time === time &&
-          g.location === location
-      );
-
-      if (createdGame) {
-        const user = auth.currentUser;
-        if (user) {
-          await joinActivity(createdGame.id, user.uid); // Pass user.uid
-          setJoinedActivities(prev => [...prev, createdGame.id]);
-          await reloadAllActivities();
-        }
-      }
+      const newId = await createActivity(newGame as any); // Save to Firestore and get id
+      // No need to call joinActivity; joinedUserIds already includes uid
+      setJoinedActivities(prev => Array.from(new Set([...prev, newId])));
+      await reloadAllActivities();
+      // Ensure group chat exists and you are a participant
+      try {
+        const { getOrCreateChatForActivity } = await import('../utils/firestoreChats');
+        await getOrCreateChatForActivity(newId, uid);
+      } catch {}
 
       Alert.alert('Game Created', 'Your game has been successfully created!');
       resetForm();

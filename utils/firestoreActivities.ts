@@ -32,6 +32,10 @@ export const leaveActivity = async (activityId: string, userId: string) => {
 };
 
 export const fetchAllActivities = async (): Promise<Activity[]> => {
+  // Avoid querying Firestore before authentication; aligns with rules requiring request.auth != null
+  if (!auth.currentUser) {
+    return [];
+  }
   const querySnapshot = await getDocs(collection(db, 'activities'));
   return querySnapshot.docs.map(doc => ({
     id: doc.id,
@@ -39,8 +43,17 @@ export const fetchAllActivities = async (): Promise<Activity[]> => {
   }));
 };
 
-export const createActivity = async (activity: Omit<Activity, 'id'>) => {
-  await addDoc(collection(db, 'activities'), activity);
+// Firestore-specific shape: include creatorId and joinedUserIds for rules compliance
+export type FirestoreActivity = Omit<Activity, 'id'> & {
+  creatorId: string;
+  joinedUserIds?: string[];
+  createdAt?: any;
+  updatedAt?: any;
+};
+
+export const createActivity = async (activity: FirestoreActivity): Promise<string> => {
+  const ref = await addDoc(collection(db, 'activities'), activity);
+  return ref.id;
 };
 
 export const fetchUsersByIds = async (userIds: string[]) => {

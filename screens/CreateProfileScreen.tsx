@@ -17,8 +17,8 @@ import * as ImagePicker from 'expo-image-picker';
 import { MediaType } from 'expo-image-picker';
 import Logo from '../components/Logo';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { createUserWithEmailAndPassword, reauthenticateWithCredential, EmailAuthProvider, updatePassword } from 'firebase/auth';
-import { doc, setDoc, query, where, getDocs, collection } from 'firebase/firestore';
+import { createUserWithEmailAndPassword, reauthenticateWithCredential, EmailAuthProvider, updatePassword, sendEmailVerification, reload, signOut, getIdToken, signInWithEmailAndPassword, getIdTokenResult } from 'firebase/auth';
+import { doc, setDoc, query, where, getDocs, collection, serverTimestamp } from 'firebase/firestore';
 import { auth, db, storage } from '../firebaseConfig';
 import { compressImage, uploadProfileImage, testStorageConnection } from '../utils/imageUtils';
 import { ref, uploadBytes, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
@@ -46,6 +46,15 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
   const [isReady, setIsReady] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [confirmPassword, setConfirmPassword] = useState('');
+  // Email verification state (edit mode)
+  const [isEmailVerified, setIsEmailVerified] = useState<boolean>(!!auth.currentUser?.emailVerified);
+  const [isSendingVerify, setIsSendingVerify] = useState(false);
+  const [isCheckingVerify, setIsCheckingVerify] = useState(false);
+  const [sendCooldown, setSendCooldown] = useState<number>(0);
+  const cooldownRef = useRef<NodeJS.Timeout | null>(null);
+  const currentAuthEmail = auth.currentUser?.email || null;
+  // Track whether the user has pressed "Send verification" at least once
+  const [sentVerification, setSentVerification] = useState(false);
   // Change password flow (edit mode)
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
@@ -83,9 +92,8 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
     return null;
   };
 
-  useEffect(() => {
-    setUsernameError(validateUsername(username));
-  }, [username]);
+  // Only show username error after submit attempt in create mode
+  const [showUsernameError, setShowUsernameError] = useState(false);
 
   // Password policy checks and strength
   const getPasswordChecks = (pwd: string) => ({
@@ -108,6 +116,11 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
     setPasswordStrength(computeStrength(password));
     setPasswordError(null);
   }, [password]);
+
+  // Keep isEmailVerified in sync when auth state changes
+  useEffect(() => {
+    setIsEmailVerified(!!auth.currentUser?.emailVerified);
+  }, [auth.currentUser]);
 
   // Track strength for new password in edit change flow
   const [newPasswordStrength, setNewPasswordStrength] = useState<{score: number; color: string; label: string; percent: number}>(computeStrength(''));
@@ -168,6 +181,116 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
     } catch (e: any) {
       console.error('Update password failed', e);
       Alert.alert('Error', e?.message || 'Could not update password.');
+    }
+  };
+
+  const handleSendVerificationEmail = async () => {
+    try {
+      // If cooldown active, ignore taps
+      if (sendCooldown > 0 || isSendingVerify) return;
+      setIsSendingVerify(true);
+      let user = auth.currentUser;
+      // If logged in with a different email, seamlessly sign out and proceed with creating the new account
+      if (user && user.email && user.email !== email) {
+        try {
+          await signOut(auth);
+        } catch (e) {
+          console.warn('Auto sign-out failed before creating new account', e);
+          // Even if signOut fails, we can't create a new user while logged in
+          Alert.alert('Please sign out', 'You are currently signed in with a different account. Please sign out and try again.');
+          setIsSendingVerify(false);
+          return;
+        }
+        user = auth.currentUser; // refresh
+      }
+
+      if (user) {
+        // Already authenticated (and either matching email or no email set) — just send verification
+        await sendEmailVerification(user);
+        setAwaitingEmailVerification(true);
+        setSentVerification(true);
+        startSendCooldown(30);
+        Alert.alert('Verification sent', 'We sent a verification link to your email. Open it to verify.');
+      } else {
+        // Not authenticated yet: create the account now (requires valid password)
+        const checks = getPasswordChecks(password);
+        if (!(checks.len && checks.upper && checks.number && checks.symbol)) {
+          Alert.alert('Set a password first', 'Please enter a strong password before sending verification.');
+          setIsSendingVerify(false);
+          return;
+        }
+        if (password !== confirmPassword) {
+          Alert.alert('Password mismatch', 'Please confirm your password.');
+          setIsSendingVerify(false);
+          return;
+        }
+        // Try to create user for this email to be able to send verification
+        try {
+          const cred = await createUserWithEmailAndPassword(auth, email, password);
+          await sendEmailVerification(cred.user);
+          setAwaitingEmailVerification(true);
+          setSentVerification(true);
+          startSendCooldown(30);
+          Alert.alert('Verification sent', 'We sent a verification link. Open it to verify, then tap "I verified — Refresh".');
+        } catch (e: any) {
+          console.error('create+send verification failed', e);
+          if (e?.code === 'auth/email-already-in-use') {
+            Alert.alert('Email in use', 'An account with this email already exists. Try signing in instead.');
+          } else if (e?.code === 'auth/invalid-email') {
+            Alert.alert('Invalid email', 'Please enter a valid email address.');
+          } else {
+            Alert.alert('Error', e?.message || 'Could not send verification.');
+          }
+        }
+      }
+    } catch (e: any) {
+      console.error('sendEmailVerification failed', e);
+      Alert.alert('Error', e?.message || 'Could not send verification email.');
+    } finally {
+      setIsSendingVerify(false);
+    }
+  };
+
+  const startSendCooldown = (seconds: number) => {
+    setSendCooldown(seconds);
+    if (cooldownRef.current) clearInterval(cooldownRef.current);
+    cooldownRef.current = setInterval(() => {
+      setSendCooldown((prev) => {
+        if (prev <= 1) {
+          if (cooldownRef.current) clearInterval(cooldownRef.current);
+          cooldownRef.current = null;
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  const handleRefreshVerifyButton = async () => {
+    try {
+      setIsCheckingVerify(true);
+      await handleRefreshEmailVerified();
+    } finally {
+      setIsCheckingVerify(false);
+    }
+  };
+
+  const handleRefreshEmailVerified = async () => {
+    try {
+      const user = auth.currentUser;
+      if (!user) return;
+      await reload(user);
+      // Force refresh the ID token so Firestore rules see updated email_verified claim
+      await getIdToken(user, true);
+      setIsEmailVerified(!!user.emailVerified);
+      if (user.emailVerified) {
+        setAwaitingEmailVerification(false);
+        Alert.alert('Email verified', 'Your email is now verified.');
+      } else {
+        Alert.alert('Not verified yet', 'Please open the verification link we sent to your email.');
+      }
+    } catch (e) {
+      console.warn('reload failed', e);
     }
   };
 
@@ -236,6 +359,7 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
   };
 
   // Make handleContinue async so we can await saveProfile
+  const [awaitingEmailVerification, setAwaitingEmailVerification] = useState(false);
   const handleContinue = async () => {
     console.log("🚦 handleContinue called");
     if (!email || !username) {
@@ -247,7 +371,7 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
     const uErr = validateUsername(username);
     if (uErr) {
       setUsernameError(uErr);
-      Alert.alert('Invalid Username', uErr);
+      setShowUsernameError(true);
       return;
     }
 
@@ -271,7 +395,7 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
 
     setIsLoading(true);
     try {
-      let userId: string | undefined = auth.currentUser?.uid;
+  let userId: string | undefined = auth.currentUser?.uid;
       let photoURL: string | null = null;
 
       if (isEdit) {
@@ -315,6 +439,9 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
           photo: photoURL,
           sportsPreferences: selectedSports,
           username_lower: username ? username.toLowerCase() : null,
+          uid: userId,
+          emailVerified: !!auth.currentUser?.emailVerified,
+          updatedAt: serverTimestamp(),
         };
         
         await setDoc(doc(db, "profiles", userId), profileData, { merge: true });
@@ -322,6 +449,17 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
         navigation.goBack();
       } else {
         // CREATE MODE
+        // If logged in to a different email, auto sign out to proceed with creating the new account
+        if (auth.currentUser && auth.currentUser.email && auth.currentUser.email !== email) {
+          try {
+            await signOut(auth);
+          } catch (e) {
+            console.warn('Auto sign-out failed before creating new account', e);
+            Alert.alert('Please sign out', 'You are currently signed in with a different account. Please sign out and try again.');
+            setIsLoading(false);
+            return;
+          }
+        }
         if (!password) {
           Alert.alert('Missing Info', 'Please enter a password.');
           setIsLoading(false);
@@ -341,16 +479,80 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
           }
         }
         
-        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-        userId = userCredential.user.uid;
-        
+        // If there's already a user, force reload + token refresh and proceed if verified
+        if (auth.currentUser) {
+          await reload(auth.currentUser);
+          await getIdToken(auth.currentUser, true);
+          // Double-check token claims reflect verified state
+          try {
+            const claims = await getIdTokenResult(auth.currentUser, true);
+            console.log('🔐 Token claims before create write', {
+              email: auth.currentUser.email,
+              uid: auth.currentUser.uid,
+              emailVerifiedLocal: auth.currentUser.emailVerified,
+              email_verified_claim: (claims as any)?.claims?.email_verified,
+              sign_in_provider: (claims as any)?.signInProvider || (claims as any)?.claims?.firebase?.sign_in_provider,
+            });
+          } catch (e) {
+            console.warn('getIdTokenResult failed (pre-write)', e);
+          }
+          if (!auth.currentUser.emailVerified) {
+            // As a fallback, allow the user to tap Refresh button, but don't block the UI state here
+            setAwaitingEmailVerification(true);
+            Alert.alert('Verify your email', 'Please verify your email, then tap "I verified — Refresh" to continue.');
+            setIsLoading(false);
+            return;
+          }
+        }
+
+        // If no current user, create auth user first, send verification, and block until verified
+        if (!auth.currentUser) {
+          const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+          userId = userCredential.user.uid;
+          try {
+            await sendEmailVerification(userCredential.user);
+            setAwaitingEmailVerification(true);
+            Alert.alert('Verify your email', 'We sent a verification link. Please verify, then tap "I verified — Refresh".');
+          } catch (e) {
+            console.warn('Could not send verification email on signup', e);
+          }
+          setIsLoading(false);
+          return; // Do not create profile until verified
+        }
+
+  // Reached here means current user exists and is verified -> ensure we are authenticated as the typed email
+  // If for any reason current user email differs, sign in with provided credentials again
+  if (!auth.currentUser?.email || auth.currentUser.email.toLowerCase() !== email.toLowerCase()) {
+    await signInWithEmailAndPassword(auth, email, password);
+  }
+  // Ensure token reflects email_verified before writing
+  await reload(auth.currentUser!);
+  await getIdToken(auth.currentUser!, true);
+  try {
+    const claims = await getIdTokenResult(auth.currentUser!, true);
+    console.log('🔐 Token claims at write time', {
+      email: auth.currentUser!.email,
+      uid: auth.currentUser!.uid,
+      emailVerifiedLocal: auth.currentUser!.emailVerified,
+      email_verified_claim: (claims as any)?.claims?.email_verified,
+      sign_in_provider: (claims as any)?.signInProvider || (claims as any)?.claims?.firebase?.sign_in_provider,
+    });
+    if (!(claims as any)?.claims?.email_verified) {
+      Alert.alert('Verify your email', 'Your email is not verified yet. Tap "I verified — Refresh" and try again.');
+      setIsLoading(false);
+      return;
+    }
+  } catch (e) {
+    console.warn('getIdTokenResult failed (write-time)', e);
+  }
+  userId = auth.currentUser!.uid;
         if (photo) {
           console.log("📸 Uploading profile photo for new user...");
           const compressedUri = await compressImage(photo);
           photoURL = await uploadProfileImage(compressedUri, userId);
           console.log("✅ Photo uploaded:", photoURL);
         }
-        
+
         const profileData = {
           username,
           email,
@@ -358,14 +560,42 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
           photo: photoURL,
           sportsPreferences: selectedSports,
           username_lower: username ? username.toLowerCase() : null,
+          uid: userId,
+          emailVerified: true,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
         };
-        
-        await setDoc(doc(db, "profiles", userId), profileData);
+
+        try {
+          await setDoc(doc(db, "profiles", userId), profileData);
+        } catch (err: any) {
+          // One-time retry after forced token refresh to avoid stale claims
+          if (err?.code === 'permission-denied') {
+            try {
+              await getIdToken(auth.currentUser!, true);
+              await reload(auth.currentUser!);
+              if (auth.currentUser?.emailVerified) {
+                await setDoc(doc(db, "profiles", userId), profileData);
+              } else {
+                throw err;
+              }
+            } catch (retryErr) {
+              throw err;
+            }
+          } else {
+            throw err;
+          }
+        }
         Alert.alert('Success', 'Your profile has been created!');
         navigation.navigate('MainTabs');
       }
     } catch (error: any) {
       console.error("❌ Error saving profile:", error);
+      if (error?.code === 'permission-denied') {
+        Alert.alert('Permission denied', 'Your email may not be verified yet. Tap "I verified — Refresh" and try again.');
+        setIsLoading(false);
+        return;
+      }
       if (error?.code === 'auth/email-already-in-use') {
         Alert.alert('Email In Use', 'An account with this email already exists.');
       } else if (error?.code === 'auth/invalid-email') {
@@ -384,6 +614,11 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
   const isGoogleUser = !!auth.currentUser?.providerData.find(
     (p) => p.providerId === 'google.com'
   );
+  const isPasswordUser = !!auth.currentUser?.providerData.find(
+    (p) => p.providerId === 'password'
+  );
+
+  const mainCtaLabel = isEdit ? 'Save' : 'Continue';
 
   return (
     <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
@@ -435,6 +670,17 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
           value={username}
           onChangeText={setUsername}
         />
+        {!isEdit && showUsernameError && usernameError ? (
+          <Text style={styles.errorText}>{usernameError}</Text>
+        ) : null}
+        {/* Move City / Neighborhood directly under Username */}
+        <TextInput
+          style={styles.input}
+          placeholder="City / Neighborhood"
+          placeholderTextColor="#999"
+          value={location}
+          onChangeText={setLocation}
+        />
         <TextInput
           style={[styles.input, (isEdit ? styles.inputDisabled : null)]}
           placeholder="Email"
@@ -444,6 +690,101 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
           onChangeText={setEmail}
           editable={!isEdit && !isGoogleUser}
         />
+        {/* Email verification controls */}
+        {!isEdit ? (
+          // Create mode: show actions until verified; show green badge after
+          <View style={styles.emailVerifyRow}>
+            {!isEmailVerified ? (
+              <>
+                <TouchableOpacity
+                  style={[
+                    styles.verifyActionButton,
+                    (sendCooldown > 0 || isSendingVerify) ? styles.verifyActionButtonDisabled : null,
+                    { marginLeft: 0 },
+                  ]}
+                  onPress={handleSendVerificationEmail}
+                  disabled={sendCooldown > 0 || isSendingVerify}
+                >
+                  {isSendingVerify ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.verifyActionText}>
+                      {sendCooldown > 0 ? `Send again in ${sendCooldown}s` : 'Send verification'}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.verifyActionButton,
+                    { marginLeft: 8 },
+                    (isCheckingVerify || !sentVerification) ? styles.verifyActionButtonDisabled : null,
+                  ]}
+                  onPress={handleRefreshVerifyButton}
+                  disabled={isCheckingVerify || !sentVerification}
+                >
+                  {isCheckingVerify ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.verifyActionText}>I verified — Refresh</Text>
+                  )}
+                </TouchableOpacity>
+              </>
+            ) : (
+              <View style={[styles.verifyBadge, styles.badgeVerified]}>
+                <Ionicons name="checkmark-circle" size={16} color="#fff" />
+                <Text style={styles.verifyBadgeText}>Verified</Text>
+              </View>
+            )}
+          </View>
+        ) : (
+          // Edit mode: keep existing password-user flow; show actions when needed
+          (auth.currentUser && (isPasswordUser || isEdit)) || awaitingEmailVerification ? (
+            <View style={styles.emailVerifyRow}>
+              {!isEmailVerified && (
+                <>
+                  <TouchableOpacity
+                    style={[
+                      styles.verifyActionButton,
+                      (sendCooldown > 0 || isSendingVerify) ? styles.verifyActionButtonDisabled : null,
+                      { marginLeft: 0 },
+                    ]}
+                    onPress={handleSendVerificationEmail}
+                    disabled={sendCooldown > 0 || isSendingVerify}
+                  >
+                    {isSendingVerify ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Text style={styles.verifyActionText}>
+                        {sendCooldown > 0 ? `Send again in ${sendCooldown}s` : 'Send verification'}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.verifyActionButton,
+                      { marginLeft: 8 },
+                      (isCheckingVerify || !sentVerification) ? styles.verifyActionButtonDisabled : null,
+                    ]}
+                    onPress={handleRefreshVerifyButton}
+                    disabled={isCheckingVerify || !sentVerification}
+                  >
+                    {isCheckingVerify ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Text style={styles.verifyActionText}>I verified — Refresh</Text>
+                    )}
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+          ) : null
+        )}
+        {!isEdit && awaitingEmailVerification ? (
+          <View style={[styles.requirementsBox, { marginTop: 6 }]}> 
+            <Text style={styles.requirementsTitle}>Verify your email to continue</Text>
+            <Text style={styles.requirementItem}>We sent a verification link to {email}. Open it, then tap "I verified — Refresh" above.</Text>
+          </View>
+        ) : null}
         {/* Phone field removed */}
         {/* Password / Change Password Section */}
         {!isGoogleUser ? (
@@ -563,13 +904,6 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
             You signed up with Google. Log in with Google anytime.
           </Text>
         )}
-        <TextInput
-          style={styles.input}
-          placeholder="City / Neighborhood"
-          placeholderTextColor="#999"
-          value={location}
-          onChangeText={setLocation}
-        />
       </View>
 
       <Text style={styles.subtitle}>Select Your Favorite Sports</Text>
@@ -597,8 +931,15 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
         ))}
       </View>
 
-      <TouchableOpacity style={styles.continueButton} onPress={handleContinue}>
-        <Text style={styles.continueButtonText}>Continue</Text>
+      <TouchableOpacity
+        style={[
+          styles.continueButton,
+          (!isEdit && auth.currentUser && !isEmailVerified) ? { opacity: 0.6 } : null,
+        ]}
+        onPress={handleContinue}
+        disabled={!isEdit && auth.currentUser != null && !isEmailVerified}
+      >
+        <Text style={styles.continueButtonText}>{mainCtaLabel}</Text>
       </TouchableOpacity>
 
       {/* Spinner for loading state */}
@@ -848,6 +1189,56 @@ const styles = StyleSheet.create({
     color: '#bbb',
     fontSize: 13,
     marginVertical: 2,
+  },
+  // Email verification styles
+  emailVerifyRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  verifyBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 14,
+  },
+  badgeVerified: {
+    backgroundColor: '#2ecc71',
+  },
+  badgeUnverified: {
+    backgroundColor: '#e67e22',
+  },
+  verifyBadgeText: {
+    color: '#fff',
+    marginLeft: 6,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  verifyActionButton: {
+    backgroundColor: '#1ae9ef',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 10,
+    shadowColor: '#1ae9ef',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3,
+    elevation: 3,
+  },
+  verifyActionButtonDisabled: {
+    backgroundColor: '#007b7b', // match Discover's dark turquoise
+    shadowOpacity: 0.15,
+  },
+  verifyActionText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
   },
 });
 

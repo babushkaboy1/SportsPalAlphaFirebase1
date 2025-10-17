@@ -14,6 +14,8 @@ import {
   StatusBar, // <-- Add this import
   Animated,
   RefreshControl,
+  ActivityIndicator,
+  Keyboard,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
@@ -25,7 +27,7 @@ import * as Location from 'expo-location';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../types/navigation';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, collection, query as fsQuery, orderBy, startAt, endAt, limit, getDocs } from 'firebase/firestore';
 import { auth, db } from '../firebaseConfig';
 import { activities } from '../data/activitiesData';
 
@@ -51,6 +53,12 @@ const ProfileScreen = () => {
   const [refreshLocked, setRefreshLocked] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const { joinedActivities, toggleJoinActivity, isActivityJoined, allActivities, profile: contextProfile, reloadAllActivities } = useActivityContext();
+  // User search (Friends tab)
+  const [userSearchQuery, setUserSearchQuery] = useState('');
+  const [userResults, setUserResults] = useState<Array<{ uid: string; username: string; photo?: string }>>([]);
+  const [userSearching, setUserSearching] = useState(false);
+  const userSearchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const currentUid = auth.currentUser?.uid;
 
   const fetchProfile = async () => {
     let uid = userId;
@@ -273,12 +281,130 @@ const ProfileScreen = () => {
       case 'friends':
         return (
           <View style={styles.friendsTab}>
-            <TextInput style={styles.searchInput} placeholder="Search friends..." placeholderTextColor="#aaa" />
-            <FlatList
-              data={[{ name: 'John Doe' }, { name: 'Alice' }, { name: 'Bob' }]}
-              keyExtractor={(item) => item.name}
-              renderItem={({ item }) => <Text style={styles.friendName}>{item.name}</Text>}
-            />
+            <View style={styles.userSearchRow}>
+              <Ionicons name="search" size={16} color="#1ae9ef" style={{ marginRight: 8 }} />
+              <TextInput
+                style={[styles.searchInput, { flex: 1 }]}
+                placeholder="Search users..."
+                placeholderTextColor="#aaa"
+                value={userSearchQuery}
+                onChangeText={(text) => {
+                  setUserSearchQuery(text);
+                  if (userSearchDebounce.current) clearTimeout(userSearchDebounce.current);
+                  if (!text || !text.trim()) {
+                    setUserResults([]);
+                    setUserSearching(false);
+                    return;
+                  }
+                  userSearchDebounce.current = setTimeout(async () => {
+                    const qText = text.trim();
+                    const qLower = qText.toLowerCase();
+                    setUserSearching(true);
+                    try {
+                      // Prefix search; prefer case-insensitive via username_lower, fallback to username
+                      const ref = collection(db, 'profiles');
+                      const q1 = fsQuery(ref, orderBy('username_lower'), startAt(qLower), endAt(qLower + '\uf8ff'), limit(20));
+                      const q2 = fsQuery(ref, orderBy('username'), startAt(qText), endAt(qText + '\uf8ff'), limit(20));
+                      // Run sequentially to keep it simple and predictable
+                      const results: Record<string, { uid: string; username: string; photo?: string }> = {};
+                      try {
+                        const snap1 = await getDocs(q1);
+                        snap1.forEach(d => {
+                          const data: any = d.data();
+                          const uid = d.id;
+                          const username = data.username || data.username_lower || '';
+                          if (username) results[uid] = { uid, username, photo: data.photo || data.photoURL };
+                        });
+                      } catch (_) {}
+                      try {
+                        const snap2 = await getDocs(q2);
+                        snap2.forEach(d => {
+                          const data: any = d.data();
+                          const uid = d.id;
+                          const username = data.username || '';
+                          if (username) results[uid] = { uid, username, photo: data.photo || data.photoURL };
+                        });
+                      } catch (_) {}
+                      // to array
+                      const rows = Object.values(results)
+                        .filter(r => r.username && r.uid !== currentUid)
+                        .slice(0, 20);
+                      setUserResults(rows);
+                    } catch (e) {
+                      setUserResults([]);
+                    } finally {
+                      setUserSearching(false);
+                    }
+                  }, 300);
+                }}
+                returnKeyType="search"
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              {userSearchQuery.trim().length > 0 && (
+                <TouchableOpacity
+                  style={styles.clearButton}
+                  onPress={() => {
+                    setUserSearchQuery('');
+                    setUserResults([]);
+                    Keyboard.dismiss();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear search"
+                >
+                  <Ionicons name="close-circle" size={18} color="#1ae9ef" />
+                </TouchableOpacity>
+              )}
+            </View>
+            {userSearchQuery.trim().length === 0 ? (
+              <TouchableOpacity activeOpacity={1} onPress={() => Keyboard.dismiss()} style={styles.emptyState}>
+                <Ionicons name="people-outline" size={48} color="#1ae9ef" />
+                <Text style={styles.emptyStateTitle}>Create connections</Text>
+                <Text style={styles.emptyStateText}>
+                  Search by username to discover people. Start typing a name.
+                </Text>
+              </TouchableOpacity>
+            ) : userSearching ? (
+              <View style={styles.emptyState}> 
+                <ActivityIndicator size="large" color="#1ae9ef" />
+                <Text style={styles.emptyStateText}>Searching…</Text>
+              </View>
+            ) : userResults.length === 0 ? (
+              <TouchableOpacity activeOpacity={1} onPress={() => Keyboard.dismiss()} style={styles.emptyState}>
+                <Ionicons name="person-circle-outline" size={48} color="#1ae9ef" />
+                <Text style={styles.emptyStateTitle}>No matches yet</Text>
+                <Text style={styles.emptyStateText}>Try a different spelling.</Text>
+              </TouchableOpacity>
+            ) : (
+              <FlatList
+                data={userResults}
+                keyExtractor={(item) => item.uid}
+                contentContainerStyle={{ paddingVertical: 6, paddingBottom: Math.max(insets.bottom, 16) }}
+                keyboardShouldPersistTaps="always"
+                keyboardDismissMode="on-drag"
+                bounces={false}
+                overScrollMode={Platform.OS === 'android' ? 'never' : undefined}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={styles.userRow}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      Keyboard.dismiss();
+                      navigation.navigate('UserProfile', { userId: item.uid });
+                    }}
+                  >
+                    <Image
+                      source={{ uri: item.photo || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(item.username) }}
+                      style={styles.userAvatar}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.userName}>{item.username}</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={20} color="#1ae9ef" />
+                  </TouchableOpacity>
+                )}
+              />
+            )}
           </View>
         );
     }
@@ -468,13 +594,72 @@ const styles = StyleSheet.create({
   friendsTab: {
     marginTop: 10,
   },
+  userSearchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1e1e1e',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: '#2a2a2a',
+    marginBottom: 10,
+  },
+  clearButton: {
+    marginLeft: 8,
+    height: 24,
+    width: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   searchInput: {
     backgroundColor: '#1e1e1e',
-    padding: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
     borderRadius: 5,
-    marginBottom: 10,
+    marginBottom: 0,
+    minHeight: 36,
     color: '#fff',
     fontWeight: '500',
+  },
+  emptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 30,
+    paddingHorizontal: 20,
+  },
+  emptyStateTitle: {
+    color: '#1ae9ef',
+    fontWeight: 'bold',
+    fontSize: 16,
+    marginTop: 10,
+  },
+  emptyStateText: {
+    color: '#bbb',
+    fontSize: 14,
+    textAlign: 'center',
+    marginTop: 6,
+  },
+  userRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1e1e1e',
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 8,
+  },
+  userAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: '#1ae9ef',
+    marginRight: 10,
+  },
+  userName: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
   friendName: {
     color: '#fff',

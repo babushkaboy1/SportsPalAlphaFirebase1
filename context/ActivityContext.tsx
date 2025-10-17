@@ -4,7 +4,6 @@ import { Activity } from '../data/activitiesData';
 import { getUserJoinedActivities, joinActivity, leaveActivity, fetchAllActivities, deleteActivity } from '../utils/firestoreActivities';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../firebaseConfig';
-import { activities as fakeActivities } from '../data/activitiesData';
 import { Alert } from 'react-native';
 import { doc, getDoc, onSnapshot, query, collection, where } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
@@ -73,30 +72,72 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     loadActivities();
   }, [user]);
 
-  // Load all activities (Firestore + fake)
+  // Load all activities from Firestore only
   const reloadAllActivities = async () => {
     try {
+      // Avoid fetching before auth; rules require request.auth != null
+      if (!auth.currentUser) {
+        setAllActivities([]);
+        return;
+      }
       const firestoreActivities = await fetchAllActivities();
       setAllActivities(firestoreActivities);
     } catch (e) {
       console.error('Error loading activities:', e);
+      // Do not show fake activities; leave empty on error
       setAllActivities([]);
     }
   };
 
+  // Only load activities after user is authenticated
   useEffect(() => {
-    reloadAllActivities();
-  }, []);
+    if (user) {
+      reloadAllActivities();
+    } else {
+      // clear activities when signed out
+      setAllActivities([]);
+    }
+  }, [user]);
+
+  // Real-time subscription to all activities to keep UI in sync
+  useEffect(() => {
+    if (!user) return;
+    const unsubscribe = onSnapshot(
+      collection(db, 'activities'),
+      (snapshot) => {
+        const activities = snapshot.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Activity[];
+        setAllActivities(activities);
+      },
+      (error) => {
+        if ((error as any)?.code !== 'permission-denied') {
+          console.error('Activities subscription error:', error);
+        } else {
+          setAllActivities([]);
+        }
+      }
+    );
+    return unsubscribe;
+  }, [user]);
 
   // Sync joined activities with Firestore in real-time
   useEffect(() => {
-    if (!auth.currentUser) return;
-    const q = query(collection(db, 'activities'), where('joinedUserIds', 'array-contains', auth.currentUser.uid));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      setJoinedActivities(snapshot.docs.map(doc => doc.id));
-    });
+    if (!user) return;
+    const q = query(collection(db, 'activities'), where('joinedUserIds', 'array-contains', user.uid));
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        setJoinedActivities(snapshot.docs.map(doc => doc.id));
+      },
+      (error) => {
+        if ((error as any)?.code !== 'permission-denied') {
+          console.error('Activities joined subscription error:', error);
+        } else {
+          setJoinedActivities([]);
+        }
+      }
+    );
     return unsubscribe;
-  }, [auth.currentUser]);
+  }, [user?.uid]);
 
   const toggleJoinActivity = async (activity: Activity): Promise<void> => {
     try {
@@ -104,22 +145,36 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const isJoined = joinedActivities.includes(activity.id);
       const joinedCount = activity.joinedUserIds?.length || 0;
 
+      // If user is last participant
       if (isJoined && joinedCount === 1 && activity.joinedUserIds?.includes(user.uid)) {
+        const isCreator = (activity as any).creatorId && (activity as any).creatorId === user.uid;
         return new Promise<void>((resolve) => {
           Alert.alert(
             "You're the last participant!",
-            "If you leave, this event will be deleted for everyone. Are you sure you want to leave?",
+            isCreator
+              ? "If you leave, this event will be deleted for everyone. Are you sure you want to leave?"
+              : "If you leave, the event will remain visible (for the creator) but you'll be removed from participants.",
             [
               { text: "Stay", style: "cancel", onPress: () => resolve() },
-              { text: "Leave & Delete", style: "destructive", onPress: async () => {
-                  await leaveActivity(activity.id, user.uid);
-                  await deleteActivity(activity.id);
-                  await reloadAllActivities();
-                  const joined = await getUserJoinedActivities();
-                  setJoinedActivities(joined);
-                  resolve();
-                }
-              }
+              isCreator
+                ? { text: "Leave & Delete", style: "destructive", onPress: async () => {
+                      await leaveActivity(activity.id, user.uid);
+                      // Only the creator attempts deletion per rules
+                      await deleteActivity(activity.id);
+                      await reloadAllActivities();
+                      const joined = await getUserJoinedActivities();
+                      setJoinedActivities(joined);
+                      resolve();
+                    }
+                  }
+                : { text: "Leave", style: "destructive", onPress: async () => {
+                      await leaveActivity(activity.id, user.uid);
+                      await reloadAllActivities();
+                      const joined = await getUserJoinedActivities();
+                      setJoinedActivities(joined);
+                      resolve();
+                    }
+                  }
             ]
           );
         });
@@ -135,8 +190,11 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       await reloadAllActivities();
       const joined = await getUserJoinedActivities();
       setJoinedActivities(joined);
-    } catch (error) {
-      console.error('Error toggling join state:', error);
+    } catch (error: any) {
+      // Swallow expected permission-denied cases (e.g., chat participants updates blocked by rules)
+      if (error?.code !== 'permission-denied') {
+        console.error('Error toggling join state:', error);
+      }
     }
   };
 

@@ -8,11 +8,12 @@ import {
   TextInput, 
   TouchableOpacity,
   ActivityIndicator,
-  Animated
+  Animated,
+  Alert,
 } from 'react-native';
 import Logo from '../components/Logo';
 import { AntDesign, FontAwesome, Ionicons } from '@expo/vector-icons';
-import { signInWithEmailAndPassword, signInWithCredential, GoogleAuthProvider } from 'firebase/auth';
+import { signInWithEmailAndPassword, signInWithCredential, GoogleAuthProvider, signOut } from 'firebase/auth';
 import { auth } from '../firebaseConfig';
 import * as Google from 'expo-auth-session/providers/google';
 
@@ -35,6 +36,21 @@ const LoginScreen = ({ navigation }: any) => {
       useNativeDriver: true,
     }).start();
   }, []);
+
+  // Ensure no lingering session while on Login screen
+  useEffect(() => {
+    // Sign out immediately on mount if a user is cached
+    if (auth.currentUser) {
+      signOut(auth).catch(() => {});
+    }
+    // Also sign out whenever this screen gains focus (e.g., back navigation)
+    const unsubscribe = navigation.addListener('focus', () => {
+      if (auth.currentUser) {
+        signOut(auth).catch(() => {});
+      }
+    });
+    return unsubscribe;
+  }, [navigation]);
 
   useEffect(() => {
     if (response?.type === 'success') {
@@ -65,8 +81,7 @@ const LoginScreen = ({ navigation }: any) => {
   };
 
   const handleSocialLogin = (provider: string) => {
-    console.log(`Login with ${provider}`);
-    navigation.navigate('MainTabs');
+    Alert.alert('Coming soon', `${provider} sign-in isn't available yet. Please use Email or Google.`);
   };
 
   const handleSignUp = () => {

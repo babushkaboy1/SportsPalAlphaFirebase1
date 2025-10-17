@@ -18,7 +18,8 @@ import * as Haptics from 'expo-haptics';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { fetchUserChats } from '../utils/firestoreChats';
-import { doc, getDoc, collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
+import { doc, getDoc, collection, query, onSnapshot, where } from 'firebase/firestore';
+import { onAuthStateChanged } from 'firebase/auth';
 import { db, auth } from '../firebaseConfig';
 import { useFocusEffect } from '@react-navigation/native';
 import { useActivityContext } from '../context/ActivityContext';
@@ -49,93 +50,103 @@ const ChatsScreen = ({ navigation }: any) => {
   const insets = useSafeAreaInsets();
   const { joinedActivities } = useActivityContext();
 
-  const loadChats = async () => {
-    if (auth.currentUser) {
-      const userChats = await fetchUserChats(auth.currentUser.uid);
-
-      // For each chat, fetch activity info and last message
-      const chatsWithDetails = await Promise.all(
-        userChats.map(async (chat: Chat) => {
-          let activityName = 'Group Chat';
-          let activityImage = 'https://via.placeholder.com/50';
-          let activityType = '';
-          let activityDate = '';
-          let activityTime = '';
-          if (chat.activityId) {
-            const activityDoc = await getDoc(doc(db, 'activities', chat.activityId));
-            if (activityDoc.exists()) {
-              const activityData = activityDoc.data();
-              activityName = activityData.activity || activityData.name || 'Group Chat';
-              activityImage = activityData.image || 'https://via.placeholder.com/50';
-              activityType = activityData.activity || '';
-              activityDate = activityData.date || '';
-              activityTime = activityData.time || '';
-            }
-          }
-          // Get last message and sender username
-          let lastMessage = '';
-          let lastSender = '';
-          const messagesRef = collection(db, 'chats', chat.id, 'messages');
-          const lastMsgQuery = query(messagesRef, orderBy('timestamp', 'desc'), limit(1));
-          const lastMsgSnap = await getDocs(lastMsgQuery);
-          if (!lastMsgSnap.empty) {
-            const msg = lastMsgSnap.docs[0].data();
-            if (msg.type === 'image') {
-              lastMessage = 'Sent a photo';
-            } else if (msg.type === 'audio') {
-              lastMessage = '🎤 Voice message';
-            } else if (msg.text) {
-              lastMessage = msg.text;
-            } else {
-              lastMessage = 'New message';
-            }
-            // Fetch sender username
-            if (msg.senderId) {
-              const senderDoc = await getDoc(doc(db, 'profiles', msg.senderId));
-              lastSender = senderDoc.exists() ? senderDoc.data().username || '' : '';
-            }
-          } else {
-            lastMessage = 'No messages yet';
-          }
-          return {
-            ...chat,
-            name: activityName,
-            image: activityImage,
-            activityType,
-            lastMessage,
-            lastSender,
-            date: activityDate,
-            time: activityTime,
-          };
-        })
-      );
-      setChats(chatsWithDetails);
-    }
-    setIsReady(true);
-  };
-
-  useFocusEffect(
-    React.useCallback(() => {
-      if (!chats.length) {
-        loadChats(); // Only fetch if chats are empty
+  // Real-time subscription to user's chats; cleanly rewire on auth changes and swallow permission-denied on logout
+  useEffect(() => {
+    let unsubChats: undefined | (() => void);
+    const offAuth = onAuthStateChanged(auth, (fbUser) => {
+      // Tear down previous subscription
+      if (unsubChats) {
+        unsubChats();
+        unsubChats = undefined;
       }
-    }, [chats])
-  );
+      if (!fbUser) {
+        setChats([]);
+        setIsReady(true);
+        return;
+      }
+      const uid = fbUser.uid;
+      const q = query(collection(db, 'chats'), where('participants', 'array-contains', uid));
+      unsubChats = onSnapshot(
+        q,
+        async (snapshot) => {
+          const baseChats: Chat[] = snapshot.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
+          // Enrich with activity details and use chat doc lastMessage* for instant updates
+          const chatsWithDetails = await Promise.all(baseChats.map(async (chat: Chat) => {
+            let activityName = 'Group Chat';
+            let activityImage = 'https://via.placeholder.com/50';
+            let activityType = '';
+            let activityDate = '';
+            let activityTime = '';
+            if (chat.activityId) {
+              const activityDoc = await getDoc(doc(db, 'activities', chat.activityId));
+              if (activityDoc.exists()) {
+                const activityData: any = activityDoc.data();
+                activityName = activityData.activity || activityData.name || 'Group Chat';
+                activityImage = activityData.image || 'https://via.placeholder.com/50';
+                activityType = activityData.activity || '';
+                activityDate = activityData.date || '';
+                activityTime = activityData.time || '';
+              }
+            }
+            let lastMessage = 'No messages yet';
+            let lastSender = '';
+            if ((chat as any).lastMessageText) {
+              lastMessage = (chat as any).lastMessageText;
+            } else if ((chat as any).lastMessageType === 'image') {
+              lastMessage = 'Sent a photo';
+            } else if ((chat as any).lastMessageType === 'audio') {
+              lastMessage = '🎤 Voice message';
+            }
+            const senderId = (chat as any).lastMessageSenderId;
+            if (senderId) {
+              const senderDoc = await getDoc(doc(db, 'profiles', senderId));
+              lastSender = senderDoc.exists() ? (senderDoc.data() as any).username || '' : '';
+            }
+            return {
+              ...chat,
+              name: activityName,
+              image: activityImage,
+              activityType,
+              lastMessage,
+              lastSender,
+              date: activityDate,
+              time: activityTime,
+            };
+          }));
+          setChats(chatsWithDetails);
+          setIsReady(true);
+        },
+        (error) => {
+          // Swallow permission denied (e.g., during logout) to avoid uncaught error logs
+          if ((error as any)?.code !== 'permission-denied') {
+            console.error('Chats subscription error:', error);
+          } else {
+            setChats([]);
+            setIsReady(true);
+          }
+        }
+      );
+    });
+    return () => {
+      if (unsubChats) unsubChats();
+      offAuth();
+    };
+  }, []);
 
   const onRefresh = async () => {
     setRefreshing(true);
     setRefreshLocked(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    await loadChats();
+    // In real-time mode, just briefly toggle the spinner; data will come from snapshot
+    // Optionally, you could force-refresh any derived data here
     setTimeout(() => {
       setRefreshing(false);
       setRefreshLocked(false);
     }, 1500);
   };
 
-  const filteredChats = chats.filter((chat) =>
-    chat.name?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // Already filtered by subscription (participants contains current user); apply search filter
+  const filteredChats = chats.filter((chat) => chat.name?.toLowerCase().includes(searchQuery.toLowerCase()));
 
   const renderChatItem = ({ item }: any) => (
     <TouchableOpacity

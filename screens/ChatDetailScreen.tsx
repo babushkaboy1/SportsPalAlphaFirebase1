@@ -22,7 +22,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { listenToMessages, sendMessage } from '../utils/firestoreChats';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { db, auth } from '../firebaseConfig';
 import { ActivityIcon } from '../components/ActivityIcons'; // Make sure this is imported
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -90,28 +90,68 @@ const ChatDetailScreen = () => {
     };
   }, []);
 
-  // Listen to Firestore messages
+  // Listen to Firestore messages only after confirming access to the chat
   useEffect(() => {
-    const unsubscribe = listenToMessages(chatId, (msgs: any[]) => {
-      // Sort by timestamp
-      const sorted = msgs.sort((a, b) => (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0));
-      const prevLength = messages.length;
-      setMessages(sorted);
-      
-      // Only auto-scroll if it's not the initial load or if new messages were added
-      if (!isInitialLoad.current && sorted.length > prevLength) {
-        setTimeout(() => {
-          flatListRef.current?.scrollToEnd({ animated: true });
-        }, 100);
+    let unsubscribeMessages: undefined | (() => void);
+    const ref = doc(db, 'chats', chatId);
+    const unsubAccess = onSnapshot(ref, (snap) => {
+      if (!snap.exists()) {
+        Alert.alert(
+          'Chat not found',
+          'This chat no longer exists.',
+          [{ text: 'OK', onPress: () => navigation.goBack() }]
+        );
+        return;
       }
-      
-      // Mark initial load as complete and trigger fade-in
-      if (isInitialLoad.current) {
-        isInitialLoad.current = false;
-        setIsMessagesReady(true);
+      const data: any = snap.data();
+      const uid = auth.currentUser?.uid;
+      if (!uid || !Array.isArray(data.participants) || !data.participants.includes(uid)) {
+        Alert.alert(
+          'Access Denied',
+          'You are no longer a participant in this group chat.',
+          [{ text: 'OK', onPress: () => navigation.goBack() }]
+        );
+        return;
       }
+      // Start messages subscription if not already
+      if (!unsubscribeMessages) {
+        unsubscribeMessages = listenToMessages(
+          chatId,
+          (msgs: any[]) => {
+            const sorted = msgs.sort((a, b) => (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0));
+            const prevLength = messages.length;
+            setMessages(sorted);
+            if (!isInitialLoad.current && sorted.length > prevLength) {
+              setTimeout(() => {
+                flatListRef.current?.scrollToEnd({ animated: true });
+              }, 100);
+            }
+            if (isInitialLoad.current) {
+              isInitialLoad.current = false;
+              setIsMessagesReady(true);
+            }
+          },
+          (error) => {
+            // Permission denied or other errors: exit chat
+            Alert.alert(
+              'Access Denied',
+              'You are no longer allowed to view this chat.',
+              [{ text: 'OK', onPress: () => navigation.goBack() }]
+            );
+          }
+        );
+      }
+    }, (error) => {
+      Alert.alert(
+        'Access Denied',
+        'You are no longer allowed to view this chat.',
+        [{ text: 'OK', onPress: () => navigation.goBack() }]
+      );
     });
-    return unsubscribe;
+    return () => {
+      if (unsubscribeMessages) unsubscribeMessages();
+      unsubAccess();
+    };
   }, [chatId, messages.length]);
 
   // Fetch sender profiles
@@ -420,18 +460,35 @@ const ChatDetailScreen = () => {
   };
 
   useEffect(() => {
-    const checkAccess = async () => {
-      const chatDoc = await getDoc(doc(db, 'chats', chatId));
-      const chatData = chatDoc.data();
-      if (!chatData?.participants?.includes(auth.currentUser?.uid)) {
+    // Live-guard chat access; if user removed, go back immediately
+    const ref = doc(db, 'chats', chatId);
+    const unsub = onSnapshot(ref, (snap) => {
+      if (!snap.exists()) {
         Alert.alert(
-          "Access Denied",
-          "You are no longer a participant in this group chat.",
-          [{ text: "OK", onPress: () => navigation.goBack() }]
+          'Chat not found',
+          'This chat no longer exists.',
+          [{ text: 'OK', onPress: () => navigation.goBack() }]
+        );
+        return;
+      }
+      const data: any = snap.data();
+      const uid = auth.currentUser?.uid;
+      if (!uid || !Array.isArray(data.participants) || !data.participants.includes(uid)) {
+        Alert.alert(
+          'Access Denied',
+          'You are no longer a participant in this group chat.',
+          [{ text: 'OK', onPress: () => navigation.goBack() }]
         );
       }
-    };
-    checkAccess();
+    }, (error) => {
+      // Handle permission errors by exiting
+      Alert.alert(
+        'Access Denied',
+        'You are no longer allowed to view this chat.',
+        [{ text: 'OK', onPress: () => navigation.goBack() }]
+      );
+    });
+    return () => unsub();
   }, [chatId]);
 
   return (

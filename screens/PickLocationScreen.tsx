@@ -39,6 +39,16 @@ export default function PickLocationScreen({ navigation, route }: Props) {
           }
           if (location) {
             setUserLocation(location.coords);
+            // Lock in current location immediately if no initial coords were provided
+            if (!selectedCoords) {
+              setSelectedCoords({ latitude: location.coords.latitude, longitude: location.coords.longitude });
+              try {
+                const [rev] = await Location.reverseGeocodeAsync({ latitude: location.coords.latitude, longitude: location.coords.longitude });
+                if (rev) {
+                  setAddress(formatSimpleAddress(rev));
+                }
+              } catch {}
+            }
           }
         }
       } catch (e) {
