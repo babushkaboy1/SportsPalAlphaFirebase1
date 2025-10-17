@@ -1,5 +1,6 @@
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
+import { Platform } from 'react-native';
 import { ref, uploadString, uploadBytes, getDownloadURL, listAll, getStorage } from 'firebase/storage';
 import { storage, auth } from '../firebaseConfig';
 
@@ -47,18 +48,35 @@ export async function compressImage(uri: string) {
 
 export async function uploadProfileImage(uri: string, userId: string) {
   console.log("🚀 Starting upload for user:", userId);
+  // Resize + compress aggressively for avatars (reduce storage + egress cost)
+  // Keep JPEG for broad compatibility and stable content-type.
+  const originalInfo = await FileSystem.getInfoAsync(uri);
   const manipulated = await ImageManipulator.manipulateAsync(
     uri,
-    [], // or { resize: { width: 1024 } }
-    { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
+    [{ resize: { width: 640 } }],
+    { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
   );
+  const manipulatedInfo = await FileSystem.getInfoAsync(manipulated.uri);
+  const originalBytes = (originalInfo as any)?.size as number | undefined;
+  const manipulatedBytes = (manipulatedInfo as any)?.size as number | undefined;
+  let uploadUri = manipulated.uri;
+  if (originalBytes && manipulatedBytes) {
+    if (manipulatedBytes > originalBytes) {
+      // Do not upsize: keep the original file if compression made it bigger
+      uploadUri = uri;
+      console.log(`📦 Avatar kept original: ${(originalBytes/1024).toFixed(0)}KB (processed would be ${(manipulatedBytes/1024).toFixed(0)}KB)`);
+    } else {
+      const savings = (((originalBytes - manipulatedBytes) / originalBytes) * 100).toFixed(1);
+      console.log(`📦 Avatar size: ${(originalBytes/1024).toFixed(0)}KB → ${(manipulatedBytes/1024).toFixed(0)}KB (${savings}% smaller)`);
+    }
+  }
 
   const filePath = `profilePictures/${userId}/profile.jpg`;
   const imageRef = ref(storage, filePath);
 
   // A) Try DATA-URL first → avoids ArrayBuffer/Blob paths entirely
   try {
-    const base64 = await FileSystem.readAsStringAsync(manipulated.uri, {
+    const base64 = await FileSystem.readAsStringAsync(uploadUri, {
       encoding: FileSystem.EncodingType.Base64,
     });
     await uploadString(
@@ -76,7 +94,7 @@ export async function uploadProfileImage(uri: string, userId: string) {
 
   // B) Fallback: Blob
   try {
-    const blob = await getBlobFromUri(manipulated.uri);
+    const blob = await getBlobFromUri(uploadUri);
     await uploadBytes(imageRef, blob, {
       contentType: 'image/jpeg',
       cacheControl: 'public,max-age=604800',
@@ -92,12 +110,33 @@ export async function uploadProfileImage(uri: string, userId: string) {
 }
 
 export async function uploadChatImage(uri: string, userId: string, imageId: string) {
+  // Resize + compress chat images to keep quality while controlling size
+  const originalInfo = await FileSystem.getInfoAsync(uri);
+  const processed = await ImageManipulator.manipulateAsync(
+    uri,
+    [{ resize: { width: 1280 } }],
+    { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
+  );
+  const processedInfo = await FileSystem.getInfoAsync(processed.uri);
+  const originalBytes2 = (originalInfo as any)?.size as number | undefined;
+  const processedBytes = (processedInfo as any)?.size as number | undefined;
+  let uploadUri2 = processed.uri;
+  if (originalBytes2 && processedBytes) {
+    if (processedBytes > originalBytes2) {
+      uploadUri2 = uri; // keep original if our processing increased size
+      console.log(`📦 Chat image kept original: ${(originalBytes2/1024).toFixed(0)}KB (processed would be ${(processedBytes/1024).toFixed(0)}KB)`);
+    } else {
+      const savings = (((originalBytes2 - processedBytes) / originalBytes2) * 100).toFixed(1);
+      console.log(`📦 Chat image: ${(originalBytes2/1024).toFixed(0)}KB → ${(processedBytes/1024).toFixed(0)}KB (${savings}% smaller)`);
+    }
+  }
+
   const filePath = `chatImages/${userId}/${imageId}.jpg`;
   const imageRef = ref(storage, filePath);
 
   // A) Try DATA-URL first
   try {
-    const base64 = await FileSystem.readAsStringAsync(uri, {
+    const base64 = await FileSystem.readAsStringAsync(uploadUri2, {
       encoding: FileSystem.EncodingType.Base64,
     });
     await uploadString(
@@ -115,7 +154,7 @@ export async function uploadChatImage(uri: string, userId: string, imageId: stri
 
   // B) Fallback: Blob
   try {
-    const blob = await getBlobFromUri(uri);
+    const blob = await getBlobFromUri(uploadUri2);
     await uploadBytes(imageRef, blob, {
       contentType: 'image/jpeg',
       cacheControl: 'public,max-age=604800',

@@ -27,7 +27,7 @@ import { db, auth } from '../firebaseConfig';
 import { ActivityIcon } from '../components/ActivityIcons'; // Make sure this is imported
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../types/navigation';
-import { compressImage, uploadChatImage } from '../utils/imageUtils';
+import { uploadChatImage } from '../utils/imageUtils';
 
 // Firestore message type
 type Message = {
@@ -52,6 +52,7 @@ const ChatDetailScreen = () => {
   const audioPlayer = useAudioPlayer();
   const [playbackRate, setPlaybackRate] = useState(1.0);
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
+  const [viewerUri, setViewerUri] = useState<string | null>(null);
   const [activityInfo, setActivityInfo] = useState<{ name: string, type: string, date: string, time: string } | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const progressRef = useRef(0);
@@ -181,10 +182,13 @@ const ChatDetailScreen = () => {
     
     // Send images
     for (const uri of selectedImages) {
-      const compressedUri = await compressImage(uri);
-      const imageId = Date.now().toString();
-      const downloadUrl = await uploadChatImage(compressedUri, auth.currentUser.uid, imageId);
-      await sendMessage(chatId, auth.currentUser.uid, downloadUrl, 'image');
+      try {
+        const imageId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const downloadUrl = await uploadChatImage(uri, auth.currentUser.uid, imageId);
+        await sendMessage(chatId, auth.currentUser.uid, downloadUrl, 'image');
+      } catch (e: any) {
+        Alert.alert('Upload failed', e?.message || 'Could not upload image.');
+      }
     }
     setSelectedImages([]);
     
@@ -238,7 +242,14 @@ const ChatDetailScreen = () => {
       quality: 0.8,
     });
     if (!result.canceled && result.assets && result.assets.length > 0) {
-      setSelectedImages(prev => [...prev, result.assets[0].uri]);
+      setSelectedImages(prev => {
+        const MAX = 3;
+        if (prev.length >= MAX) {
+          Alert.alert('Limit reached', 'You can only send up to 3 images at a time.');
+          return prev;
+        }
+        return [...prev, result.assets[0].uri].slice(0, MAX);
+      });
     }
   };
 
@@ -254,7 +265,20 @@ const ChatDetailScreen = () => {
       quality: 0.8,
     });
     if (!result.canceled && result.assets && result.assets.length > 0) {
-      setSelectedImages(result.assets.map(asset => asset.uri));
+      setSelectedImages(prev => {
+        const MAX = 3;
+        const remaining = MAX - prev.length;
+        if (remaining <= 0) {
+          Alert.alert('Limit reached', 'You can only send up to 3 images at a time.');
+          return prev;
+        }
+        const picked = result.assets.map(a => a.uri).slice(0, remaining);
+        const next = [...prev, ...picked];
+        if (result.assets.length > remaining) {
+          Alert.alert('Limit reached', 'Only the first 3 images will be added.');
+        }
+        return next;
+      });
     }
   };
 
@@ -368,7 +392,11 @@ const ChatDetailScreen = () => {
             {item.type === 'image' && item.text ? (
               (() => {
                 if (typeof item.text === 'string' && item.text) {
-                  return <Image source={{ uri: item.text }} style={styles.media} />;
+                  return (
+                    <TouchableOpacity activeOpacity={0.85} onPress={() => setViewerUri(item.text)}>
+                      <Image source={{ uri: item.text }} style={styles.media} />
+                    </TouchableOpacity>
+                  );
                 } else {
                   return <Image source={require('../assets/default-group.png')} style={styles.media} />;
                 }
@@ -531,6 +559,34 @@ const ChatDetailScreen = () => {
                   </TouchableOpacity>
                 </View>
               ))}
+            </View>
+          )}
+          {/* Full-screen image viewer */}
+          {viewerUri && (
+            <View
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                backgroundColor: 'rgba(0,0,0,0.95)',
+                zIndex: 999,
+              }}
+            >
+              <SafeAreaView style={{ flex: 1 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', padding: 10 }}>
+                  <TouchableOpacity onPress={() => setViewerUri(null)} style={styles.headerBack}>
+                    <Ionicons name="arrow-back" size={26} color="#1ae9ef" />
+                  </TouchableOpacity>
+                </View>
+                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                  <Image
+                    source={{ uri: viewerUri }}
+                    style={{ width: '100%', height: '100%', resizeMode: 'contain' }}
+                  />
+                </View>
+              </SafeAreaView>
             </View>
           )}
         </View>

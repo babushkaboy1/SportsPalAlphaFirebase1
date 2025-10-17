@@ -26,6 +26,7 @@ import { Picker } from '@react-native-picker/picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { createActivity, joinActivity, fetchAllActivities } from '../utils/firestoreActivities';
 import { auth } from '../firebaseConfig'; // Add this import
+import * as Haptics from 'expo-haptics';
 
 const THEME_COLOR = '#1ae9ef';
 
@@ -68,6 +69,11 @@ const CreateGameScreen = () => {
   const [showParticipantsPicker, setShowParticipantsPicker] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const scrollRef = useRef(null);
+  const pullAnim = useRef(new Animated.Value(0)).current; // pixels pulled down when at top
+  const CLEAR_THRESHOLD = 110; // pull distance to clear
+  const lastPullRef = useRef(0);
+  const HEADER_OVERLAY_OFFSET = 68; // position overlay lower, near the title
 
   useEffect(() => {
     const timeout = setTimeout(() => setIsReady(true), 500);
@@ -80,8 +86,12 @@ const CreateGameScreen = () => {
         try {
           const [address] = await Location.reverseGeocodeAsync(selectedCoords);
           if (address) {
-            const addressString = `${address.name ? address.name + ', ' : ''}${address.street ? address.street + ', ' : ''}${address.city ? address.city + ', ' : ''}${address.region ? address.region + ', ' : ''}${address.country ? address.country : ''}`;
-            setLocation(addressString.trim().replace(/,\s*$/, ''));
+            // Simplified format: "StreetName StreetNumber PostalCode"
+            const streetNumber = (address as any).streetNumber || (address.name && /^\d+$/.test(address.name) ? address.name : '');
+            const street = address.street || '';
+            const first = [street, streetNumber].filter(Boolean).join(' ').trim();
+            const addressString = [first, address.postalCode].filter(Boolean).join(' ').trim();
+            setLocation(addressString);
           } else {
             setLocation(`Lat: ${selectedCoords.latitude.toFixed(5)}, Lng: ${selectedCoords.longitude.toFixed(5)}`);
           }
@@ -99,10 +109,43 @@ const CreateGameScreen = () => {
     setDescription('');
     setSport('');
     setLocation('');
-    setDate('');
-    setTime('');
+    // Restore defaults for date/time
+    setDate(new Date().toISOString().split('T')[0]);
+    const now = new Date();
+    setTime(`${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`);
     setMaxParticipants(10);
     setSelectedCoords(null);
+  };
+
+  const handleScroll = (e: any) => {
+    const y = e.nativeEvent.contentOffset?.y ?? 0;
+    if (y < 0) {
+      const d = Math.min(-y, CLEAR_THRESHOLD + 40);
+      pullAnim.setValue(d);
+      lastPullRef.current = d;
+    } else if (lastPullRef.current !== 0) {
+      pullAnim.setValue(0);
+      lastPullRef.current = 0;
+    }
+  };
+
+  const handleRelease = async () => {
+    const pulled = lastPullRef.current;
+    if (pulled >= CLEAR_THRESHOLD) {
+      try {
+        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      } catch {}
+      // Clear the form
+      resetForm();
+      // Affirm animation then collapse
+      Animated.sequence([
+        Animated.timing(pullAnim, { toValue: CLEAR_THRESHOLD + 20, duration: 120, useNativeDriver: false }),
+        Animated.timing(pullAnim, { toValue: 0, duration: 280, useNativeDriver: false }),
+      ]).start();
+    } else {
+      // Just collapse header
+      Animated.timing(pullAnim, { toValue: 0, duration: 180, useNativeDriver: false }).start();
+    }
   };
 
   const handleCreateGame = async () => {
@@ -219,10 +262,76 @@ const CreateGameScreen = () => {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
+        {/* Fixed pull-to-clear overlay above the title */}
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.pullOverlay,
+            {
+              top: insets.top + HEADER_OVERLAY_OFFSET,
+              opacity: pullAnim.interpolate({
+                inputRange: [0, 20, CLEAR_THRESHOLD * 0.4, CLEAR_THRESHOLD],
+                outputRange: [0, 0.25, 0.8, 1],
+                extrapolate: 'clamp',
+              }),
+              transform: [
+                {
+                  scale: pullAnim.interpolate({
+                    inputRange: [0, CLEAR_THRESHOLD],
+                    outputRange: [0.6, 1],
+                    extrapolate: 'clamp',
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+          <View style={styles.clearBadge}>
+            <Ionicons name="close" size={18} color="#fff" />
+          </View>
+          <Animated.Text
+            style={[
+              styles.pullClearText,
+              {
+                opacity: pullAnim.interpolate({
+                  inputRange: [0, CLEAR_THRESHOLD * 0.6, CLEAR_THRESHOLD],
+                  outputRange: [0.8, 1, 0],
+                  extrapolate: 'clamp',
+                }),
+              },
+            ]}
+          >
+            Pull to clear form
+          </Animated.Text>
+          <Animated.Text
+            style={[
+              styles.pullClearText,
+              {
+                position: 'absolute',
+                top: 32,
+                opacity: pullAnim.interpolate({
+                  inputRange: [0, CLEAR_THRESHOLD - 10, CLEAR_THRESHOLD, CLEAR_THRESHOLD + 10],
+                  outputRange: [0, 0, 0.95, 1],
+                  extrapolate: 'clamp',
+                }),
+              },
+            ]}
+          >
+            Release to clear
+          </Animated.Text>
+        </Animated.View>
         <View style={styles.header}>
           <Text style={styles.headerTitle}>Create Activity</Text>
         </View>
-        <ScrollView contentContainerStyle={styles.form}>
+        <ScrollView
+          ref={scrollRef}
+          contentContainerStyle={styles.form}
+          scrollEventThrottle={16}
+          onScroll={handleScroll}
+          onScrollEndDrag={handleRelease}
+          overScrollMode="always"
+          alwaysBounceVertical
+        >
           <Text style={styles.sectionLabel}>Name your activity</Text>
           <TextInput
             style={styles.input}
@@ -261,16 +370,39 @@ const CreateGameScreen = () => {
           </ScrollView>
 
           <Text style={styles.sectionLabel}>Location</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Pick a location"
-            placeholderTextColor="#ccc"
-            value={location}
-            editable={false}
-          />
+          <TouchableOpacity
+            activeOpacity={0.7}
+            onPress={() =>
+              navigation.navigate('PickLocation', {
+                initialCoords: selectedCoords,
+                darkMapStyle,
+                returnTo: 'CreateGame',
+                formState: {
+                  activityName,
+                  description,
+                  sport,
+                  date,
+                  time,
+                  maxParticipants,
+                },
+              })
+            }
+          >
+            <TextInput
+              style={styles.input}
+              placeholder="Pick a location"
+              placeholderTextColor="#ccc"
+              value={location}
+              editable={false}
+              pointerEvents="none"
+            />
+          </TouchableOpacity>
           <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
             <TouchableOpacity
-              style={styles.mapButton}
+              style={[
+                styles.mapButton,
+                selectedCoords ? { backgroundColor: '#009fa3' } : null,
+              ]}
               onPress={() =>
                 navigation.navigate('PickLocation', {
                   initialCoords: selectedCoords,
@@ -324,6 +456,7 @@ const CreateGameScreen = () => {
                     value={date ? new Date(date) : new Date()}
                     mode="date"
                     display="spinner"
+                    themeVariant="dark"
                     onChange={(event, selectedDate) => {
                       if (event.type === 'set' && selectedDate) {
                         setDate(selectedDate.toISOString().split('T')[0]);
@@ -380,6 +513,7 @@ const CreateGameScreen = () => {
                     value={time ? new Date(`1970-01-01T${time}:00`) : new Date()}
                     mode="time"
                     display="spinner"
+                    themeVariant="dark"
                     onChange={(event, selectedTime) => {
                       if (event.type === 'set' && selectedTime) {
                         const hours = selectedTime.getHours().toString().padStart(2, '0');
@@ -499,6 +633,27 @@ const styles = StyleSheet.create({
   form: {
     paddingBottom: 0,
   },
+  unfoldHeader: {
+    width: '100%',
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    paddingBottom: 6,
+    backgroundColor: 'transparent',
+  },
+  clearBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#009fa3',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 6,
+  },
+  pullClearText: {
+    color: '#9aa0a6',
+    fontSize: 12,
+  },
   sectionLabel: {
     color: THEME_COLOR,
     fontSize: 18,
@@ -602,5 +757,13 @@ const styles = StyleSheet.create({
   rollerPicker: {
     width: '100%',
     backgroundColor: 'transparent',
+  },
+  pullOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 5,
   },
 });

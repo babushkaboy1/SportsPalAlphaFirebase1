@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { View, TouchableOpacity, Text, Platform, ActivityIndicator } from 'react-native';
-import MapView, { Marker, UrlTile, PROVIDER_DEFAULT, Region } from 'react-native-maps';
+import { View, TouchableOpacity, Text, Platform, ActivityIndicator, TextInput, Alert, ScrollView } from 'react-native';
+import MapView, { Marker, PROVIDER_DEFAULT, Region } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { StackScreenProps } from '@react-navigation/stack';
@@ -18,7 +18,13 @@ export default function PickLocationScreen({ navigation, route }: Props) {
     route.params?.initialCoords ?? null
   );
   const [address, setAddress] = useState<string>('');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [suggestions, setSuggestions] = useState<Array<{ id: string; title: string; subtitle?: string; latitude: number; longitude: number }>>([]);
+  const [showSuggestions, setShowSuggestions] = useState<boolean>(false);
+  const [isSearching, setIsSearching] = useState<boolean>(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const insets = useSafeAreaInsets();
+  
 
   useEffect(() => {
     (async () => {
@@ -42,15 +48,14 @@ export default function PickLocationScreen({ navigation, route }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Format address simply: "Street Number, City, Region PostalCode"
+  // Format address simply: "StreetName StreetNumber PostalCode" (e.g., "Xryshidos 21 11363")
   const formatSimpleAddress = (result: any) => {
-    const parts = [
-      [result.street, result.name].filter(Boolean).join(' '), // e.g. "Chryshidos 21"
-      result.city,
-      result.region,
-      result.postalCode
-    ].filter(Boolean);
-    return parts.join(', ');
+    // Some providers put the number in streetNumber, others in name. Prefer streetNumber.
+    const streetNumber = result.streetNumber || (result.name && /^\d+$/.test(result.name) ? result.name : '');
+    const street = result.street || '';
+    const first = [street, streetNumber].filter(Boolean).join(' ').trim();
+    const parts = [first, result.postalCode].filter(Boolean);
+    return parts.join(' ').trim();
   };
 
   // Fetch address when selectedCoords changes
@@ -71,6 +76,87 @@ export default function PickLocationScreen({ navigation, route }: Props) {
     };
     fetchAddress();
   }, [selectedCoords]);
+
+  // Search handler: geocode query and move the map
+  const handleSearch = async () => {
+    const query = searchQuery.trim();
+    if (!query) return;
+    try {
+      const results = await Location.geocodeAsync(query);
+      if (results && results.length > 0) {
+        const { latitude, longitude } = results[0];
+        const region = { latitude, longitude, latitudeDelta: 0.01, longitudeDelta: 0.01 };
+        setSelectedCoords({ latitude, longitude });
+        mapRef.current?.animateToRegion(region);
+        // Try to fetch and show address for the result
+        try {
+          const [rev] = await Location.reverseGeocodeAsync({ latitude, longitude });
+          if (rev) setAddress(formatSimpleAddress(rev));
+        } catch {}
+        setShowSuggestions(false);
+      } else {
+        Alert.alert('No results', 'Could not find that place. Try a more specific address.');
+      }
+    } catch (e) {
+      Alert.alert('Search failed', 'There was a problem searching that location.');
+    }
+  };
+
+  // Debounced suggestions on typing
+  const handleQueryChange = (text: string) => {
+    setSearchQuery(text);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (!text || text.trim().length < 3) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+    debounceRef.current = setTimeout(async () => {
+      setIsSearching(true);
+      try {
+        const q = encodeURIComponent(text.trim());
+        const url = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&limit=8&q=${q}`;
+        const res = await fetch(url, {
+          headers: {
+            'Accept': 'application/json',
+            // Provide a friendly UA per Nominatim policy
+            'User-Agent': 'SportsPalApp/1.0 (+https://sportspal.app)'
+          },
+        });
+        const data: any[] = await res.json();
+        const mapped = (data || []).map((item: any, idx: number) => {
+          const title = item.display_name?.split(',').slice(0, 2).join(', ').trim() || text.trim();
+          const parts = item.display_name?.split(',').map((s: string) => s.trim()) || [];
+          const subtitle = parts.slice(2, 6).join(', ');
+          return {
+            id: `${item.osm_type}-${item.osm_id}-${idx}`,
+            title,
+            subtitle: subtitle || undefined,
+            latitude: parseFloat(item.lat),
+            longitude: parseFloat(item.lon),
+          };
+        });
+        setSuggestions(mapped);
+        setShowSuggestions(mapped.length > 0);
+      } catch (e) {
+        setSuggestions([]);
+        setShowSuggestions(false);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 350);
+  };
+
+  const handlePickSuggestion = async (item: { latitude: number; longitude: number; title: string }) => {
+    const { latitude, longitude } = item;
+    setSelectedCoords({ latitude, longitude });
+    mapRef.current?.animateToRegion({ latitude, longitude, latitudeDelta: 0.01, longitudeDelta: 0.01 });
+    try {
+      const [rev] = await Location.reverseGeocodeAsync({ latitude, longitude });
+      if (rev) setAddress(formatSimpleAddress(rev));
+    } catch {}
+    setShowSuggestions(false);
+  };
 
   // Move map to user location
   const goToMyLocation = async () => {
@@ -105,15 +191,75 @@ export default function PickLocationScreen({ navigation, route }: Props) {
   return (
     <View style={{ flex: 1, backgroundColor: '#121212' }}>
       {/* Back Button */}
-      <TouchableOpacity
-        style={{
-          position: 'absolute', top: 40, left: 20, zIndex: 20,
-          backgroundColor: DARK_TURQUOISE, borderRadius: 24, padding: 8,
-        }}
-        onPress={() => navigation.goBack()}
-      >
-        <Ionicons name="arrow-back" size={28} color="#fff" />
-      </TouchableOpacity>
+      <View style={{ position: 'absolute', top: 40, left: 20, right: 20, zIndex: 20, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+        <TouchableOpacity
+          style={{ backgroundColor: DARK_TURQUOISE, borderRadius: 24, padding: 8 }}
+          onPress={() => navigation.goBack()}
+        >
+          <Ionicons name="arrow-back" size={28} color="#fff" />
+        </TouchableOpacity>
+        {/* Search Bar */}
+        <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: '#1e1e1e', borderRadius: 24, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: '#2a2a2a' }}>
+          <Ionicons name="search" size={18} color={DARK_TURQUOISE} />
+          <TextInput
+            placeholder="Search address or place"
+            placeholderTextColor="#888"
+            style={{ flex: 1, color: '#fff', marginLeft: 8, paddingVertical: 4 }}
+            value={searchQuery}
+            onChangeText={handleQueryChange}
+            returnKeyType="search"
+            onSubmitEditing={async () => {
+              await handleSearch();
+            }}
+          />
+        </View>
+      </View>
+
+      {/* Suggestions Dropdown */}
+      {showSuggestions && (
+        <View
+          style={{
+            position: 'absolute',
+            top: 90,
+            left: 20,
+            right: 20,
+            backgroundColor: '#1e1e1e',
+            borderRadius: 12,
+            borderWidth: 1,
+            borderColor: '#2a2a2a',
+            zIndex: 25,
+            maxHeight: 300,
+            overflow: 'hidden',
+          }}
+        >
+          <View style={{ paddingVertical: 8, paddingHorizontal: 12, borderBottomColor: '#2a2a2a', borderBottomWidth: 1 }}>
+            <Text style={{ color: '#aaa', fontSize: 12 }}>
+              {isSearching ? 'Searching…' : 'Suggestions'}
+            </Text>
+          </View>
+          <ScrollView keyboardShouldPersistTaps="handled">
+            {suggestions.map((s) => (
+              <TouchableOpacity
+                key={s.id}
+                style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10 }}
+                onPress={() => handlePickSuggestion(s)}
+              >
+                <Ionicons name="location-outline" size={18} color="#1ae9ef" />
+                <View style={{ marginLeft: 10, flex: 1 }}>
+                  <Text style={{ color: '#fff', fontSize: 14, fontWeight: '600' }} numberOfLines={1}>
+                    {s.title}
+                  </Text>
+                  {s.subtitle ? (
+                    <Text style={{ color: '#bbb', fontSize: 12 }} numberOfLines={1}>
+                      {s.subtitle}
+                    </Text>
+                  ) : null}
+                </View>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      )}
 
       <MapView
         ref={mapRef}
@@ -131,14 +277,9 @@ export default function PickLocationScreen({ navigation, route }: Props) {
           setSelectedCoords({ latitude: region.latitude, longitude: region.longitude })
         }
       >
-        {Platform.OS === 'android' && (
-          <UrlTile
-            urlTemplate="https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
-            maximumZ={19}
-            flipY={false}
-          />
-        )}
       </MapView>
+
+      
 
       {/* Centered Pin */}
       <View pointerEvents="none" style={{
@@ -196,30 +337,7 @@ export default function PickLocationScreen({ navigation, route }: Props) {
         </TouchableOpacity>
       </View>
 
-      {/* OSM Attribution for Android, above confirm button */}
-      {Platform.OS === 'android' && (
-        <View
-          pointerEvents="none"
-          style={{
-            position: 'absolute',
-            bottom: 70,
-            left: 0,
-            right: 0,
-            alignItems: 'center',
-            zIndex: 40,
-          }}
-        >
-          <Text style={{
-            color: '#aaa',
-            fontSize: 12,
-            backgroundColor: 'rgba(18,18,18,0.7)',
-            paddingHorizontal: 8,
-            borderRadius: 6,
-          }}>
-            © OpenStreetMap contributors
-          </Text>
-        </View>
-      )}
+      {/* No OSM attribution needed without OSM tiles overlay */}
 
       {/* Confirm Button */}
       <TouchableOpacity

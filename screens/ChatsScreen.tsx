@@ -233,8 +233,8 @@ const ChatsScreen = ({ navigation }: any) => {
               <RefreshControl
                 refreshing={refreshing || refreshLocked}
                 onRefresh={onRefresh}
-                colors={["#1ae9ef"]}
-                tintColor="#1ae9ef"
+                colors={["#009fa3"]}
+                tintColor="#009fa3"
                 progressBackgroundColor="transparent"
               />
             }

@@ -11,6 +11,7 @@ import {
   RefreshControl,
   ActivityIndicator,
   Animated,
+  Alert,
 } from 'react-native';
 import * as Location from 'expo-location';
 import * as Haptics from 'expo-haptics';
@@ -21,9 +22,12 @@ import { convertToCalendarFormat, normalizeDateFormat } from '../utils/storage';
 import Ionicons from 'react-native-vector-icons/Ionicons'; // Import Ionicons
 import { ActivityIcon } from '../components/ActivityIcons'; // ✅ Correct import
 import { activities } from '../data/activitiesData';
+import * as ExpoCalendar from 'expo-calendar';
+import { doc, getDoc, updateDoc, arrayUnion } from 'firebase/firestore';
+import { db, auth } from '../firebaseConfig';
 
 const CalendarScreen = ({ navigation, route }: any) => {
-  const { joinedActivities, allActivities, reloadAllActivities } = useActivityContext();
+  const { joinedActivities, allActivities, reloadAllActivities, toggleJoinActivity } = useActivityContext();
   const [userLocation, setUserLocation] = useState<{ latitude: number, longitude: number } | null>(null);
   useEffect(() => {
     const getUserLocation = async () => {
@@ -40,6 +44,30 @@ const CalendarScreen = ({ navigation, route }: any) => {
     };
     getUserLocation();
   }, []);
+
+  // Load calendar status for all activities from Firebase
+  useEffect(() => {
+    const loadCalendarStatus = async () => {
+      const currentUserId = auth.currentUser?.uid;
+      if (!currentUserId || !allActivities.length) return;
+
+      const statusMap: Record<string, boolean> = {};
+      
+      for (const activity of allActivities) {
+        const activityRef = doc(db, 'activities', activity.id);
+        const activitySnap = await getDoc(activityRef);
+        if (activitySnap.exists()) {
+          const data = activitySnap.data();
+          const addedToCalendarIds = data.addedToCalendarByUsers || [];
+          statusMap[activity.id] = addedToCalendarIds.includes(currentUserId);
+        }
+      }
+      
+      setCalendarStatus(statusMap);
+    };
+    
+    loadCalendarStatus();
+  }, [allActivities]);
   const insets = useSafeAreaInsets();
 
   // Today's date as "YYYY-MM-DD"
@@ -51,6 +79,7 @@ const CalendarScreen = ({ navigation, route }: any) => {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshLocked, setRefreshLocked] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const [calendarStatus, setCalendarStatus] = useState<Record<string, boolean>>({});
 
   // Refresh handler
   const onRefresh = async () => {
@@ -116,6 +145,170 @@ const CalendarScreen = ({ navigation, route }: any) => {
     (activity) => convertToCalendarFormat(activity.date) === convertToCalendarFormat(currentDate)
   );
 
+  // Get sport-specific emoji for calendar event
+  const getSportEmoji = (sport: string): string => {
+    const emojiMap: { [key: string]: string } = {
+      'Basketball': '🏀',
+      'Soccer': '⚽',
+      'Running': '🏃',
+      'Gym': '🏋️',
+      'Calisthenics': '💪',
+      'Padel': '🎾',
+      'Tennis': '🎾',
+      'Cycling': '🚴',
+      'Swimming': '🏊',
+      'Badminton': '🏸',
+      'Volleyball': '🏐',
+    };
+    return emojiMap[sport] || '⚽';
+  };
+
+  // Handle add to calendar
+  const handleAddToCalendar = async (activity: any) => {
+    // Check if already added to calendar
+    if (calendarStatus[activity.id]) {
+      Alert.alert(
+        "Already Added",
+        "This event is already in your calendar. Want to add it to another calendar account or add it again?",
+        [
+          {
+            text: "Cancel",
+            style: "cancel",
+          },
+          {
+            text: "Add Again",
+            style: "default",
+            onPress: async () => {
+              await addToCalendar(activity);
+            },
+          },
+        ],
+        { cancelable: true }
+      );
+      return;
+    }
+    
+    await addToCalendar(activity);
+  };
+
+  const addToCalendar = async (activity: any) => {
+    try {
+      // Request calendar permissions
+      const { status } = await ExpoCalendar.requestCalendarPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert(
+          "Permission Denied",
+          "Calendar permission is required to add this activity to your calendar.",
+          [{ text: "OK" }]
+        );
+        return;
+      }
+
+      // Get available calendars
+      const calendars = await ExpoCalendar.getCalendarsAsync(ExpoCalendar.EntityTypes.EVENT);
+      
+      // Filter for writable calendars
+      const writableCalendars = calendars.filter((cal: any) => cal.allowsModifications);
+      
+      if (writableCalendars.length === 0) {
+        Alert.alert("No Calendar Available", "No writable calendar found on your device.");
+        return;
+      }
+
+      // Show calendar selection dialog
+      showCalendarPicker(writableCalendars, activity);
+    } catch (error) {
+      console.error("Error adding to calendar:", error);
+      Alert.alert("Error", "Failed to add activity to calendar.");
+    }
+  };
+
+  const showCalendarPicker = (calendars: any[], activity: any) => {
+    // Group calendars by source (Apple, Google, Outlook, etc.)
+    const calendarOptions = calendars.map((cal) => {
+      let accountType = cal.source.name || cal.source.type || 'Local';
+      // Simplify common calendar source names
+      if (accountType.toLowerCase().includes('icloud') || accountType.toLowerCase().includes('ios')) {
+        accountType = 'Apple';
+      } else if (accountType.toLowerCase().includes('google')) {
+        accountType = 'Google';
+      } else if (accountType.toLowerCase().includes('outlook') || accountType.toLowerCase().includes('microsoft')) {
+        accountType = 'Outlook';
+      } else if (accountType.toLowerCase().includes('samsung')) {
+        accountType = 'Samsung';
+      }
+      
+      return {
+        text: `${accountType} - ${cal.title}`,
+        onPress: async () => await createCalendarEvent(cal.id, activity),
+      };
+    });
+
+    calendarOptions.push({
+      text: "Cancel",
+      onPress: async () => {},
+    });
+
+    Alert.alert(
+      "Choose Calendar",
+      "Select which calendar account to add this event to:",
+      calendarOptions,
+      { cancelable: true }
+    );
+  };
+
+  const createCalendarEvent = async (calendarId: string, activity: any) => {
+    try {
+      // Parse date and time
+      const [year, month, day] = activity.date.split('-').map(Number);
+      const [hours, minutes] = activity.time.split(':').map(Number);
+      
+      const startDate = new Date(year, month - 1, day, hours, minutes);
+      const endDate = new Date(startDate.getTime() + 2 * 60 * 60 * 1000);
+
+      // Get sport-specific emoji
+      const sportEmoji = getSportEmoji(activity.activity);
+
+      // Create event details
+      const eventDetails = {
+        title: `${sportEmoji} ${activity.activity} Session`,
+        startDate: startDate,
+        endDate: endDate,
+        location: activity.location,
+        notes: `${activity.activity} session organized via SportsPal\n\nLocation: ${activity.location}\nDate: ${activity.date}\nTime: ${activity.time}`,
+        alarms: [
+          { relativeOffset: -360 },
+          { relativeOffset: -30 },
+        ],
+        calendarColor: '#1ae9ef',
+      };
+
+      const eventId = await ExpoCalendar.createEventAsync(calendarId, eventDetails);
+      
+      // Save to Firebase that this user added the activity to calendar
+      const currentUserId = auth.currentUser?.uid;
+      if (currentUserId) {
+        const activityRef = doc(db, 'activities', activity.id);
+        await updateDoc(activityRef, {
+          addedToCalendarByUsers: arrayUnion(currentUserId)
+        });
+        
+        // Update local state
+        setCalendarStatus(prev => ({ ...prev, [activity.id]: true }));
+      }
+      
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert(
+        "Added to Calendar! 📅",
+        `${activity.activity} has been added to your calendar with reminders at 6 hours and 30 minutes before the event.`,
+        [{ text: "OK" }]
+      );
+    } catch (error) {
+      console.error("Error creating calendar event:", error);
+      Alert.alert("Error", "Failed to create calendar event.");
+    }
+  };
+
   console.log('Selected Date:', currentDate);
   console.log('Marked Dates:', markedDates);
   if (process.env.NODE_ENV !== 'production') {
@@ -149,8 +342,8 @@ const CalendarScreen = ({ navigation, route }: any) => {
             <RefreshControl
               refreshing={refreshing || refreshLocked}
               onRefresh={onRefresh}
-              colors={["#1ae9ef"]}
-              tintColor="#1ae9ef"
+              colors={["#009fa3"]}
+              tintColor="#009fa3"
               progressBackgroundColor="transparent"
             />
           }
@@ -194,11 +387,14 @@ const CalendarScreen = ({ navigation, route }: any) => {
                   }
                   return location;
                 };
-                // Join/Leave logic (same as Discover)
-                const { isActivityJoined, toggleJoinActivity } = useActivityContext();
-                const isJoined = isActivityJoined(item.id);
+                // Use top-level context values
+                const isJoined = joinedActivities.includes(item.id);
                 const handleToggleJoin = async () => {
                   await toggleJoinActivity(item);
+                  // Reset calendar status when leaving activity
+                  if (!joinedActivities.includes(item.id)) {
+                    setCalendarStatus(prev => ({ ...prev, [item.id]: false }));
+                  }
                 };
                 return (
                   <TouchableOpacity
@@ -253,6 +449,7 @@ const CalendarScreen = ({ navigation, route }: any) => {
                         {item.joinedUserIds ? item.joinedUserIds.length : item.joinedCount} / {item.maxParticipants}
                       </Text>
                     </View>
+                    {/* ...existing code... */}
                     <View style={styles.cardActions}>
                       <TouchableOpacity
                         style={[styles.joinButton, isJoined && styles.joinButtonJoined]}
@@ -263,6 +460,20 @@ const CalendarScreen = ({ navigation, route }: any) => {
                         </Text>
                       </TouchableOpacity>
                       <View style={{ flex: 1 }} />
+                      <TouchableOpacity
+                        style={[styles.addToCalendarButton, calendarStatus[item.id] && styles.addToCalendarButtonAdded]}
+                        onPress={() => handleAddToCalendar(item)}
+                      >
+                        <Ionicons 
+                          name={calendarStatus[item.id] ? "checkmark-circle" : "calendar-outline"} 
+                          size={16} 
+                          color="#fff" 
+                          style={{ marginRight: 6 }}
+                        />
+                        <Text style={styles.addToCalendarText}>
+                          {calendarStatus[item.id] ? "Added to Calendar" : "Add to Calendar"}
+                        </Text>
+                      </TouchableOpacity>
                       <TouchableOpacity
                         style={styles.shareButton}
                         onPress={() => console.log(`Share event ${item.id}`)}
@@ -369,6 +580,25 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#ccc',
     fontWeight: '500',
+  },
+  addToCalendarButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-end',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: '#1ae9ef',
+    borderRadius: 5,
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  addToCalendarButtonAdded: {
+    backgroundColor: '#007b7b',
+  },
+  addToCalendarText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
   },
   cardActions: {
     flexDirection: 'row',

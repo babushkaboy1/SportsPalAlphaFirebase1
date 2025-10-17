@@ -14,12 +14,14 @@ import {
   Share,
   ActivityIndicator,
   Animated,
+  Modal,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import DateTimePickerModal from 'react-native-modal-datetime-picker';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { ActivityIcon } from '../components/ActivityIcons';
 import { fetchAllActivities } from '../utils/firestoreActivities';
 import { activities as fakeActivities, Activity } from '../data/activitiesData';
@@ -40,6 +42,8 @@ const DiscoverGamesScreen = ({ navigation }: any) => {
   const [refreshLocked, setRefreshLocked] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [isDatePickerVisible, setDatePickerVisible] = useState(false);
+  const [isIOSDatePickerVisible, setIOSDatePickerVisible] = useState(false);
+  const [tempDate, setTempDate] = useState<Date | null>(null);
   const [isSortingByDistance, setIsSortingByDistance] = useState(false);
   const [userLocation, setUserLocation] = useState<{ latitude: number, longitude: number } | null>(null);
   const [filteredActivities, setFilteredActivities] = useState<Activity[]>([]);
@@ -281,7 +285,14 @@ const DiscoverGamesScreen = ({ navigation }: any) => {
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.sortButton}
-            onPress={() => setDatePickerVisible(true)}
+            onPress={() => {
+              if (Platform.OS === 'ios') {
+                setTempDate(selectedDate ?? new Date());
+                setIOSDatePickerVisible(true);
+              } else {
+                setDatePickerVisible(true);
+              }
+            }}
           >
             <Text style={styles.sortButtonText}>
               {selectedDate ? selectedDate.toDateString() : 'Select Date'}
@@ -347,19 +358,56 @@ const DiscoverGamesScreen = ({ navigation }: any) => {
           <RefreshControl
             refreshing={refreshing || refreshLocked}
             onRefresh={loadActivities}
-            colors={["#1ae9ef"]}
-            tintColor="#1ae9ef"
+            colors={["#009fa3"]}
+            tintColor="#009fa3"
+            progressBackgroundColor="transparent"
           />
         }
         contentContainerStyle={styles.listContainer}
         style={{ backgroundColor: '#121212' }}
       />
-      <DateTimePickerModal
-        isVisible={isDatePickerVisible}
-        mode="date"
-        onConfirm={(date) => { setSelectedDate(date); setDatePickerVisible(false); }}
-        onCancel={() => setDatePickerVisible(false)}
-      />
+      {/* Android date picker (modal wrapper) */}
+      {Platform.OS === 'android' && (
+        <DateTimePickerModal
+          isVisible={isDatePickerVisible}
+          mode="date"
+          onConfirm={(date) => { setSelectedDate(date); setDatePickerVisible(false); }}
+          onCancel={() => setDatePickerVisible(false)}
+        />
+      )}
+
+      {/* iOS styled date picker matching participants picker */}
+      {Platform.OS === 'ios' && (
+        <Modal
+          transparent
+          animationType="slide"
+          visible={isIOSDatePickerVisible}
+          onRequestClose={() => setIOSDatePickerVisible(false)}
+        >
+          <View style={styles.pickerModal}>
+            <View style={styles.rollerContainer}>
+              <View style={styles.rollerHeader}>
+                <TouchableOpacity onPress={() => setIOSDatePickerVisible(false)}>
+                  <Text style={styles.rollerCancel}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => { if (tempDate) setSelectedDate(tempDate); setIOSDatePickerVisible(false); }}>
+                  <Text style={styles.rollerDone}>Done</Text>
+                </TouchableOpacity>
+              </View>
+              <DateTimePicker
+                value={tempDate ?? new Date()}
+                mode="date"
+                display="spinner"
+                themeVariant="dark"
+                onChange={(event, d) => {
+                  if (d) setTempDate(d);
+                }}
+                style={styles.rollerPicker}
+              />
+            </View>
+          </View>
+        </Modal>
+      )}
       </Animated.View>
     </SafeAreaView>
   );
@@ -372,6 +420,42 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#121212',
+  },
+  pickerModal: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  rollerContainer: {
+    backgroundColor: Platform.OS === 'ios' ? '#222' : '#fff',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingBottom: Platform.OS === 'ios' ? 32 : 0,
+    paddingTop: 8,
+    alignItems: 'center',
+  },
+  rollerHeader: {
+    width: '100%',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 24,
+    paddingBottom: 8,
+  },
+  rollerCancel: {
+    color: '#ff5a5f',
+    fontWeight: 'bold',
+    fontSize: 18,
+    paddingVertical: 8,
+  },
+  rollerDone: {
+    color: '#1ae9ef',
+    fontWeight: 'bold',
+    fontSize: 18,
+    paddingVertical: 8,
+  },
+  rollerPicker: {
+    width: '100%',
+    backgroundColor: 'transparent',
   },
   topSection: {
     paddingHorizontal: 15, // Only horizontal padding, not vertical
