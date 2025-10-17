@@ -13,7 +13,9 @@ import {
   Share,
   StatusBar, // <-- Add this import
   Animated,
+  RefreshControl,
 } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -45,8 +47,10 @@ const ProfileScreen = () => {
   const [userLocation, setUserLocation] = useState<{ latitude: number, longitude: number } | null>(null);
   const [userJoinedActivities, setUserJoinedActivities] = useState<any[]>([]);
   const [isReady, setIsReady] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshLocked, setRefreshLocked] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const { joinedActivities, toggleJoinActivity, isActivityJoined, allActivities, profile: contextProfile } = useActivityContext();
+  const { joinedActivities, toggleJoinActivity, isActivityJoined, allActivities, profile: contextProfile, reloadAllActivities } = useActivityContext();
 
   const fetchProfile = async () => {
     let uid = userId;
@@ -79,6 +83,18 @@ const ProfileScreen = () => {
       fetchProfile();
     }, [])
   );
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    setRefreshLocked(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    await fetchProfile();
+    await reloadAllActivities();
+    setTimeout(() => {
+      setRefreshing(false);
+      setRefreshLocked(false);
+    }, 1500);
+  };
 
   useEffect(() => {
     if (!contextProfile) {
@@ -191,6 +207,15 @@ const ProfileScreen = () => {
             renderItem={renderActivity}
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.listContainer}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing || refreshLocked}
+                onRefresh={onRefresh}
+                colors={["#1ae9ef"]}
+                tintColor="#1ae9ef"
+                progressBackgroundColor="transparent"
+              />
+            }
           />
         );
       case 'history':

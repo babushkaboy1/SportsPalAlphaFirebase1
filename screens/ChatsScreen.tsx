@@ -12,7 +12,9 @@ import {
   Platform,
   Animated,
   ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { fetchUserChats } from '../utils/firestoreChats';
@@ -41,6 +43,8 @@ const ChatsScreen = ({ navigation }: any) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [chats, setChats] = useState<Chat[]>([]);
   const [isReady, setIsReady] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshLocked, setRefreshLocked] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const insets = useSafeAreaInsets();
   const { joinedActivities } = useActivityContext();
@@ -118,6 +122,17 @@ const ChatsScreen = ({ navigation }: any) => {
     }, [chats])
   );
 
+  const onRefresh = async () => {
+    setRefreshing(true);
+    setRefreshLocked(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    await loadChats();
+    setTimeout(() => {
+      setRefreshing(false);
+      setRefreshLocked(false);
+    }, 1500);
+  };
+
   const filteredChats = chats.filter((chat) =>
     chat.name?.toLowerCase().includes(searchQuery.toLowerCase())
   );
@@ -193,7 +208,9 @@ const ChatsScreen = ({ navigation }: any) => {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
-        <Text style={styles.headerTitle}>Chats</Text>
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Chats</Text>
+        </View>
         <View style={styles.searchContainer}>
           <Ionicons name="search" size={20} color="#ccc" />
           <TextInput
@@ -212,6 +229,15 @@ const ChatsScreen = ({ navigation }: any) => {
             keyExtractor={(item) => item.id}
             renderItem={renderChatItem}
             contentContainerStyle={styles.chatList}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing || refreshLocked}
+                onRefresh={onRefresh}
+                colors={["#1ae9ef"]}
+                tintColor="#1ae9ef"
+                progressBackgroundColor="transparent"
+              />
+            }
           />
         )}
       </Animated.View>
@@ -223,7 +249,12 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#121212',
-    padding: 10,
+    paddingHorizontal: 10,
+  },
+  header: {
+    alignItems: 'center',
+    marginTop: 10,
+    marginBottom: 18,
   },
   headerTitle: {
     fontSize: 28,

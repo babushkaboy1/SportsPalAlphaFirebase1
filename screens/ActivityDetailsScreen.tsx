@@ -13,7 +13,9 @@ import {
   Image,
   InteractionManager,
   ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
@@ -24,6 +26,7 @@ import { activities } from '../data/activitiesData';
 import { fetchUsersByIds } from '../utils/firestoreActivities';
 import { getOrCreateChatForActivity } from '../utils/firestoreChats';
 import { auth } from '../firebaseConfig';
+import { testStorageConnection } from '../utils/imageUtils';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 
@@ -44,6 +47,8 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
   const [userLocation, setUserLocation] = useState<{ latitude: number, longitude: number } | null>(null);
   const [joinedUsers, setJoinedUsers] = useState<any[]>([]);
   const [isReady, setIsReady] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshLocked, setRefreshLocked] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const mapRef = useRef<MapView>(null);
   const insets = useSafeAreaInsets();
@@ -251,6 +256,30 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
     }
   }, [isReady]);
 
+  const onRefresh = async () => {
+    setRefreshing(true);
+    setRefreshLocked(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    // Refetch the latest activity from Firestore
+    const activityRef = doc(db, 'activities', activity.id);
+    const activitySnap = await getDoc(activityRef);
+    let latestJoinedUserIds: string[] = [];
+    if (activitySnap.exists()) {
+      const data = activitySnap.data();
+      latestJoinedUserIds = Array.isArray(data.joinedUserIds) ? data.joinedUserIds : [];
+    }
+    if (latestJoinedUserIds.length) {
+      const users = await fetchUsersByIds(latestJoinedUserIds);
+      setJoinedUsers(users);
+    } else {
+      setJoinedUsers([]);
+    }
+    setTimeout(() => {
+      setRefreshing(false);
+      setRefreshLocked(false);
+    }, 1500);
+  };
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
@@ -265,7 +294,18 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Activity Details</Text>
         </View>
-        <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
+        <ScrollView
+          contentContainerStyle={{ flexGrow: 1 }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing || refreshLocked}
+              onRefresh={onRefresh}
+              colors={["#1ae9ef"]}
+              tintColor="#1ae9ef"
+              progressBackgroundColor="transparent"
+            />
+          }
+        >
           {/* Map Overview */}
           <View style={styles.mapContainer}>
             <MapView
@@ -417,6 +457,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#121212',
     position: 'relative',
+    marginTop: 10,
+    marginBottom: 18,
   },
   backButton: {
     padding: 4,

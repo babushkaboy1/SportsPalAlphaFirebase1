@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, Share, FlatList, Animated } from 'react-native';
+import { View, Text, StyleSheet, Image, TouchableOpacity, Share, FlatList, Animated, RefreshControl } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { doc, getDoc } from 'firebase/firestore';
@@ -16,10 +17,12 @@ const UserProfileScreen = () => {
   const insets = useSafeAreaInsets();
   const { userId } = route.params as { userId: string };
   const [profile, setProfile] = useState<any>(null);
-  const { allActivities } = useActivityContext();
+  const { allActivities, reloadAllActivities } = useActivityContext();
   const [activeTab, setActiveTab] = useState<'games' | 'history'>('games');
   const [userJoinedActivities, setUserJoinedActivities] = useState<any[]>([]);
   const [isReady, setIsReady] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshLocked, setRefreshLocked] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -32,6 +35,22 @@ const UserProfileScreen = () => {
     };
     fetchProfile();
   }, [userId]);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    setRefreshLocked(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const docRef = doc(db, "profiles", userId);
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      setProfile({ ...docSnap.data(), uid: userId });
+    }
+    await reloadAllActivities();
+    setTimeout(() => {
+      setRefreshing(false);
+      setRefreshLocked(false);
+    }, 1500);
+  };
 
   useEffect(() => {
     if (profile && profile.uid && allActivities) {
@@ -137,6 +156,15 @@ const UserProfileScreen = () => {
             renderItem={renderActivity}
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.listContainer}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing || refreshLocked}
+                onRefresh={onRefresh}
+                colors={["#1ae9ef"]}
+                tintColor="#1ae9ef"
+                progressBackgroundColor="transparent"
+              />
+            }
           />
         ) : (
           <Text style={styles.tabContent}>Match History</Text>

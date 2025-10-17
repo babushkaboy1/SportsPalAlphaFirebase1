@@ -211,7 +211,7 @@ const DiscoverGamesScreen = ({ navigation }: any) => {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
-      <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
+      <Animated.View style={{ flex: 1, opacity: fadeAnim, backgroundColor: '#121212' }}>
         <Text style={styles.headerTitle}>Discover Activities</Text>
         <View style={styles.topSection}>
         <TextInput
@@ -297,10 +297,10 @@ const DiscoverGamesScreen = ({ navigation }: any) => {
             onRefresh={loadActivities}
             colors={["#1ae9ef"]}
             tintColor="#1ae9ef"
-            progressBackgroundColor="transparent"
           />
         }
         contentContainerStyle={styles.listContainer}
+        style={{ backgroundColor: '#121212' }}
       />
       <DateTimePickerModal
         isVisible={isDatePickerVisible}
