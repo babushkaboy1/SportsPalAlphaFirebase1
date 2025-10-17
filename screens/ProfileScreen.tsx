@@ -163,33 +163,83 @@ const ProfileScreen = () => {
   };
 
   const renderActivity = ({ item }: { item: any }) => {
-    const distance = userLocation
-      ? `${calculateDistance(userLocation.latitude, userLocation.longitude, item.latitude, item.longitude).toFixed(2)} km away`
-      : "N/A";
+    const distance = userLocation && item.latitude && item.longitude
+      ? calculateDistance(userLocation.latitude, userLocation.longitude, item.latitude, item.longitude).toFixed(2)
+      : null;
     const isJoined = isActivityJoined(item.id);
-
+    const simplifyLocation = (location: string) => {
+      const parts = location.split(',').map(part => part.trim());
+      if (parts.length >= 2) {
+        return `${parts[0]}, ${parts[parts.length - 2] || parts[parts.length - 1]}`;
+      }
+      return location;
+    };
     return (
       <TouchableOpacity 
-        style={styles.activityCard} 
+        style={styles.card} 
         onPress={() => navigation.navigate('ActivityDetails', { activityId: item.id })}
       >
         <View style={styles.cardHeader}>
-          <ActivityIcon activity={item.activity} size={32} />
-          <Text style={styles.cardTitle}>{item.activity}</Text>
+          <View style={styles.cardHeaderLeft}>
+            <ActivityIcon activity={item.activity} size={32} />
+            <Text style={styles.cardTitle}>{item.activity}</Text>
+          </View>
+          {distance && (
+            <View style={styles.distanceContainer}>
+              <Ionicons name="navigate" size={14} color="#1ae9ef" />
+              <Text style={styles.distanceNumber}>{distance}</Text>
+              <Text style={styles.distanceUnit}>km away</Text>
+            </View>
+          )}
         </View>
-        <Text style={styles.cardInfo}>Host: {item.creator}</Text>
-        <Text style={styles.cardInfo}>Location: {item.location}</Text>
-        <Text style={styles.cardInfo}>Date: {item.date} at {item.time}</Text>
-        <Text style={styles.cardInfo}>
-          Participants: {(item.joinedUserIds ? item.joinedUserIds.length : item.joinedCount) || 0} / {item.maxParticipants}
-        </Text>
-        <Text style={styles.distanceText}>{distance}</Text>
-        <TouchableOpacity 
-          style={[styles.joinButton, isJoined ? styles.joinButtonJoined : null]} 
-          onPress={() => handleJoinLeave(item)}
-        >
-          <Text style={styles.joinButtonText}>{isJoined ? 'Leave' : 'Join'}</Text>
-        </TouchableOpacity>
+        {/* Host */}
+        <View style={styles.infoRow}>
+          <Ionicons name="person" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Text style={styles.cardInfoLabel}>Host:</Text>
+          <Text style={styles.cardInfo}>{item.creator}</Text>
+        </View>
+        {/* Location */}
+        <View style={styles.infoRow}>
+          <Ionicons name="location" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Text style={styles.cardInfoLabel}>Location:</Text>
+          <Text style={styles.cardInfo} numberOfLines={1} ellipsizeMode="tail">
+            {simplifyLocation(item.location)}
+          </Text>
+        </View>
+        {/* Date */}
+        <View style={styles.infoRow}>
+          <Ionicons name="calendar" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Text style={styles.cardInfoLabel}>Date:</Text>
+          <Text style={styles.cardInfo}>{item.date}</Text>
+        </View>
+        {/* Time */}
+        <View style={styles.infoRow}>
+          <Ionicons name="time" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Text style={styles.cardInfoLabel}>Time:</Text>
+          <Text style={styles.cardInfo}>{item.time}</Text>
+        </View>
+        {/* Participants */}
+        <View style={styles.infoRow}>
+          <Ionicons name="people" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Text style={styles.cardInfoLabel}>Participants:</Text>
+          <Text style={styles.cardInfo}>
+            {item.joinedUserIds ? item.joinedUserIds.length : item.joinedCount} / {item.maxParticipants}
+          </Text>
+        </View>
+        <View style={styles.cardActions}>
+          <TouchableOpacity 
+            style={[styles.joinButton, isJoined && styles.joinButtonJoined]} 
+            onPress={() => handleJoinLeave(item)}
+          >
+            <Text style={styles.joinButtonText}>{isJoined ? 'Leave' : 'Join'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={styles.shareButton} 
+            onPress={() => Share.share({ message: `Join me for ${item.activity} at ${item.location} on ${item.date}!` })}
+          >
+            <Ionicons name="share-social-outline" size={20} color="#fff" />
+          </TouchableOpacity>
+        </View>
       </TouchableOpacity>
     );
   };
@@ -327,6 +377,11 @@ const ProfileScreen = () => {
 };
 
 const styles = StyleSheet.create({
+  shareButton: {
+    padding: 8,
+    backgroundColor: '#1e1e1e',
+    borderRadius: 5,
+  },
   container: {
     flex: 1,
     backgroundColor: '#121212',
@@ -427,42 +482,72 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     fontWeight: '500',
   },
-  activityCard: {
+  card: {
     backgroundColor: '#1e1e1e',
-    borderRadius: 8,
+    borderRadius: 10,
     padding: 15,
-    marginBottom: 10,
+    marginBottom: 15,
   },
   cardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 10,
+    justifyContent: 'space-between',
+    marginBottom: 5,
+  },
+  cardHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   cardTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
+    fontSize: 18,
     color: '#1ae9ef',
+    fontWeight: 'bold',
     marginLeft: 10,
   },
-  cardInfo: {
-    fontSize: 16,
-    color: '#ccc',
-    marginVertical: 2,
+  distanceContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  distanceNumber: {
+    fontSize: 14,
+    color: '#1ae9ef',
+    fontWeight: '600',
+  },
+  distanceUnit: {
+    fontSize: 14,
+    color: '#888',
     fontWeight: '500',
   },
-  distanceText: {
-    color: '#1ae9ef',
+  infoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 3,
+  },
+  infoIcon: {
+    marginRight: 8,
+  },
+  cardInfoLabel: {
     fontSize: 14,
-    marginTop: 2,
-    fontWeight: 'bold',
+    color: '#1ae9ef',
+    fontWeight: '600',
+    marginRight: 6,
+  },
+  cardInfo: {
+    fontSize: 14,
+    color: '#ccc',
+    fontWeight: '500',
+  },
+  cardActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 10,
   },
   joinButton: {
-    marginTop: 8,
     paddingVertical: 8,
     paddingHorizontal: 15,
     backgroundColor: '#1ae9ef',
     borderRadius: 5,
-    alignItems: 'center',
   },
   joinButtonJoined: {
     backgroundColor: '#007b7b',
@@ -470,7 +555,6 @@ const styles = StyleSheet.create({
   joinButtonText: {
     color: '#fff',
     fontWeight: 'bold',
-    fontSize: 16,
   },
   listContainer: {
     paddingBottom: 0,

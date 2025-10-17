@@ -12,6 +12,7 @@ import {
   ActivityIndicator,
   Animated,
 } from 'react-native';
+import * as Location from 'expo-location';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Calendar } from 'react-native-calendars';
@@ -23,6 +24,22 @@ import { activities } from '../data/activitiesData';
 
 const CalendarScreen = ({ navigation, route }: any) => {
   const { joinedActivities, allActivities, reloadAllActivities } = useActivityContext();
+  const [userLocation, setUserLocation] = useState<{ latitude: number, longitude: number } | null>(null);
+  useEffect(() => {
+    const getUserLocation = async () => {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status === 'granted') {
+        let location = await Location.getLastKnownPositionAsync({});
+        if (!location) {
+          location = await Location.getCurrentPositionAsync({});
+        }
+        if (location) {
+          setUserLocation(location.coords);
+        }
+      }
+    };
+    getUserLocation();
+  }, []);
   const insets = useSafeAreaInsets();
 
   // Today's date as "YYYY-MM-DD"
@@ -158,40 +175,104 @@ const CalendarScreen = ({ navigation, route }: any) => {
           />
           <View style={styles.activitiesContainer}>
             {activitiesForDate.length > 0 ? (
-              activitiesForDate.map((activity: any) => (
-                <TouchableOpacity
-                  key={activity.id}
-                  style={styles.activityItem}
-                  onPress={() => {
-                    navigation.navigate('ActivityDetails', { activityId: activity.id });
-                  }}
-                >
-                  <View style={styles.activityInfo}>
-                    <ActivityIcon activity={activity.activity} size={32} />
-                    <View style={styles.activityDetails}>
-                      <Text style={styles.activityText}>
-                        <Text style={{ color: '#1ae9ef', fontWeight: 'bold' }}>{activity.activity}</Text>
-                        {` at ${activity.time}`}
-                      </Text>
-                      <Text style={styles.activityLocation}>
-                        Location: {activity.location}
-                      </Text>
-                      <Text style={styles.activityCreator}>
-                        Host: {activity.creator}
-                      </Text>
-                      <Text style={styles.activityJoinStatus}>
-                        {(activity.joinedUserIds ? activity.joinedUserIds.length : activity.joinedCount) || 0} / {activity.maxParticipants} joined
+              activitiesForDate.map((item: any) => {
+                // Calculate distance if userLocation is available
+                let distance = null;
+                if (userLocation && item.latitude && item.longitude) {
+                  const R = 6371;
+                  const dLat = (item.latitude - userLocation.latitude) * Math.PI / 180;
+                  const dLon = (item.longitude - userLocation.longitude) * Math.PI / 180;
+                  const a = Math.sin(dLat / 2) ** 2 +
+                    Math.cos(userLocation.latitude * Math.PI / 180) * Math.cos(item.latitude * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+                  distance = (R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)))).toFixed(2);
+                }
+                // Simplify location
+                const simplifyLocation = (location: string) => {
+                  const parts = location.split(',').map(part => part.trim());
+                  if (parts.length >= 2) {
+                    return `${parts[0]}, ${parts[parts.length - 2] || parts[parts.length - 1]}`;
+                  }
+                  return location;
+                };
+                // Join/Leave logic (same as Discover)
+                const { isActivityJoined, toggleJoinActivity } = useActivityContext();
+                const isJoined = isActivityJoined(item.id);
+                const handleToggleJoin = async () => {
+                  await toggleJoinActivity(item);
+                };
+                return (
+                  <TouchableOpacity
+                    key={item.id}
+                    style={styles.card}
+                    onPress={() => navigation.navigate('ActivityDetails', { activityId: item.id })}
+                  >
+                    <View style={styles.cardHeader}>
+                      <View style={styles.cardHeaderLeft}>
+                        <ActivityIcon activity={item.activity} size={32} />
+                        <Text style={styles.cardTitle}>{item.activity}</Text>
+                      </View>
+                      {distance && (
+                        <View style={styles.distanceContainer}>
+                          <Ionicons name="navigate" size={14} color="#1ae9ef" />
+                          <Text style={styles.distanceNumber}>{distance}</Text>
+                          <Text style={styles.distanceUnit}>km away</Text>
+                        </View>
+                      )}
+                    </View>
+                    {/* Host */}
+                    <View style={styles.infoRow}>
+                      <Ionicons name="person" size={16} color="#1ae9ef" style={styles.infoIcon} />
+                      <Text style={styles.cardInfoLabel}>Host:</Text>
+                      <Text style={styles.cardInfo}>{item.creator}</Text>
+                    </View>
+                    {/* Location */}
+                    <View style={styles.infoRow}>
+                      <Ionicons name="location" size={16} color="#1ae9ef" style={styles.infoIcon} />
+                      <Text style={styles.cardInfoLabel}>Location:</Text>
+                      <Text style={styles.cardInfo} numberOfLines={1} ellipsizeMode="tail">
+                        {simplifyLocation(item.location)}
                       </Text>
                     </View>
-                    <TouchableOpacity
-                      style={styles.shareButton}
-                      onPress={() => console.log(`Share event ${activity.id}`)}
-                    >
-                      <Ionicons name="share-social-outline" size={20} color="#fff" />
-                    </TouchableOpacity>
-                  </View>
-                </TouchableOpacity>
-              ))
+                    {/* Date */}
+                    <View style={styles.infoRow}>
+                      <Ionicons name="calendar" size={16} color="#1ae9ef" style={styles.infoIcon} />
+                      <Text style={styles.cardInfoLabel}>Date:</Text>
+                      <Text style={styles.cardInfo}>{item.date}</Text>
+                    </View>
+                    {/* Time */}
+                    <View style={styles.infoRow}>
+                      <Ionicons name="time" size={16} color="#1ae9ef" style={styles.infoIcon} />
+                      <Text style={styles.cardInfoLabel}>Time:</Text>
+                      <Text style={styles.cardInfo}>{item.time}</Text>
+                    </View>
+                    {/* Participants */}
+                    <View style={styles.infoRow}>
+                      <Ionicons name="people" size={16} color="#1ae9ef" style={styles.infoIcon} />
+                      <Text style={styles.cardInfoLabel}>Participants:</Text>
+                      <Text style={styles.cardInfo}>
+                        {item.joinedUserIds ? item.joinedUserIds.length : item.joinedCount} / {item.maxParticipants}
+                      </Text>
+                    </View>
+                    <View style={styles.cardActions}>
+                      <TouchableOpacity
+                        style={[styles.joinButton, isJoined && styles.joinButtonJoined]}
+                        onPress={handleToggleJoin}
+                      >
+                        <Text style={styles.joinButtonText}>
+                          {isJoined ? 'Leave' : 'Join'}
+                        </Text>
+                      </TouchableOpacity>
+                      <View style={{ flex: 1 }} />
+                      <TouchableOpacity
+                        style={styles.shareButton}
+                        onPress={() => console.log(`Share event ${item.id}`)}
+                      >
+                        <Ionicons name="share-social-outline" size={20} color="#fff" />
+                      </TouchableOpacity>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })
             ) : (
               <Text style={styles.noActivitiesText}>
                 No activities scheduled for this day.
@@ -205,10 +286,18 @@ const CalendarScreen = ({ navigation, route }: any) => {
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#121212',
-    padding: 10,
+  joinButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 15,
+    backgroundColor: '#1ae9ef',
+    borderRadius: 5,
+  },
+  joinButtonJoined: {
+    backgroundColor: '#007b7b',
+  },
+  joinButtonText: {
+    color: '#fff',
+    fontWeight: 'bold',
   },
   safeArea: {
     flex: 1,
@@ -225,40 +314,71 @@ const styles = StyleSheet.create({
   activitiesContainer: {
     marginTop: 20,
   },
-  activityItem: {
+  card: {
     backgroundColor: '#1e1e1e',
-    padding: 10,
-    borderRadius: 8,
-    marginBottom: 10,
+    borderRadius: 10,
+    padding: 15,
+    marginBottom: 15,
   },
-  activityInfo: {
+  cardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    marginBottom: 5,
   },
-  activityDetails: {
-    flex: 1,
+  cardHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  cardTitle: {
+    fontSize: 18,
+    color: '#1ae9ef',
+    fontWeight: 'bold',
     marginLeft: 10,
   },
-  activityText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '500',
+  distanceContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
   },
-  activityLocation: {
-    color: '#ccc',
+  distanceNumber: {
     fontSize: 14,
-    fontWeight: '500',
-  },
-  activityCreator: {
-    color: '#ccc',
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  activityJoinStatus: {
     color: '#1ae9ef',
+    fontWeight: '600',
+  },
+  distanceUnit: {
     fontSize: 14,
-    fontWeight: 'bold',
+    color: '#888',
+    fontWeight: '500',
+  },
+  infoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 3,
+  },
+  infoIcon: {
+    marginRight: 8,
+  },
+  cardInfoLabel: {
+    fontSize: 14,
+    color: '#1ae9ef',
+    fontWeight: '600',
+    marginRight: 6,
+  },
+  cardInfo: {
+    fontSize: 14,
+    color: '#ccc',
+    fontWeight: '500',
+  },
+  cardActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: 10,
+  },
+  shareButton: {
+    padding: 8,
+    backgroundColor: '#1e1e1e',
+    borderRadius: 5,
   },
   noActivitiesText: {
     color: '#888',
@@ -266,11 +386,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 20,
     fontWeight: '500',
-  },
-  shareButton: {
-    padding: 8,
-    backgroundColor: '#1e1e1e',
-    borderRadius: 5,
   },
 });
 
