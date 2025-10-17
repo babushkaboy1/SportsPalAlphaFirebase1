@@ -29,6 +29,7 @@ import { auth } from '../firebaseConfig';
 import { testStorageConnection } from '../utils/imageUtils';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
+import { ActivityIcon } from '../components/ActivityIcons';
 
 const ActivityDetailsScreen = ({ route, navigation }: any) => {
   const { activityId } = route.params;
@@ -119,6 +120,15 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
       Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(lat1) * Math.cos(lat2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return (R * c).toFixed(2);
+  };
+
+  // Simplify location to show only first part and city
+  const simplifyLocation = (location: string) => {
+    const parts = location.split(',').map(part => part.trim());
+    if (parts.length >= 2) {
+      return `${parts[0]}, ${parts[parts.length - 2] || parts[parts.length - 1]}`;
+    }
+    return location;
   };
 
   // Navigate to Chat screen
@@ -292,7 +302,10 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
           >
             <Ionicons name="arrow-back" size={28} color="#1ae9ef" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Activity Details</Text>
+          <View style={styles.headerTitleContainer}>
+            <ActivityIcon activity={activity.activity} size={28} />
+            <Text style={styles.headerTitle}>{activity.activity} Details</Text>
+          </View>
         </View>
         <ScrollView
           contentContainerStyle={{ flexGrow: 1 }}
@@ -357,25 +370,59 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
 
           {/* Activity Information */}
           <View style={styles.infoContainer}>
-            <Text style={styles.title}>{activity.activity}</Text>
-            <Text style={styles.location}>{activity.location}</Text>
+            {/* Distance */}
             {userLocation && (
-              <Text style={styles.distanceText}>
-                {getDistance()} km away
-              </Text>
+              <View style={styles.infoRow}>
+                <Ionicons name="navigate" size={16} color="#1ae9ef" style={styles.infoIcon} />
+                <Text style={styles.infoLabel}>Distance:</Text>
+                <Text style={styles.infoValue}>{getDistance()} km away</Text>
+              </View>
             )}
-            <Text style={styles.detail}>
-              Date: {activity.date} at {activity.time}
-            </Text>
-            <Text style={styles.detail}>Hosted by: {activity.creator}</Text>
+            
+            {/* Host */}
+            <View style={styles.infoRow}>
+              <Ionicons name="person" size={16} color="#1ae9ef" style={styles.infoIcon} />
+              <Text style={styles.infoLabel}>Host:</Text>
+              <Text style={styles.infoValue}>{activity.creator}</Text>
+            </View>
+            
+            {/* Location */}
+            <View style={styles.infoRow}>
+              <Ionicons name="location" size={16} color="#1ae9ef" style={styles.infoIcon} />
+              <Text style={styles.infoLabel}>Location:</Text>
+              <Text style={styles.infoValue}>{simplifyLocation(activity.location)}</Text>
+            </View>
+            
+            {/* Date */}
+            <View style={styles.infoRow}>
+              <Ionicons name="calendar" size={16} color="#1ae9ef" style={styles.infoIcon} />
+              <Text style={styles.infoLabel}>Date:</Text>
+              <Text style={styles.infoValue}>{activity.date}</Text>
+            </View>
+            
+            {/* Time */}
+            <View style={styles.infoRow}>
+              <Ionicons name="time" size={16} color="#1ae9ef" style={styles.infoIcon} />
+              <Text style={styles.infoLabel}>Time:</Text>
+              <Text style={styles.infoValue}>{activity.time}</Text>
+            </View>
+            
+            {/* Activity Description */}
+            {(activity as any).description && (
+              <View style={styles.descriptionSection}>
+                <Text style={styles.descriptionTitle}>Activity Description</Text>
+                <Text style={styles.description}>
+                  {(activity as any).description}
+                </Text>
+              </View>
+            )}
+            
+            {/* Participant Count Bar */}
             <View style={styles.joinContainer}>
               <Text style={styles.joinText}>
                 {(activity.joinedUserIds?.length ?? activity.joinedCount)}/{activity.maxParticipants} joined
               </Text>
             </View>
-            <Text style={styles.description}>
-              Stay active and make new friends by joining this exciting {activity.activity} event!
-            </Text>
 
             {/* Participants List */}
             <View style={{ marginVertical: 10 }}>
@@ -463,12 +510,17 @@ const styles = StyleSheet.create({
   backButton: {
     padding: 4,
   },
+  headerTitleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
   headerTitle: {
     fontSize: 28,
     color: '#1ae9ef',
     fontWeight: 'bold',
     textAlign: 'center',
-    flex: 1,
   },
   mapContainer: {
     height: 250,
@@ -481,11 +533,35 @@ const styles = StyleSheet.create({
     paddingHorizontal: 15,
     paddingVertical: 15,
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
   title: {
     color: '#1ae9ef',
     fontSize: 24,
     fontWeight: 'bold',
-    marginBottom: 5,
+    marginLeft: 10,
+  },
+  infoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 3,
+  },
+  infoIcon: {
+    marginRight: 8,
+  },
+  infoLabel: {
+    fontSize: 14,
+    color: '#1ae9ef',
+    fontWeight: '600',
+    marginRight: 6,
+  },
+  infoValue: {
+    fontSize: 14,
+    color: '#ccc',
+    fontWeight: '500',
   },
   location: {
     color: '#ccc',
@@ -515,10 +591,19 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
   },
+  descriptionSection: {
+    marginTop: 15,
+    marginBottom: 10,
+  },
+  descriptionTitle: {
+    color: '#1ae9ef',
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 8,
+  },
   description: {
     color: '#ccc',
     fontSize: 14,
-    marginTop: 15,
     lineHeight: 20,
   },
   actionsContainer: {
