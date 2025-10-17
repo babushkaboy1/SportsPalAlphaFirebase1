@@ -141,6 +141,16 @@ const DiscoverGamesScreen = ({ navigation }: any) => {
     return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
   };
 
+  // Simplify location to show only first part and city
+  const simplifyLocation = (location: string) => {
+    const parts = location.split(',').map(part => part.trim());
+    if (parts.length >= 2) {
+      // Return first part (street/place) and second-to-last or last part (city/region)
+      return `${parts[0]}, ${parts[parts.length - 2] || parts[parts.length - 1]}`;
+    }
+    return location;
+  };
+
   const ActivityCard = ({ item, navigation }: { item: Activity; navigation: any }) => {
     const [isJoined, setIsJoined] = useState(item.isJoined);
 
@@ -166,8 +176,8 @@ const DiscoverGamesScreen = ({ navigation }: any) => {
     };
 
     const distance = userLocation
-      ? `${calculateDistance(userLocation.latitude, userLocation.longitude, item.latitude, item.longitude).toFixed(2)} km away`
-      : "N/A";
+      ? calculateDistance(userLocation.latitude, userLocation.longitude, item.latitude, item.longitude).toFixed(2)
+      : null;
 
     return (
       <TouchableOpacity 
@@ -175,16 +185,58 @@ const DiscoverGamesScreen = ({ navigation }: any) => {
         onPress={() => navigation.navigate('ActivityDetails', { activityId: item.id })}
       >
         <View style={styles.cardHeader}>
-          <ActivityIcon activity={item.activity} size={32} />
-          <Text style={styles.cardTitle}>{item.activity}</Text>
+          <View style={styles.cardHeaderLeft}>
+            <ActivityIcon activity={item.activity} size={32} />
+            <Text style={styles.cardTitle}>{item.activity}</Text>
+          </View>
+          {distance && (
+            <View style={styles.distanceContainer}>
+              <Ionicons name="navigate" size={14} color="#1ae9ef" />
+              <Text style={styles.distanceNumber}>{distance}</Text>
+              <Text style={styles.distanceUnit}>km away</Text>
+            </View>
+          )}
         </View>
-        <Text style={styles.cardInfo}>Host: {item.creator}</Text>
-        <Text style={styles.cardInfo}>Location: {item.location}</Text>
-        <Text style={styles.cardInfo}>Date: {item.date} at {item.time}</Text>
-        <Text style={styles.cardInfo}>
-          Participants: {item.joinedUserIds ? item.joinedUserIds.length : item.joinedCount} / {item.maxParticipants}
-        </Text>
-        <Text style={styles.distanceText}>{distance}</Text>
+        
+        {/* Host */}
+        <View style={styles.infoRow}>
+          <Ionicons name="person" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Text style={styles.cardInfoLabel}>Host:</Text>
+          <Text style={styles.cardInfo}>{item.creator}</Text>
+        </View>
+
+        {/* Location */}
+        <View style={styles.infoRow}>
+          <Ionicons name="location" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Text style={styles.cardInfoLabel}>Location:</Text>
+          <Text style={styles.cardInfo} numberOfLines={1} ellipsizeMode="tail">
+            {simplifyLocation(item.location)}
+          </Text>
+        </View>
+
+        {/* Date */}
+        <View style={styles.infoRow}>
+          <Ionicons name="calendar" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Text style={styles.cardInfoLabel}>Date:</Text>
+          <Text style={styles.cardInfo}>{item.date}</Text>
+        </View>
+
+        {/* Time */}
+        <View style={styles.infoRow}>
+          <Ionicons name="time" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Text style={styles.cardInfoLabel}>Time:</Text>
+          <Text style={styles.cardInfo}>{item.time}</Text>
+        </View>
+
+        {/* Participants */}
+        <View style={styles.infoRow}>
+          <Ionicons name="people" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Text style={styles.cardInfoLabel}>Participants:</Text>
+          <Text style={styles.cardInfo}>
+            {item.joinedUserIds ? item.joinedUserIds.length : item.joinedCount} / {item.maxParticipants}
+          </Text>
+        </View>
+
         <View style={styles.cardActions}>
           <TouchableOpacity 
             style={[styles.joinButton, isActivityJoined(item.id) && styles.joinButtonJoined]} 
@@ -403,7 +455,12 @@ const styles = StyleSheet.create({
   cardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     marginBottom: 5,
+  },
+  cardHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   cardTitle: {
     fontSize: 18,
@@ -411,10 +468,38 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginLeft: 10,
   },
+  distanceContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  distanceNumber: {
+    fontSize: 14,
+    color: '#1ae9ef',
+    fontWeight: '600',
+  },
+  distanceUnit: {
+    fontSize: 14,
+    color: '#888',
+    fontWeight: '500',
+  },
+  infoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 3,
+  },
+  infoIcon: {
+    marginRight: 8,
+  },
+  cardInfoLabel: {
+    fontSize: 14,
+    color: '#1ae9ef',
+    fontWeight: '600',
+    marginRight: 6,
+  },
   cardInfo: {
     fontSize: 14,
     color: '#ccc',
-    marginVertical: 2,
     fontWeight: '500',
   },
   cardActions: {
