@@ -21,7 +21,7 @@ import * as NavigationBar from 'expo-navigation-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { listenToMessages, sendMessage } from '../utils/firestoreChats';
+import { listenToMessages, sendMessage, markChatRead } from '../utils/firestoreChats';
 import { doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { db, auth } from '../firebaseConfig';
 import { ActivityIcon } from '../components/ActivityIcons'; // Make sure this is imported
@@ -54,6 +54,7 @@ const ChatDetailScreen = () => {
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
   const [viewerUri, setViewerUri] = useState<string | null>(null);
   const [activityInfo, setActivityInfo] = useState<{ name: string, type: string, date: string, time: string } | null>(null);
+  const [dmPeer, setDmPeer] = useState<{ uid: string; username: string; photo?: string } | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const progressRef = useRef(0);
   const isInitialLoad = useRef(true);
@@ -121,6 +122,8 @@ const ChatDetailScreen = () => {
             const sorted = msgs.sort((a, b) => (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0));
             const prevLength = messages.length;
             setMessages(sorted);
+            // Mark read on view
+            markChatRead(chatId);
             if (!isInitialLoad.current && sorted.length > prevLength) {
               setTimeout(() => {
                 flatListRef.current?.scrollToEnd({ animated: true });
@@ -173,12 +176,26 @@ const ChatDetailScreen = () => {
     // eslint-disable-next-line
   }, [messages]);
 
-  // Fetch activity info
+  // Fetch chat meta: activity info for group or peer info for DM
   useEffect(() => {
     const fetchActivity = async () => {
       const chatDoc = await getDoc(doc(db, 'chats', chatId));
       const chatData = chatDoc.data();
-      if (chatData?.activityId) {
+      // Treat as DM if type is 'dm', or no activityId and exactly 2 participants
+      const participants = Array.isArray(chatData?.participants) ? chatData?.participants : [];
+      const isDm = chatData?.type === 'dm' || (!chatData?.activityId && participants.length === 2);
+      if (isDm) {
+        const myId = auth.currentUser?.uid;
+        const peerId = participants.find((p: string) => p !== myId);
+        if (peerId) {
+          const peerDoc = await getDoc(doc(db, 'profiles', peerId));
+          if (peerDoc.exists()) {
+            const p: any = peerDoc.data();
+            setDmPeer({ uid: peerId, username: p.username || 'User', photo: p.photo || p.photoURL });
+          }
+        }
+        setActivityInfo(null);
+      } else if (chatData?.activityId) {
         const activityDoc = await getDoc(doc(db, 'activities', chatData.activityId));
         if (activityDoc.exists()) {
           const data = activityDoc.data();
@@ -504,26 +521,34 @@ const ChatDetailScreen = () => {
             <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerBack}>
               <Ionicons name="arrow-back" size={26} color="#1ae9ef" />
             </TouchableOpacity>
-            {/* Group icon */}
-            <Ionicons name="people" size={28} color="#1ae9ef" style={{ marginLeft: 6, marginRight: 4 }} />
-            {/* Sport icon */}
-            {activityInfo?.type ? (
-              <ActivityIcon activity={activityInfo.type} size={24} color="#1ae9ef" />
-            ) : null}
-            {/* Activity name and schedule */}
-            <View style={{ flex: 1, marginLeft: 10 }}>
-              <Text style={{ color: '#1ae9ef', fontWeight: 'bold', fontSize: 17 }}>
-                {activityInfo?.name || 'Group Chat'}
-              </Text>
-              {activityInfo?.date && activityInfo?.time && (
-                <Text style={{ color: '#fff', fontSize: 12, fontWeight: '500' }}>
-                  Scheduled for {formatDate(activityInfo.date)} at {activityInfo.time}
-                </Text>
-              )}
-            </View>
-            <TouchableOpacity onPress={() => {/* open group info/settings */}} style={styles.headerInfo}>
-              <Ionicons name="information-circle-outline" size={26} color="#1ae9ef" />
-            </TouchableOpacity>
+            {dmPeer ? (
+              <>
+                <Image source={{ uri: dmPeer.photo || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(dmPeer.username) }} style={styles.headerImage} />
+                <View style={{ flex: 1, marginLeft: 10 }}>
+                  <Text style={styles.headerTitle}>{dmPeer.username}</Text>
+                </View>
+              </>
+            ) : (
+              <>
+                <Ionicons name="people" size={28} color="#1ae9ef" style={{ marginLeft: 6, marginRight: 4 }} />
+                {activityInfo?.type ? (
+                  <ActivityIcon activity={activityInfo.type} size={24} color="#1ae9ef" />
+                ) : null}
+                <View style={{ flex: 1, marginLeft: 10 }}>
+                  <Text style={{ color: '#1ae9ef', fontWeight: 'bold', fontSize: 17 }}>
+                    {activityInfo?.name || 'Group Chat'}
+                  </Text>
+                  {activityInfo?.date && activityInfo?.time && (
+                    <Text style={{ color: '#fff', fontSize: 12, fontWeight: '500' }}>
+                      Scheduled for {formatDate(activityInfo.date)} at {activityInfo.time}
+                    </Text>
+                  )}
+                </View>
+                <TouchableOpacity onPress={() => {/* open group info/settings */}} style={styles.headerInfo}>
+                  <Ionicons name="information-circle-outline" size={26} color="#1ae9ef" />
+                </TouchableOpacity>
+              </>
+            )}
           </View>
           
           {/* Messages area with loading state */}

@@ -1,16 +1,18 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, Share, FlatList, Animated, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, Image, TouchableOpacity, Share, FlatList, Animated, RefreshControl, Alert } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { db, auth } from '../firebaseConfig';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useActivityContext } from '../context/ActivityContext';
 import { ActivityIcon } from '../components/ActivityIcons';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../types/navigation';
+import { sendFriendRequest, cancelFriendRequest, removeFriend, acceptIncomingRequestFromProfile, declineIncomingRequestFromProfile } from '../utils/firestoreFriends';
+import { ensureDmChat } from '../utils/firestoreChats';
 
 const UserProfileScreen = () => {
   const route = useRoute();
@@ -26,6 +28,11 @@ const UserProfileScreen = () => {
   const [refreshLocked, setRefreshLocked] = useState(false);
   const [userLocation, setUserLocation] = useState<{ latitude: number, longitude: number } | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const [requestSent, setRequestSent] = useState(false);
+  const [isSelf, setIsSelf] = useState(false);
+  const [isFriend, setIsFriend] = useState(false);
+  const [incomingRequest, setIncomingRequest] = useState(false);
+  const [theyListMe, setTheyListMe] = useState(false);
 
   useEffect(() => {
     const fetchProfile = async () => {
@@ -36,6 +43,51 @@ const UserProfileScreen = () => {
       }
     };
     fetchProfile();
+  }, [userId]);
+
+  // Prefill and live-sync Add Friend button state from current user's profile
+  useEffect(() => {
+    const me = auth.currentUser?.uid;
+    if (!me) return;
+    setIsSelf(me === userId);
+    if (me === userId) {
+      setRequestSent(false);
+      setIsFriend(false);
+      return;
+    }
+    const unsub = onSnapshot(doc(db, 'profiles', me), (snap) => {
+      if (!snap.exists()) return;
+      const data: any = snap.data();
+      const sent: string[] = data?.requestsSent || [];
+      const friends: string[] = data?.friends || [];
+      // If they sent me a request, I will NOT have sent marker, and I will NOT be friends yet; infer by checking their requestsSent
+      setRequestSent(Array.isArray(sent) && sent.includes(userId));
+      setIsFriend(Array.isArray(friends) && friends.includes(userId));
+    }, (error) => {
+      if ((error as any)?.code !== 'permission-denied') {
+        console.warn('Self profile subscription error:', error);
+      }
+    });
+    return () => unsub();
+  }, [userId]);
+
+  // Detect incoming request and mutual friendship from the viewed user's profile
+  useEffect(() => {
+    const me = auth.currentUser?.uid;
+    if (!me || me === userId) return;
+    const unsub = onSnapshot(doc(db, 'profiles', userId), (snap) => {
+      if (!snap.exists()) { setIncomingRequest(false); return; }
+      const data: any = snap.data();
+      const theirSent: string[] = data?.requestsSent || [];
+      const theirFriends: string[] = data?.friends || [];
+      setIncomingRequest(Array.isArray(theirSent) && theirSent.includes(me));
+      setTheyListMe(Array.isArray(theirFriends) && theirFriends.includes(me));
+    }, (error) => {
+      if ((error as any)?.code !== 'permission-denied') {
+        console.warn('Viewed profile subscription error:', error);
+      }
+    });
+    return () => unsub();
   }, [userId]);
 
   // Get user location for distance calculation
@@ -69,6 +121,41 @@ const UserProfileScreen = () => {
       setRefreshing(false);
       setRefreshLocked(false);
     }, 1500);
+  };
+
+  const handleAddFriend = async () => {
+    try {
+      if (isFriend) {
+        // Ask to remove connection
+        Alert.alert(
+          'Remove connection',
+          'Do you want to remove this connection?',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Remove', style: 'destructive', onPress: async () => {
+                try {
+                  await removeFriend(userId);
+                  await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                  setIsFriend(false);
+                  setRequestSent(false);
+                } catch (_) {}
+              }
+            }
+          ]
+        );
+      } else if (!requestSent) {
+        await sendFriendRequest(userId);
+        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        setRequestSent(true);
+      } else {
+        await cancelFriendRequest(userId);
+        await Haptics.selectionAsync();
+        setRequestSent(false);
+      }
+    } catch (e) {
+      console.warn('friendRequest toggle failed', e);
+    }
   };
 
   useEffect(() => {
@@ -222,29 +309,101 @@ const UserProfileScreen = () => {
     <SafeAreaView style={styles.container} edges={['top']}>
       <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
         <View style={styles.headerRow}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-            <Ionicons name="arrow-back" size={28} color="#1ae9ef" />
-          </TouchableOpacity>
-          <Text style={styles.profileNameHeader}>{profile?.username || 'Username'}</Text>
+          <View style={styles.headerLeft}>
+            <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+              <Ionicons name="arrow-back" size={28} color="#1ae9ef" />
+            </TouchableOpacity>
+            <Text style={styles.profileNameHeader} numberOfLines={1}>
+              {profile?.username || 'Username'}
+            </Text>
+          </View>
           <TouchableOpacity style={styles.settingsButton} onPress={handleShareProfile}>
             <Ionicons name="share-social-outline" size={28} color="#1ae9ef" />
           </TouchableOpacity>
         </View>
+        {/* Profile hero area: match Profile page spacing and size */}
         <View style={styles.profileInfo}>
           <View style={styles.profileLeftColumn}>
             <Image source={{ uri: profile?.photo || 'https://via.placeholder.com/100' }} style={styles.profileImage} />
           </View>
         </View>
-        <View style={styles.profileActionsRow}>
-          <TouchableOpacity style={styles.profileActionButton} onPress={() => {/* Add friend logic */}}>
-            <Ionicons name="person-add-outline" size={18} color="#1ae9ef" style={{ marginRight: 6 }} />
-            <Text style={styles.profileActionText}>Add Friend</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.profileActionButton} onPress={() => {/* Message logic */}}>
-            <Ionicons name="chatbubble-ellipses-outline" size={18} color="#1ae9ef" style={{ marginRight: 6 }} />
-            <Text style={styles.profileActionText}>Message</Text>
-          </TouchableOpacity>
-        </View>
+        {/* Actions row identical to Profile: two buttons in a row (left then right). Wrap naturally if 3 buttons. */}
+        {!isSelf && (
+          <View style={styles.profileActionsRow}>
+            {incomingRequest ? (
+              <>
+                <TouchableOpacity
+                  style={[styles.profileActionButton, styles.profileActionButtonInverted]}
+                  onPress={async () => {
+                    try {
+                      await acceptIncomingRequestFromProfile(userId);
+                      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                      setIsFriend(true);
+                      setIncomingRequest(false);
+                    } catch (e) { console.warn('accept from profile failed', e); }
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="checkmark-done-outline" size={18} color={'#000'} style={{ marginRight: 6 }} />
+                  <Text style={[styles.profileActionText, styles.profileActionTextInverted]}>Accept</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.profileActionButton}
+                  onPress={async () => {
+                    try {
+                      await declineIncomingRequestFromProfile(userId);
+                      await Haptics.selectionAsync();
+                      setIncomingRequest(false);
+                    } catch (e) { console.warn('decline from profile failed', e); }
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="close-outline" size={18} color={'#1ae9ef'} style={{ marginRight: 4 }} />
+                  <Text style={styles.profileActionText}>Delete</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <TouchableOpacity
+                style={[
+                  styles.profileActionButton,
+                  (requestSent || isFriend) && styles.profileActionButtonInverted,
+                ]}
+                onPress={handleAddFriend}
+                disabled={false}
+                activeOpacity={0.85}
+              >
+                <Ionicons
+                  name={isFriend ? 'checkmark-done-outline' : 'person-add-outline'}
+                  size={18}
+                  color={(requestSent || isFriend) ? '#000' : '#1ae9ef'}
+                  style={{ marginRight: 4 }}
+                />
+                <Text style={[styles.profileActionText, (requestSent || isFriend) && styles.profileActionTextInverted]}>
+                  {isFriend ? 'Connected' : (requestSent ? 'Request Sent' : 'Add Friend')}
+                </Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              style={styles.profileActionButton}
+              disabled={!(isFriend && theyListMe)}
+              onPress={async () => {
+                try {
+                  if (!(isFriend && theyListMe)) {
+                    Alert.alert('Connect first', 'You both need to be connected to send a direct message.');
+                    return;
+                  }
+                  const chatId = await ensureDmChat(userId);
+                  navigation.navigate('ChatDetail', { chatId });
+                } catch (e) {
+                  console.warn('open DM failed', e);
+                }
+              }}
+            >
+              <Ionicons name="chatbubble-ellipses-outline" size={18} color="#1ae9ef" style={{ marginRight: 4 }} />
+              <Text style={styles.profileActionText}>Message</Text>
+            </TouchableOpacity>
+          </View>
+        )}
         <View style={styles.tabBar}>
           <TouchableOpacity
             style={[styles.tab, activeTab === 'games' && styles.activeTab]}
@@ -338,6 +497,11 @@ const styles = StyleSheet.create({
     marginTop: 0,
     marginBottom: 0,
   },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
   backButton: { padding: 5 },
   profileNameHeader: {
     fontSize: 24,
@@ -369,9 +533,31 @@ const styles = StyleSheet.create({
   },
   profileActionsRow: {
     flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 12,
+    justifyContent: 'flex-start',
+    gap: 8,
+    flexWrap: 'wrap',
     marginBottom: 10,
+    paddingHorizontal: 20,
+  },
+  // New: actions bar mirroring Profile page (left cluster + right message)
+  profileActionsBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    marginBottom: 10,
+    gap: 8,
+  },
+  actionsLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexShrink: 1,
+    flexWrap: 'wrap',
+  },
+  actionsRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   profileActionButton: {
     flexDirection: 'row',
@@ -380,14 +566,29 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingVertical: 8,
     paddingHorizontal: 18,
-    marginHorizontal: 4,
+    marginHorizontal: 2,
     borderWidth: 1,
+    borderColor: '#1ae9ef',
+    flexShrink: 1,
+  },
+  profileActionButtonSm: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  profileActionButtonInverted: {
+    backgroundColor: '#1ae9ef',
     borderColor: '#1ae9ef',
   },
   profileActionText: {
     color: '#1ae9ef',
     fontWeight: 'bold',
     fontSize: 16,
+  },
+  profileActionTextSm: {
+    fontSize: 14,
+  },
+  profileActionTextInverted: {
+    color: '#000',
   },
   tabBar: {
     flexDirection: 'row',

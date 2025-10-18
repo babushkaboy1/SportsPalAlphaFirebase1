@@ -152,29 +152,31 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           Alert.alert(
             "You're the last participant!",
             isCreator
-              ? "If you leave, this event will be deleted for everyone. Are you sure you want to leave?"
-              : "If you leave, the event will remain visible (for the creator) but you'll be removed from participants.",
+              ? "If you leave, this event and its group chat will be deleted. Are you sure?"
+              : "If you leave, this event has no participants and will be deleted, along with its group chat.",
             [
               { text: "Stay", style: "cancel", onPress: () => resolve() },
-              isCreator
-                ? { text: "Leave & Delete", style: "destructive", onPress: async () => {
-                      await leaveActivity(activity.id, user.uid);
-                      // Only the creator attempts deletion per rules
+              { text: isCreator ? "Leave & Delete" : "Leave & Delete", style: "destructive", onPress: async () => {
+                  try {
+                    // Delete chat first while we still have permission (we are a participant)
+                    const { deleteActivityChat } = await import('../utils/firestoreChats');
+                    await deleteActivityChat(activity.id);
+                  } catch {}
+                  try {
+                    if (isCreator) {
+                      // Creator can delete directly
                       await deleteActivity(activity.id);
-                      await reloadAllActivities();
-                      const joined = await getUserJoinedActivities();
-                      setJoinedActivities(joined);
-                      resolve();
-                    }
-                  }
-                : { text: "Leave", style: "destructive", onPress: async () => {
+                    } else {
+                      // Non-creator last participant: leave and then attempt to delete (rules updated to allow this)
                       await leaveActivity(activity.id, user.uid);
-                      await reloadAllActivities();
-                      const joined = await getUserJoinedActivities();
-                      setJoinedActivities(joined);
-                      resolve();
+                      await deleteActivity(activity.id);
                     }
-                  }
+                  } catch {}
+                  await reloadAllActivities();
+                  const joined = await getUserJoinedActivities();
+                  setJoinedActivities(joined);
+                  resolve();
+                } }
             ]
           );
         });

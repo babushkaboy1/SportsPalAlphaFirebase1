@@ -3,6 +3,7 @@ import { NavigationContainer, DarkTheme, createNavigationContainerRef } from '@r
 import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import { enableScreens } from 'react-native-screens';
 import { StatusBar } from 'expo-status-bar';
@@ -25,6 +26,7 @@ import UserProfileScreen from './screens/UserProfileScreen';
 
 // Import the ActivityProvider
 import { ActivityProvider } from './context/ActivityContext';
+import { InboxBadgeProvider, useInboxBadge } from './context/InboxBadgeContext';
 import { RootStackParamList } from './types/navigation';
 import DiscoverStack from './navigation/DiscoverStack';
 import CalendarStack from './navigation/CalendarStack';
@@ -52,7 +54,9 @@ const styles = StyleSheet.create({
   }
 });
 
-const MainTabs = () => (
+const MainTabs = () => {
+  const { totalUnread } = useInboxBadge();
+  return (
   <Tab.Navigator
     detachInactiveScreens={false}
     screenOptions={({ route }) => ({
@@ -72,7 +76,7 @@ const MainTabs = () => (
           />
         );
       },
-      tabBarIcon: ({ color, size }) => {
+      tabBarIcon: ({ color, size, focused }) => {
         let iconName = 'alert-circle-outline';
         switch (route.name) {
           case 'Discover':
@@ -87,8 +91,8 @@ const MainTabs = () => (
           case 'Profile':
             iconName = 'person-outline';
             break;
-          case 'Chats':
-            iconName = 'chatbubbles-outline';
+          case 'Inbox':
+            iconName = focused ? 'mail-open-outline' : 'mail-outline';
             break;
         }
         return <Ionicons name={iconName as any} size={size} color={color} />;
@@ -154,7 +158,10 @@ const MainTabs = () => (
       component={CreateGameScreen}
       options={{ tabBarLabel: 'Create Event' }} // or 'Create'
     />
-    <Tab.Screen name="Chats" component={ChatsScreen} />
+  <Tab.Screen name="Inbox" component={ChatsScreen} options={{
+    tabBarBadge: totalUnread > 0 ? (totalUnread > 99 ? '99+' : totalUnread) : undefined,
+    tabBarBadgeStyle: { backgroundColor: '#e74c3c', color: '#fff' },
+  }} />
     <Tab.Screen
       name="Profile"
       component={ProfileStack} // Ensure ProfileStack is passed correctly
@@ -182,6 +189,7 @@ const MainTabs = () => (
     />
   </Tab.Navigator>
 );
+}
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -214,8 +222,10 @@ export default function App() {
   }, [user]);
 
   return (
-    <ActivityProvider>
-  <NavigationContainer ref={navRef} theme={MyTheme}>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ActivityProvider>
+        <InboxBadgeProvider>
+        <NavigationContainer ref={navRef} theme={MyTheme}>
         <StatusBar style="light" backgroundColor="#121212" />
         <Stack.Navigator
           initialRouteName={user ? "MainTabs" : "Login"}
@@ -234,8 +244,10 @@ export default function App() {
           <Stack.Screen name="PickLocation" component={PickLocationScreen} />
           <Stack.Screen name="UserProfile" component={UserProfileScreen} options={{ headerShown: false }} />
         </Stack.Navigator>
-      </NavigationContainer>
-    </ActivityProvider>
+        </NavigationContainer>
+        </InboxBadgeProvider>
+      </ActivityProvider>
+    </GestureHandlerRootView>
   );
 }
 
@@ -244,7 +256,7 @@ type TabParamList = {
   Discover: undefined;
   Calendar: undefined;
   CreateGame: undefined;
-  Chats: undefined;
+  Inbox: undefined;
   Profile: undefined;
 };
 

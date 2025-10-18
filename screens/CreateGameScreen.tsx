@@ -194,6 +194,7 @@ const CreateGameScreen = () => {
 
       Alert.alert('Game Created', 'Your game has been successfully created!');
       resetForm();
+      // Navigate to Calendar tab and pass selectedDate param (Calendar screen reads it)
       navigation.navigate('MainTabs', {
         screen: 'Calendar',
         params: { selectedDate: date },

@@ -69,5 +69,10 @@ export const fetchUsersByIds = async (userIds: string[]) => {
 };
 
 export const deleteActivity = async (activityId: string) => {
+  // Best-effort: delete chat first while current user may still be a participant
+  try {
+    const { deleteActivityChat } = await import('./firestoreChats');
+    await deleteActivityChat(activityId);
+  } catch {}
   await deleteDoc(doc(db, 'activities', activityId));
 };

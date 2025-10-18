@@ -14,6 +14,8 @@ import {
   InteractionManager,
   ActivityIndicator,
   RefreshControl,
+  Modal,
+  Pressable,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -31,10 +33,11 @@ import { testStorageConnection } from '../utils/imageUtils';
 import { doc, getDoc, updateDoc, arrayUnion, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import { ActivityIcon } from '../components/ActivityIcons';
+import { sendActivityInvites } from '../utils/firestoreInvites';
 
 const ActivityDetailsScreen = ({ route, navigation }: any) => {
   const { activityId } = route.params;
-  const { allActivities, isActivityJoined, toggleJoinActivity } = useActivityContext();
+  const { allActivities, isActivityJoined, toggleJoinActivity, profile } = useActivityContext();
 
   const activity = allActivities.find(a => a.id === activityId);
 
@@ -52,6 +55,12 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshLocked, setRefreshLocked] = useState(false);
   const [isAddedToCalendar, setIsAddedToCalendar] = useState(false);
+  // Invite friends modal state
+  const [inviteFriendsVisible, setInviteFriendsVisible] = useState(false);
+  const [friendProfiles, setFriendProfiles] = useState<any[]>([]);
+  const [selectedFriendIds, setSelectedFriendIds] = useState<Record<string, boolean>>({});
+  const [noSelectionHintVisible, setNoSelectionHintVisible] = useState(false);
+  const noSelectionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const mapRef = useRef<MapView>(null);
   const insets = useSafeAreaInsets();
@@ -121,6 +130,10 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
         const addedToCalendarIds = data.addedToCalendarByUsers || [];
         setIsAddedToCalendar(addedToCalendarIds.includes(currentUserId));
       }
+    }, (error) => {
+      if ((error as any)?.code !== 'permission-denied') {
+        console.warn('Activity snapshot error:', error);
+      }
     });
     return () => unsub();
   }, [activity.id]);
@@ -158,6 +171,70 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
       return `${parts[0]}, ${parts[parts.length - 2] || parts[parts.length - 1]}`;
     }
     return location;
+  };
+
+  // Invite Friends helpers
+  const joinedUserIds = Array.isArray((activity as any).joinedUserIds)
+    ? (activity as any).joinedUserIds as string[]
+    : (joinedUsers?.map((u: any) => u.uid) || []);
+  const myFriendIds: string[] = Array.isArray(profile?.friends) ? profile.friends : [];
+
+  useEffect(() => {
+    // Load friend profiles when friends list changes or when opening modal
+    const loadFriends = async () => {
+      try {
+        if (myFriendIds.length) {
+          const users = await fetchUsersByIds(myFriendIds);
+          setFriendProfiles(users);
+        } else {
+          setFriendProfiles([]);
+        }
+      } catch (e) {
+        setFriendProfiles([]);
+      }
+    };
+    loadFriends();
+  }, [JSON.stringify(myFriendIds)]);
+
+  const openInviteFriends = () => {
+    setSelectedFriendIds({});
+    setInviteFriendsVisible(true);
+  };
+
+  const toggleSelectFriend = (uid: string, disabled: boolean) => {
+    if (disabled) return;
+    setSelectedFriendIds((prev) => ({ ...prev, [uid]: !prev[uid] }));
+  };
+
+  const confirmInviteFriends = async () => {
+    const selected = Object.keys(selectedFriendIds).filter((id) => selectedFriendIds[id]);
+    if (selected.length === 0) {
+      // Show a minimal bottom hint instead of closing the modal
+      setNoSelectionHintVisible(true);
+      if (noSelectionTimerRef.current) clearTimeout(noSelectionTimerRef.current);
+      noSelectionTimerRef.current = setTimeout(() => setNoSelectionHintVisible(false), 1800);
+      return;
+    }
+    // Send invites for this single activity to each selected friend
+    let sent = 0;
+    let skipped = 0;
+    await Promise.all(
+      selected.map(async (friendId) => {
+        try {
+          const res = await sendActivityInvites(friendId, [activity.id]);
+          if ((res?.sentIds || []).length > 0) sent += 1; else skipped += 1;
+        } catch {
+          skipped += 1;
+        }
+      })
+    );
+    setInviteFriendsVisible(false);
+    if (sent > 0 || skipped > 0) {
+      const msg = sent > 0
+        ? `Sent invites to ${sent} friend${sent === 1 ? '' : 's'}${skipped ? ` (skipped ${skipped} already joined)` : ''}.`
+        : `No invites sent. ${skipped} skipped (already joined).`;
+      Alert.alert('Invites', msg);
+    }
   };
 
   // Get sport-specific emoji for calendar event
@@ -777,6 +854,11 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                 </Text>
               </TouchableOpacity>
 
+              <TouchableOpacity style={styles.actionButton} onPress={openInviteFriends}>
+                  <Ionicons name="person-add" size={20} style={styles.actionIconBold} />
+                  <Text style={styles.actionText}>Invite Friends</Text>
+              </TouchableOpacity>
+
               <TouchableOpacity style={styles.actionButton} onPress={handleOpenGroupChat}>
                 <Ionicons name="chatbubbles" size={20} style={styles.actionIconBold} />
                 <Text style={styles.actionText}>Group Chat</Text>
@@ -818,6 +900,77 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
           </TouchableOpacity>
         </ScrollView>
       </Animated.View>
+      {/* Invite Friends Modal */}
+      <Modal
+        visible={inviteFriendsVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setInviteFriendsVisible(false)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setInviteFriendsVisible(false)}>
+          <Pressable style={styles.modalCard} onPress={() => {}}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Invite Friends</Text>
+              <TouchableOpacity onPress={() => setInviteFriendsVisible(false)}>
+                <Ionicons name="close" size={22} color="#9aa0a6" />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.modalSubtitle}>Select friends to invite to this activity</Text>
+            <ScrollView style={{ maxHeight: 360 }}>
+              {friendProfiles.length === 0 && (
+                <Text style={{ color: '#9aa0a6', textAlign: 'center', marginVertical: 20 }}>
+                  No friends yet.
+                </Text>
+              )}
+              {friendProfiles.map((f) => {
+                const alreadyJoined = joinedUserIds.includes(f.uid);
+                const selected = !!selectedFriendIds[f.uid];
+                return (
+                  <TouchableOpacity
+                    key={f.uid}
+                    style={[styles.friendRow, alreadyJoined && { opacity: 0.45 }]}
+                    onPress={() => toggleSelectFriend(f.uid, alreadyJoined)}
+                    disabled={alreadyJoined}
+                    activeOpacity={0.7}
+                  >
+                    <View style={styles.friendLeft}>
+                      <Image
+                        source={{ uri: f.photo || f.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(f.username || 'User')}` }}
+                        style={styles.friendAvatar}
+                      />
+                      <View>
+                        <Text style={styles.friendName}>{f.username || 'User'}</Text>
+                        {alreadyJoined && (
+                          <Text style={styles.friendMeta}>Already joined</Text>
+                        )}
+                      </View>
+                    </View>
+                    {!alreadyJoined && (
+                      <View style={[styles.checkbox, selected && styles.checkboxSelected]}>
+                        {selected && <Ionicons name="checkmark" size={16} color="#121212" />}
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+            <View style={styles.modalActions}>
+              <TouchableOpacity style={styles.modalCancel} onPress={() => setInviteFriendsVisible(false)}>
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.modalConfirm} onPress={confirmInviteFriends}>
+                <Ionicons name="send" size={18} color="#121212" />
+                <Text style={styles.modalConfirmText}>Send Invites</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+          {noSelectionHintVisible && (
+            <View style={styles.bottomToast} pointerEvents="none">
+              <Text style={styles.bottomToastText}>No friends selected</Text>
+            </View>
+          )}
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -828,6 +981,125 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#121212',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 520,
+    backgroundColor: '#1c1c1e',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#2a2a2c',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  modalTitle: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  modalSubtitle: {
+    color: '#9aa0a6',
+    marginBottom: 12,
+  },
+  friendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: '#2a2a2c',
+  },
+  friendLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  friendAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: '#1ae9ef',
+  },
+  friendName: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  friendMeta: {
+    color: '#9aa0a6',
+    fontSize: 12,
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: '#1ae9ef',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxSelected: {
+    backgroundColor: '#1ae9ef',
+  },
+  modalActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 12,
+  },
+  modalCancel: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    backgroundColor: '#2b0f12',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#5a1a1f',
+  },
+  modalCancelText: {
+    color: '#ff4d4f',
+    fontWeight: '700',
+  },
+  modalConfirm: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#1ae9ef',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+  },
+  modalConfirmText: {
+    color: '#121212',
+    fontWeight: '700',
+  },
+  bottomToast: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 22,
+    alignItems: 'center',
+  },
+  bottomToastText: {
+    backgroundColor: 'rgba(26, 233, 239, 0.18)',
+    color: '#cdeff0',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 14,
+    overflow: 'hidden',
+    fontWeight: '600',
   },
   header: {
     flexDirection: 'row',

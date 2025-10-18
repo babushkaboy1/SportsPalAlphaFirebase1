@@ -16,18 +16,25 @@ import {
   RefreshControl,
   ActivityIndicator,
   Keyboard,
+  Modal,
+  Pressable,
+  Alert,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
-import { useActivityContext } from '../context/ActivityContext';
+// useActivityContext is already imported above in this file; avoid duplicate
 import { ActivityIcon } from '../components/ActivityIcons';
 import * as Location from 'expo-location';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
+import { ensureDmChat } from '../utils/firestoreChats';
+import { sendFriendRequest, cancelFriendRequest } from '../utils/firestoreFriends';
+import { useActivityContext } from '../context/ActivityContext';
+import { sendActivityInvites } from '../utils/firestoreInvites';
 import { RootStackParamList } from '../types/navigation';
-import { doc, getDoc, collection, query as fsQuery, orderBy, startAt, endAt, limit, getDocs } from 'firebase/firestore';
+import { doc, getDoc, collection, query as fsQuery, orderBy, startAt, endAt, limit, getDocs, onSnapshot, where } from 'firebase/firestore';
 import { auth, db } from '../firebaseConfig';
 import { activities } from '../data/activitiesData';
 
@@ -53,12 +60,99 @@ const ProfileScreen = () => {
   const [refreshLocked, setRefreshLocked] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const { joinedActivities, toggleJoinActivity, isActivityJoined, allActivities, profile: contextProfile, reloadAllActivities } = useActivityContext();
+  const [inviteModalVisible, setInviteModalVisible] = useState(false);
+  const [inviteTargetUser, setInviteTargetUser] = useState<{uid: string; username: string; photo?: string} | null>(null);
+  const [inviteSelection, setInviteSelection] = useState<Record<string, boolean>>({});
+  const myJoinedActivities = allActivities.filter(a => joinedActivities.includes(a.id));
+
+  const openInviteModal = (user: {uid: string; username: string; photo?: string}) => {
+    setInviteTargetUser(user);
+    // preselect none
+    setInviteSelection({});
+    setInviteModalVisible(true);
+  };
+
+  const toggleSelectInvite = (activityId: string) => {
+    setInviteSelection(prev => ({ ...prev, [activityId]: !prev[activityId] }));
+  };
+
+  const confirmSendInvites = async () => {
+    if (!inviteTargetUser) return;
+    const selected = Object.keys(inviteSelection).filter(id => inviteSelection[id]);
+    if (selected.length === 0) {
+      setInviteModalVisible(false);
+      return;
+    }
+    // Check for activities where target already joined
+    const alreadyJoined: string[] = [];
+    const notJoined: string[] = [];
+    selected.forEach(id => {
+      const act = allActivities.find(a => a.id === id);
+      const joinedIds = (act as any)?.joinedUserIds || [];
+      if (Array.isArray(joinedIds) && joinedIds.includes(inviteTargetUser.uid)) alreadyJoined.push(id);
+      else notJoined.push(id);
+    });
+
+    // If some are already joined by target, ask inviter whether to auto-join self to those or skip
+    if (alreadyJoined.length > 0) {
+      const first = alreadyJoined[0];
+      const restCount = alreadyJoined.length - 1;
+      const act = allActivities.find(a => a.id === first);
+      const name = act?.activity || 'Activity';
+      const message = alreadyJoined.length > 1
+        ? `${inviteTargetUser.username} is already joined in ${name}${restCount > 0 ? ` and ${restCount} more` : ''}. Do you want to join those and send invites for the remaining?`
+        : `${inviteTargetUser.username} is already joined in ${name}. Do you want to join this and send invites for the remaining?`;
+      return new Promise<void>((resolve) => {
+        Alert.alert(
+          'They already joined',
+          message,
+          [
+            { text: 'Skip those', style: 'cancel', onPress: async () => {
+                // Only send invites for notJoined
+                try {
+                  await sendActivityInvites(inviteTargetUser.uid, notJoined);
+                } catch {}
+                setInviteModalVisible(false);
+                resolve();
+              }
+            },
+            { text: 'Join & continue', style: 'default', onPress: async () => {
+                // Join me to alreadyJoined, then send invites for notJoined
+                try {
+                  for (const id of alreadyJoined) {
+                    const act2 = allActivities.find(a => a.id === id);
+                    if (act2) {
+                      await toggleJoinActivity(act2 as any);
+                    }
+                  }
+                } catch {}
+                try {
+                  await sendActivityInvites(inviteTargetUser.uid, notJoined);
+                } catch {}
+                setInviteModalVisible(false);
+                resolve();
+              }
+            },
+          ]
+        );
+      });
+    }
+
+    // Simple path: send invites
+    try {
+      await sendActivityInvites(inviteTargetUser.uid, notJoined);
+    } catch {}
+    setInviteModalVisible(false);
+  };
   // User search (Friends tab)
   const [userSearchQuery, setUserSearchQuery] = useState('');
   const [userResults, setUserResults] = useState<Array<{ uid: string; username: string; photo?: string }>>([]);
   const [userSearching, setUserSearching] = useState(false);
   const userSearchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentUid = auth.currentUser?.uid;
+  const [friends, setFriends] = useState<Array<{ uid: string; username: string; photo?: string }>>([]);
+  const [myFriendIds, setMyFriendIds] = useState<string[]>([]);
+  const [myRequestsSent, setMyRequestsSent] = useState<string[]>([]);
 
   const fetchProfile = async () => {
     let uid = userId;
@@ -144,6 +238,47 @@ const ProfileScreen = () => {
       setIsReady(true);
     }
   }, [profile]);
+
+  // Live friends list for current user
+  useEffect(() => {
+    const me = auth.currentUser?.uid;
+    if (!me) return;
+    // Subscribe to my profile to get friend ids
+    const unsub = onSnapshot(doc(db, 'profiles', me), async (snap) => {
+      if (!snap.exists()) return setFriends([]);
+      const data: any = snap.data();
+      const friendIds: string[] = data?.friends || [];
+      const reqs: string[] = data?.requestsSent || [];
+      setMyFriendIds(Array.isArray(friendIds) ? friendIds : []);
+      setMyRequestsSent(Array.isArray(reqs) ? reqs : []);
+      if (!Array.isArray(friendIds) || friendIds.length === 0) {
+        setFriends([]);
+        return;
+      }
+      // Fetch friend profiles in batches (where __name__ in) limited to 10 per query
+      const chunks: string[][] = [];
+      for (let i = 0; i < friendIds.length; i += 10) chunks.push(friendIds.slice(i, i + 10));
+      const rows: Array<{ uid: string; username: string; photo?: string }> = [];
+      for (const ids of chunks) {
+        const q = fsQuery(collection(db, 'profiles'), where('__name__', 'in', ids));
+        const snap2 = await getDocs(q);
+        snap2.forEach((d) => {
+          const p: any = d.data();
+          rows.push({ uid: d.id, username: p.username || p.username_lower || 'User', photo: p.photo || p.photoURL });
+        });
+      }
+      // Stable order by username
+      rows.sort((a, b) => a.username.localeCompare(b.username));
+      setFriends(rows);
+    }, (error) => {
+      if ((error as any)?.code !== 'permission-denied') {
+        console.warn('Profile friends subscription error:', error);
+      } else {
+        setFriends([]);
+      }
+    });
+    return () => unsub();
+  }, []);
 
   useEffect(() => {
     if (isReady) {
@@ -281,6 +416,7 @@ const ProfileScreen = () => {
       case 'friends':
         return (
           <View style={styles.friendsTab}>
+            {/* Search users (on top) */}
             <View style={styles.userSearchRow}>
               <Ionicons name="search" size={16} color="#1ae9ef" style={{ marginRight: 8 }} />
               <TextInput
@@ -356,6 +492,55 @@ const ProfileScreen = () => {
                 </TouchableOpacity>
               )}
             </View>
+            {/* Connections list (hidden while searching) */}
+            {userSearchQuery.trim().length === 0 && (
+              friends.length === 0 ? (
+                <Text style={styles.mutedText}>No connections yet.</Text>
+              ) : (
+                <FlatList
+                  data={friends}
+                  keyExtractor={(item) => item.uid}
+                  contentContainerStyle={{ paddingVertical: 6, paddingBottom: Math.max(insets.bottom, 16) }}
+                  renderItem={({ item }) => (
+                    <View style={styles.friendRow}>
+                      <TouchableOpacity
+                        style={{ flexDirection: 'row', alignItems: 'center', flex: 1, minWidth: 0 }}
+                        activeOpacity={0.8}
+                        onPress={() => navigation.navigate('UserProfile', { userId: item.uid })}
+                      >
+                        <Image
+                          source={{ uri: item.photo || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(item.username) }}
+                          style={styles.userAvatar}
+                        />
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                          <Text style={styles.friendName} numberOfLines={1} ellipsizeMode="tail">{item.username}</Text>
+                        </View>
+                      </TouchableOpacity>
+                      <View style={styles.friendActions}>
+                        <TouchableOpacity style={styles.inviteBtn} onPress={() => openInviteModal(item)}>
+                          <Ionicons name="add-circle-outline" size={18} color="#000" />
+                          <Text style={styles.inviteBtnText}>Invite</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.msgBtn}
+                          onPress={async () => {
+                            try {
+                              const chatId = await ensureDmChat(item.uid);
+                              navigation.navigate('ChatDetail' as any, { chatId });
+                            } catch (e) {
+                              console.warn('open DM from friends failed', e);
+                            }
+                          }}
+                        >
+                          <Ionicons name="chatbubble-ellipses-outline" size={18} color="#1ae9ef" />
+                          <Text style={styles.msgBtnText}>Message</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  )}
+                />
+              )
+            )}
             {userSearchQuery.trim().length === 0 ? (
               <TouchableOpacity activeOpacity={1} onPress={() => Keyboard.dismiss()} style={styles.emptyState}>
                 <Ionicons name="people-outline" size={48} color="#1ae9ef" />
@@ -384,27 +569,135 @@ const ProfileScreen = () => {
                 keyboardDismissMode="on-drag"
                 bounces={false}
                 overScrollMode={Platform.OS === 'android' ? 'never' : undefined}
-                renderItem={({ item }) => (
-                  <TouchableOpacity
-                    style={styles.userRow}
-                    activeOpacity={0.8}
-                    onPress={() => {
-                      Keyboard.dismiss();
-                      navigation.navigate('UserProfile', { userId: item.uid });
-                    }}
-                  >
-                    <Image
-                      source={{ uri: item.photo || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(item.username) }}
-                      style={styles.userAvatar}
-                    />
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.userName}>{item.username}</Text>
+                renderItem={({ item }) => {
+                  const isFriend = myFriendIds.includes(item.uid);
+                  const isRequested = myRequestsSent.includes(item.uid);
+                  return (
+                    <View style={[styles.userRow, { alignItems: 'center' }]}>
+                      <TouchableOpacity
+                        style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}
+                        activeOpacity={0.8}
+                        onPress={() => {
+                          Keyboard.dismiss();
+                          navigation.navigate('UserProfile', { userId: item.uid });
+                        }}
+                      >
+                        <Image
+                          source={{ uri: item.photo || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(item.username) }}
+                          style={styles.userAvatar}
+                        />
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.userName}>{item.username}</Text>
+                        </View>
+                      </TouchableOpacity>
+                      {isFriend ? (
+                        <TouchableOpacity
+                          style={styles.msgBtnFilled}
+                          activeOpacity={0.85}
+                          onPress={() => {/* Optional: could open profile or show menu */}}
+                        >
+                          <Ionicons name={'checkmark-done-outline'} size={18} color={'#000'} style={{ marginRight: 4 }} />
+                          <Text style={styles.msgBtnTextInverted}>Connected</Text>
+                        </TouchableOpacity>
+                      ) : isRequested ? (
+                        <TouchableOpacity
+                          style={styles.msgBtnFilled}
+                          activeOpacity={0.85}
+                          onPress={async () => {
+                            // Optimistically revert to "Add Friend"
+                            setMyRequestsSent((prev) => prev.filter((id) => id !== item.uid));
+                            try {
+                              await cancelFriendRequest(item.uid);
+                            } catch (e) {}
+                          }}
+                        >
+                          <Ionicons name={'person-add-outline'} size={18} color={'#000'} style={{ marginRight: 4 }} />
+                          <Text style={styles.msgBtnTextInverted}>Request Sent</Text>
+                        </TouchableOpacity>
+                      ) : (
+                        <TouchableOpacity
+                          style={styles.msgBtn}
+                          activeOpacity={0.85}
+                          onPress={async () => {
+                            // Optimistically mark as requested
+                            setMyRequestsSent((prev) => (prev.includes(item.uid) ? prev : [...prev, item.uid]));
+                            try {
+                              await sendFriendRequest(item.uid);
+                            } catch (e) {
+                              // Rollback if failed
+                              setMyRequestsSent((prev) => prev.filter((id) => id !== item.uid));
+                            }
+                          }}
+                        >
+                          <Ionicons name="person-add-outline" size={18} color={'#1ae9ef'} style={{ marginRight: 4 }} />
+                          <Text style={styles.msgBtnText}>Add Friend</Text>
+                        </TouchableOpacity>
+                      )}
+                      {/* Message button remains as-is */}
+                      <TouchableOpacity
+                        style={[styles.msgBtn, { marginLeft: 8 }]}
+                        onPress={async () => {
+                          try {
+                            const chatId = await ensureDmChat(item.uid);
+                            navigation.navigate('ChatDetail' as any, { chatId });
+                          } catch (e) {}
+                        }}
+                      >
+                        <Ionicons name="chatbubble-ellipses-outline" size={18} color="#1ae9ef" />
+                        <Text style={styles.msgBtnText}>Message</Text>
+                      </TouchableOpacity>
                     </View>
-                    <Ionicons name="chevron-forward" size={20} color="#1ae9ef" />
-                  </TouchableOpacity>
-                )}
+                  );
+                }}
               />
             )}
+            {/* Invite modal */}
+            <Modal
+              visible={inviteModalVisible}
+              animationType="fade"
+              transparent
+              onRequestClose={() => setInviteModalVisible(false)}
+            >
+              <Pressable style={styles.modalOverlay} onPress={() => setInviteModalVisible(false)}>
+                <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+                  <Text style={styles.modalTitle}>Invite {inviteTargetUser?.username || 'user'}</Text>
+                  {myJoinedActivities.length === 0 ? (
+                    <Text style={styles.modalEmpty}>You haven't joined any activities yet.</Text>
+                  ) : (
+                    <FlatList
+                      data={myJoinedActivities}
+                      keyExtractor={(a) => a.id}
+                      renderItem={({ item }) => (
+                        <Pressable style={styles.activityPickRow} onPress={() => toggleSelectInvite(item.id)}>
+                          <View style={styles.activityPickLeft}>
+                            <ActivityIcon activity={item.activity} size={22} color="#1ae9ef" />
+                            <View>
+                              <Text style={styles.activityPickTitle} numberOfLines={1}>{item.activity}</Text>
+                              <Text style={styles.activityPickMeta}>{item.date} • {item.time}</Text>
+                            </View>
+                          </View>
+                          <Ionicons
+                            name={inviteSelection[item.id] ? 'checkbox' : 'square-outline'}
+                            size={22}
+                            color={inviteSelection[item.id] ? '#1ae9ef' : '#666'}
+                          />
+                        </Pressable>
+                      )}
+                      ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
+                      style={{ maxHeight: 280, marginVertical: 8 }}
+                    />
+                  )}
+                  <View style={styles.modalActions}>
+                    <TouchableOpacity style={[styles.modalBtn, styles.modalBtnCancel]} onPress={() => setInviteModalVisible(false)}>
+                      <Text style={styles.modalBtnTextCancel}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.modalBtn, styles.modalBtnPrimary]} onPress={confirmSendInvites}>
+                      <Text style={styles.modalBtnTextPrimary}>Send</Text>
+                    </TouchableOpacity>
+                  </View>
+                </Pressable>
+              </Pressable>
+            </Modal>
           </View>
         );
     }
@@ -654,7 +947,7 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     borderWidth: 1,
     borderColor: '#1ae9ef',
-    marginRight: 10,
+    marginRight: 8,
   },
   userName: {
     color: '#fff',
@@ -746,6 +1039,217 @@ const styles = StyleSheet.create({
   },
   settingsButton: {
     padding: 5,
+  },
+  sectionTitle: {
+    color: '#1ae9ef',
+    fontSize: 18,
+    fontWeight: '700',
+    marginHorizontal: 20,
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  mutedText: {
+    color: '#aaa',
+    fontSize: 14,
+    marginHorizontal: 20,
+    marginBottom: 8,
+  },
+  friendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'transparent',
+    paddingVertical: 8,
+    paddingHorizontal: 0,
+    marginHorizontal: 0,
+    marginBottom: 8,
+    borderRadius: 0,
+  },
+  friendActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  inviteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1ae9ef',
+    borderRadius: 16,
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    marginRight: 6,
+  },
+  inviteBtnText: {
+    color: '#000',
+    fontWeight: '700',
+    fontSize: 11,
+    marginLeft: 6,
+  },
+  msgBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#1ae9ef',
+    borderRadius: 16,
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+  },
+  msgBtnText: {
+    color: '#1ae9ef',
+    fontWeight: '700',
+    fontSize: 11,
+    marginLeft: 6,
+  },
+  // Filled variant matching msgBtn size for Connected/Requested
+  msgBtnFilled: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1ae9ef',
+    borderWidth: 1,
+    borderColor: '#1ae9ef',
+    borderRadius: 16,
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+  },
+  msgBtnTextInverted: {
+    color: '#000',
+    fontWeight: '700',
+    fontSize: 11,
+    marginLeft: 6,
+  },
+  
+  profileActionButtonSm: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  profileActionButtonInverted: {
+    backgroundColor: '#1ae9ef',
+    borderColor: '#1ae9ef',
+  },
+  
+  profileActionTextSm: {
+    fontSize: 14,
+  },
+  profileActionTextInverted: {
+    color: '#000',
+  },
+  connectedPill: {
+    backgroundColor: '#007b7b',
+    borderRadius: 16,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+  },
+  connectedPillText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  requestedPill: {
+    backgroundColor: '#1e1e1e',
+    borderWidth: 1,
+    borderColor: '#1ae9ef',
+    borderRadius: 16,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+  },
+  requestedPillText: {
+    color: '#1ae9ef',
+    fontWeight: '700',
+  },
+  // Invite modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: '#1e1e1e',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#2a2a2a',
+  },
+  modalTitle: {
+    color: '#1ae9ef',
+    fontWeight: '700',
+    fontSize: 16,
+    marginBottom: 8,
+  },
+  modalEmpty: {
+    color: '#bbb',
+    fontSize: 14,
+    marginVertical: 4,
+  },
+  activityPickRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#121212',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#2a2a2a',
+  },
+  activityPickLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  activityPickTitle: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  activityPickMeta: {
+    color: '#999',
+    fontSize: 12,
+    marginTop: 2,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
+    marginTop: 12,
+  },
+  modalBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  modalBtnCancel: {
+    borderColor: '#444',
+    backgroundColor: '#121212',
+  },
+  modalBtnPrimary: {
+    borderColor: '#1ae9ef',
+    backgroundColor: '#1ae9ef',
+  },
+  modalBtnTextCancel: {
+    color: '#ddd',
+    fontWeight: '600',
+  },
+  modalBtnTextPrimary: {
+    color: '#000',
+    fontWeight: '700',
+  },
+  addFriendBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1ae9ef',
+    borderRadius: 16,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  addFriendBtnText: {
+    color: '#000',
+    fontWeight: '700',
+    fontSize: 12,
+    marginLeft: 6,
   },
 });
 
