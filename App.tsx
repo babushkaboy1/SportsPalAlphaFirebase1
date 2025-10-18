@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { NavigationContainer, DarkTheme, createNavigationContainerRef } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import { StyleSheet, TouchableOpacity, Alert, Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import { enableScreens } from 'react-native-screens';
@@ -10,6 +10,9 @@ import { StatusBar } from 'expo-status-bar';
 import * as Location from 'expo-location';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth } from './firebaseConfig';
+import * as NavigationBar from 'expo-navigation-bar';
+import * as SystemUI from 'expo-system-ui';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 // Import your screens
 import DiscoverGamesScreen from './screens/DiscoverGamesScreen';
@@ -222,12 +225,13 @@ export default function App() {
   }, [user]);
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <ActivityProvider>
-        <InboxBadgeProvider>
-        <NavigationContainer ref={navRef} theme={MyTheme}>
-        <StatusBar style="light" backgroundColor="#121212" />
-        <Stack.Navigator
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#121212' }}>
+      <SafeAreaProvider>
+        <ActivityProvider>
+          <InboxBadgeProvider>
+          <NavigationContainer ref={navRef} theme={MyTheme}>
+          <StatusBar style="light" backgroundColor="#121212" />
+          <Stack.Navigator
           initialRouteName={user ? "MainTabs" : "Login"}
           screenOptions={{
             headerShown: false,
@@ -243,10 +247,11 @@ export default function App() {
           <Stack.Screen name="ChatDetail" component={ChatDetailScreen} />
           <Stack.Screen name="PickLocation" component={PickLocationScreen} />
           <Stack.Screen name="UserProfile" component={UserProfileScreen} options={{ headerShown: false }} />
-        </Stack.Navigator>
-        </NavigationContainer>
-        </InboxBadgeProvider>
-      </ActivityProvider>
+          </Stack.Navigator>
+          </NavigationContainer>
+          </InboxBadgeProvider>
+        </ActivityProvider>
+      </SafeAreaProvider>
     </GestureHandlerRootView>
   );
 }
@@ -262,4 +267,15 @@ type TabParamList = {
 
 if (typeof global.atob === 'undefined') {
   global.atob = atob;
+}
+
+// Configure Android system UI once on module load/mount
+if (Platform.OS === 'android') {
+  // Set global app background behind system bars
+  SystemUI.setBackgroundColorAsync('#121212').catch(() => {});
+  // Make the navigation bar dark with light buttons
+  NavigationBar.setBackgroundColorAsync('#121212').catch(() => {});
+  NavigationBar.setButtonStyleAsync('light').catch(() => {});
+  // Keep bars visible and overlay content; we'll handle insets in screens
+  NavigationBar.setVisibilityAsync('visible').catch(() => {});
 }

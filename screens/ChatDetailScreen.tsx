@@ -14,6 +14,8 @@ import {
   Keyboard,
   Animated,
   ActivityIndicator,
+  Modal,
+  Pressable,
 } from 'react-native';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { useAudioRecorder, useAudioPlayer, AudioModule, RecordingPresets } from 'expo-audio';
@@ -21,13 +23,17 @@ import * as NavigationBar from 'expo-navigation-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { listenToMessages, sendMessage, markChatRead } from '../utils/firestoreChats';
+import { listenToMessages, sendMessage, markChatRead, ensureDmChat } from '../utils/firestoreChats';
+import { sendActivityInvites } from '../utils/firestoreInvites';
+import { useActivityContext } from '../context/ActivityContext';
 import { doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { db, auth } from '../firebaseConfig';
 import { ActivityIcon } from '../components/ActivityIcons'; // Make sure this is imported
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../types/navigation';
 import { uploadChatImage } from '../utils/imageUtils';
+import { sendFriendRequest, cancelFriendRequest } from '../utils/firestoreFriends';
+import { collection, query, where, getDocs, updateDoc, arrayUnion, arrayRemove, deleteDoc } from 'firebase/firestore';
 
 // Firestore message type
 type Message = {
@@ -52,14 +58,80 @@ const ChatDetailScreen = () => {
   const audioPlayer = useAudioPlayer();
   const [playbackRate, setPlaybackRate] = useState(1.0);
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
+  const [groupMeta, setGroupMeta] = useState<{ title?: string; photoUrl?: string } | null>(null);
+  const [chatActivityId, setChatActivityId] = useState<string | null>(null);
+  const [participantIds, setParticipantIds] = useState<string[]>([]);
+  const [participants, setParticipants] = useState<Array<{ uid: string; username: string; photo?: string }>>([]);
+  const [friends, setFriends] = useState<Array<{ uid: string; username: string; photo?: string }>>([]);
+  const [optionsVisible, setOptionsVisible] = useState(false);
+  const [editVisible, setEditVisible] = useState(false);
+  const [addUsersVisible, setAddUsersVisible] = useState(false);
+  const [participantsVisible, setParticipantsVisible] = useState(false);
+  const [editTitle, setEditTitle] = useState('');
+  const [editPhotoUri, setEditPhotoUri] = useState<string | null>(null);
+  const [addingUsersMap, setAddingUsersMap] = useState<Record<string, boolean>>({});
+  const [busy, setBusy] = useState(false);
   const [viewerUri, setViewerUri] = useState<string | null>(null);
   const [activityInfo, setActivityInfo] = useState<{ name: string, type: string, date: string, time: string } | null>(null);
   const [dmPeer, setDmPeer] = useState<{ uid: string; username: string; photo?: string } | null>(null);
+  const { allActivities, joinedActivities } = useActivityContext();
+  const myJoinedActivities = (allActivities || []).filter((a: any) => (joinedActivities || []).includes(a.id));
+  const [inviteModalVisible, setInviteModalVisible] = useState(false);
+  const [inviteSelection, setInviteSelection] = useState<Record<string, boolean>>({});
+  const [myFriendIds, setMyFriendIds] = useState<string[]>([]);
+  const [myRequestsSent, setMyRequestsSent] = useState<string[]>([]);
+
+  // Bottom toast
+  const toastAnim = useRef(new Animated.Value(0)).current;
+  const [toastMsg, setToastMsg] = useState('');
+  const toastTimeoutRef = useRef<any>(null);
+  const showToast = (msg: string) => {
+    if (!msg) return;
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    setToastMsg(msg);
+    Animated.timing(toastAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+    toastTimeoutRef.current = setTimeout(() => {
+      Animated.timing(toastAnim, { toValue: 0, duration: 200, useNativeDriver: true }).start();
+      toastTimeoutRef.current = null;
+    }, 2000);
+  };
   const flatListRef = useRef<FlatList>(null);
   const progressRef = useRef(0);
   const isInitialLoad = useRef(true);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [isMessagesReady, setIsMessagesReady] = useState(false);
+  const navigatedAwayRef = useRef(false);
+  const leavingRef = useRef(false);
+  const shownExitAlertRef = useRef(false);
+
+  const exitToInbox = () => {
+    if (navigatedAwayRef.current) return;
+    navigatedAwayRef.current = true;
+    if (optionsVisible) setOptionsVisible(false);
+    if (participantsVisible) setParticipantsVisible(false);
+    if (editVisible) setEditVisible(false);
+    if (addUsersVisible) setAddUsersVisible(false);
+    setTimeout(() => navigation.navigate('MainTabs' as any, { screen: 'Inbox' } as any), 0);
+  };
+
+  const safeExitChat = () => {
+    if (navigatedAwayRef.current) return;
+    navigatedAwayRef.current = true;
+    // Close any overlays
+    if (optionsVisible) setOptionsVisible(false);
+    if (participantsVisible) setParticipantsVisible(false);
+    if (editVisible) setEditVisible(false);
+    if (addUsersVisible) setAddUsersVisible(false);
+    // Prefer natural back transition when possible; fallback to Inbox if no back stack
+    setTimeout(() => {
+      const navAny = navigation as any;
+      if (navAny?.canGoBack?.()) {
+        navigation.goBack();
+      } else {
+        navigation.navigate('MainTabs' as any, { screen: 'Inbox' } as any);
+      }
+    }, 0);
+  };
 
   // Set Android navigation bar to dark on mount (only on Android)
   useEffect(() => {
@@ -77,6 +149,8 @@ const ChatDetailScreen = () => {
       NavigationBar.setButtonStyleAsync('light');
     }
   }, []);
+
+  // Use native back behavior (hardware/gesture) for proper animations; header back uses safeExitChat.
 
   // Keyboard listeners - scroll to bottom when keyboard opens
   useEffect(() => {
@@ -97,21 +171,21 @@ const ChatDetailScreen = () => {
     const ref = doc(db, 'chats', chatId);
     const unsubAccess = onSnapshot(ref, (snap) => {
       if (!snap.exists()) {
-        Alert.alert(
-          'Chat not found',
-          'This chat no longer exists.',
-          [{ text: 'OK', onPress: () => navigation.goBack() }]
-        );
+        if (leavingRef.current || navigatedAwayRef.current) { exitToInbox(); return; }
+        if (!shownExitAlertRef.current) {
+          shownExitAlertRef.current = true;
+          Alert.alert('Chat not found', 'This chat no longer exists.', [{ text: 'OK', onPress: () => safeExitChat() }]);
+        }
         return;
       }
       const data: any = snap.data();
       const uid = auth.currentUser?.uid;
       if (!uid || !Array.isArray(data.participants) || !data.participants.includes(uid)) {
-        Alert.alert(
-          'Access Denied',
-          'You are no longer a participant in this group chat.',
-          [{ text: 'OK', onPress: () => navigation.goBack() }]
-        );
+        if (leavingRef.current || navigatedAwayRef.current) { exitToInbox(); return; }
+        if (!shownExitAlertRef.current) {
+          shownExitAlertRef.current = true;
+          Alert.alert('Access Denied', 'You are no longer a participant in this group chat.', [{ text: 'OK', onPress: () => safeExitChat() }]);
+        }
         return;
       }
       // Start messages subscription if not already
@@ -136,20 +210,20 @@ const ChatDetailScreen = () => {
           },
           (error) => {
             // Permission denied or other errors: exit chat
-            Alert.alert(
-              'Access Denied',
-              'You are no longer allowed to view this chat.',
-              [{ text: 'OK', onPress: () => navigation.goBack() }]
-            );
+            if (leavingRef.current || navigatedAwayRef.current) { exitToInbox(); return; }
+            if (!shownExitAlertRef.current) {
+              shownExitAlertRef.current = true;
+              Alert.alert('Access Denied', 'You are no longer allowed to view this chat.', [{ text: 'OK', onPress: () => safeExitChat() }]);
+            }
           }
         );
       }
     }, (error) => {
-      Alert.alert(
-        'Access Denied',
-        'You are no longer allowed to view this chat.',
-        [{ text: 'OK', onPress: () => navigation.goBack() }]
-      );
+      if (leavingRef.current || navigatedAwayRef.current) { exitToInbox(); return; }
+      if (!shownExitAlertRef.current) {
+        shownExitAlertRef.current = true;
+        Alert.alert('Access Denied', 'You are no longer allowed to view this chat.', [{ text: 'OK', onPress: () => safeExitChat() }]);
+      }
     });
     return () => {
       if (unsubscribeMessages) unsubscribeMessages();
@@ -176,7 +250,7 @@ const ChatDetailScreen = () => {
     // eslint-disable-next-line
   }, [messages]);
 
-  // Fetch chat meta: activity info for group or peer info for DM
+  // Fetch chat meta: activity info for group, or peer info for DM, or custom group title/photo
   useEffect(() => {
     const fetchActivity = async () => {
       const chatDoc = await getDoc(doc(db, 'chats', chatId));
@@ -184,6 +258,7 @@ const ChatDetailScreen = () => {
       // Treat as DM if type is 'dm', or no activityId and exactly 2 participants
       const participants = Array.isArray(chatData?.participants) ? chatData?.participants : [];
       const isDm = chatData?.type === 'dm' || (!chatData?.activityId && participants.length === 2);
+      setParticipantIds(participants);
       if (isDm) {
         const myId = auth.currentUser?.uid;
         const peerId = participants.find((p: string) => p !== myId);
@@ -195,6 +270,8 @@ const ChatDetailScreen = () => {
           }
         }
         setActivityInfo(null);
+        setGroupMeta(null);
+        setChatActivityId(null);
       } else if (chatData?.activityId) {
         const activityDoc = await getDoc(doc(db, 'activities', chatData.activityId));
         if (activityDoc.exists()) {
@@ -206,10 +283,206 @@ const ChatDetailScreen = () => {
             time: data.time || '',
           });
         }
+        setGroupMeta(null);
+        setChatActivityId(chatData.activityId);
+      } else {
+        // Custom non-activity group
+        setActivityInfo(null);
+        setGroupMeta({ title: (chatData as any)?.title || 'Group Chat', photoUrl: (chatData as any)?.photoUrl });
+        setChatActivityId(null);
+        setEditTitle(((chatData as any)?.title || 'Group Chat') as string);
       }
     };
     fetchActivity();
   }, [chatId]);
+
+  // Load participants profiles when participantIds change and modal may be opened
+  useEffect(() => {
+    const load = async () => {
+      if (!participantIds.length) { setParticipants([]); return; }
+      const rows: Array<{ uid: string; username: string; photo?: string }> = [];
+      for (let i = 0; i < participantIds.length; i += 10) {
+        const ids = participantIds.slice(i, i + 10);
+        const q = query(collection(db, 'profiles'), where('__name__', 'in', ids));
+        const snap = await getDocs(q);
+        snap.forEach((d) => {
+          const p: any = d.data();
+          rows.push({ uid: d.id, username: p.username || p.username_lower || 'User', photo: p.photo || p.photoURL });
+        });
+      }
+      rows.sort((a, b) => a.username.localeCompare(b.username));
+      setParticipants(rows);
+    };
+    load();
+  }, [participantIds]);
+
+  // Live friend state for current user (friends and requestsSent) to sync header buttons in realtime
+  useEffect(() => {
+    const me = auth.currentUser?.uid;
+    if (!me) return;
+    const unsub = onSnapshot(doc(db, 'profiles', me), (snap) => {
+      if (!snap.exists()) { setMyFriendIds([]); setMyRequestsSent([]); return; }
+      const data: any = snap.data();
+      const friendIds: string[] = Array.isArray(data?.friends) ? data.friends : [];
+      const reqs: string[] = Array.isArray(data?.requestsSent) ? data.requestsSent : [];
+      setMyFriendIds(friendIds);
+      setMyRequestsSent(reqs);
+    }, () => {
+      setMyFriendIds([]);
+      setMyRequestsSent([]);
+    });
+    return () => unsub();
+  }, []);
+
+  // Load friends for Add Users modal
+  useEffect(() => {
+    const me = auth.currentUser?.uid;
+    if (!me) return;
+    const loadFriends = async () => {
+      try {
+        const meDoc = await getDoc(doc(db, 'profiles', me));
+        if (!meDoc.exists()) { setFriends([]); return; }
+        const data: any = meDoc.data();
+        const friendIds: string[] = Array.isArray(data?.friends) ? data.friends : [];
+        if (!friendIds.length) { setFriends([]); return; }
+        const rows: Array<{ uid: string; username: string; photo?: string }> = [];
+        for (let i = 0; i < friendIds.length; i += 10) {
+          const ids = friendIds.slice(i, i + 10);
+          const q2 = query(collection(db, 'profiles'), where('__name__', 'in', ids));
+          const snap2 = await getDocs(q2);
+          snap2.forEach((d) => {
+            const p: any = d.data();
+            rows.push({ uid: d.id, username: p.username || p.username_lower || 'User', photo: p.photo || p.photoURL });
+          });
+        }
+        rows.sort((a, b) => a.username.localeCompare(b.username));
+        setFriends(rows);
+      } catch {}
+    };
+    loadFriends();
+  }, []);
+
+  const openInfoMenu = () => setOptionsVisible(true);
+  const closeInfoMenu = () => setOptionsVisible(false);
+
+  const handlePickEditPhoto = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') { Alert.alert('Permission required', 'Please allow photo library access.'); return; }
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.8 });
+    if (!result.canceled && result.assets?.length) {
+      setEditPhotoUri(result.assets[0].uri);
+    }
+  };
+
+  const handleSaveEdit = async () => {
+    if (!groupMeta) return; // only for custom groups
+    setBusy(true);
+    try {
+      const updates: any = {};
+      const newTitle = (editTitle || '').trim().slice(0, 25);
+      if (newTitle && newTitle !== groupMeta.title) updates.title = newTitle;
+      if (editPhotoUri) {
+        const uploaded = await uploadChatImage(editPhotoUri, auth.currentUser?.uid || 'unknown', `group_${chatId}`);
+        updates.photoUrl = uploaded;
+      }
+      if (Object.keys(updates).length) {
+        await updateDoc(doc(db, 'chats', chatId), updates);
+        setGroupMeta({ title: updates.title || groupMeta.title, photoUrl: updates.photoUrl || groupMeta.photoUrl });
+      }
+      setEditVisible(false);
+    } catch (e: any) {
+      Alert.alert('Update failed', e?.message || 'Could not update group.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleAddUsers = async () => {
+    // Add selected friends (not already participants)
+    const selected = Object.keys(addingUsersMap).filter((k) => addingUsersMap[k]);
+    if (!selected.length) { setAddUsersVisible(false); return; }
+    setBusy(true);
+    try {
+      // Filter out users already in participants
+      const toAdd = selected.filter((uid) => !participantIds.includes(uid));
+      if (toAdd.length) {
+        await updateDoc(doc(db, 'chats', chatId), { participants: arrayUnion(...toAdd) } as any);
+        setParticipantIds([...participantIds, ...toAdd]);
+      }
+      setAddUsersVisible(false);
+      setAddingUsersMap({});
+    } catch (e: any) {
+      Alert.alert('Add users failed', e?.message || 'Could not add users.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleLeaveCustomGroup = async () => {
+    const me = auth.currentUser?.uid;
+    if (!me) return;
+    Alert.alert('Leave group', 'Are you sure you want to leave this group?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Leave', style: 'destructive', onPress: async () => {
+          try {
+            leavingRef.current = true;
+            // Always only remove myself so the chat persists for others (host or not)
+            const chatRef = doc(db, 'chats', chatId);
+            await updateDoc(chatRef, { participants: arrayRemove(me) } as any);
+          } catch {}
+          exitToInbox();
+        }
+      }
+    ]);
+  };
+
+  const handleMessageUser = async (uid: string) => {
+    const me = auth.currentUser?.uid;
+    if (!me || uid === me) return;
+    try {
+      if (participantsVisible) setParticipantsVisible(false);
+      if (optionsVisible) setOptionsVisible(false);
+      const dmId = await ensureDmChat(uid);
+      setTimeout(() => navigation.navigate('ChatDetail', { chatId: dmId }), 60);
+    } catch (e: any) {
+      Alert.alert('Could not open chat', e?.message || 'Please try again.');
+    }
+  };
+
+  const handleAddFriend = async (uid: string) => {
+    try {
+      // Optimistic update
+      setMyRequestsSent((prev) => (prev.includes(uid) ? prev : [...prev, uid]));
+      await sendFriendRequest(uid);
+      showToast('Friend request sent');
+    } catch (e: any) {
+      // Rollback
+      setMyRequestsSent((prev) => prev.filter((id) => id !== uid));
+      Alert.alert('Failed', e?.message || 'Could not send request.');
+    }
+  };
+
+  const handleCancelFriendRequest = async (uid: string) => {
+    try {
+      // Optimistic update
+      setMyRequestsSent((prev) => prev.filter((id) => id !== uid));
+      await cancelFriendRequest(uid);
+      showToast('Canceled request');
+    } catch (e: any) {
+      Alert.alert('Failed', e?.message || 'Could not cancel request.');
+    }
+  };
+
+  const goToUserProfile = (userId: string) => {
+    if (participantsVisible) {
+      setParticipantsVisible(false);
+      setTimeout(() => navigation.navigate('UserProfile', { userId }), 80);
+      return;
+    }
+    if (optionsVisible) setOptionsVisible(false);
+    navigation.navigate('UserProfile', { userId });
+  };
 
   // Play an audio message
   const handlePlayPauseAudio = async (uri: string, id: string) => {
@@ -476,37 +749,7 @@ const ChatDetailScreen = () => {
     );
   };
 
-  useEffect(() => {
-    // Live-guard chat access; if user removed, go back immediately
-    const ref = doc(db, 'chats', chatId);
-    const unsub = onSnapshot(ref, (snap) => {
-      if (!snap.exists()) {
-        Alert.alert(
-          'Chat not found',
-          'This chat no longer exists.',
-          [{ text: 'OK', onPress: () => navigation.goBack() }]
-        );
-        return;
-      }
-      const data: any = snap.data();
-      const uid = auth.currentUser?.uid;
-      if (!uid || !Array.isArray(data.participants) || !data.participants.includes(uid)) {
-        Alert.alert(
-          'Access Denied',
-          'You are no longer a participant in this group chat.',
-          [{ text: 'OK', onPress: () => navigation.goBack() }]
-        );
-      }
-    }, (error) => {
-      // Handle permission errors by exiting
-      Alert.alert(
-        'Access Denied',
-        'You are no longer allowed to view this chat.',
-        [{ text: 'OK', onPress: () => navigation.goBack() }]
-      );
-    });
-    return () => unsub();
-  }, [chatId]);
+  // Removed duplicate access guard (handled above) to avoid multiple alerts
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#121212' }} edges={['top']}>
@@ -518,38 +761,366 @@ const ChatDetailScreen = () => {
         <View style={styles.flexContainer}>
           {/* Header with group name and navigation buttons */}
           <View style={styles.header}>
-            <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerBack}>
+            <TouchableOpacity onPress={safeExitChat} style={styles.headerBack}>
               <Ionicons name="arrow-back" size={26} color="#1ae9ef" />
             </TouchableOpacity>
             {dmPeer ? (
+              (() => {
+                const isFriend = dmPeer ? myFriendIds.includes(dmPeer.uid) : false;
+                const isRequested = dmPeer ? myRequestsSent.includes(dmPeer.uid) : false;
+                return (
+                  <>
+                    {/* DM: tapping avatar or name opens their profile */}
+                    <TouchableOpacity onPress={() => dmPeer?.uid && goToUserProfile(dmPeer.uid)} activeOpacity={0.8}>
+                      <Image source={{ uri: dmPeer.photo || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(dmPeer.username) }} style={styles.headerImage} />
+                    </TouchableOpacity>
+                    <View style={{ flex: 1, marginLeft: 10 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <TouchableOpacity onPress={() => dmPeer?.uid && goToUserProfile(dmPeer.uid)} activeOpacity={0.7}>
+                          <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">{dmPeer.username}</Text>
+                        </TouchableOpacity>
+                        {/* Inline friend state + invite, styled like ProfileScreen */}
+                        {isFriend ? (
+                          <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 8 }}>
+                            <View style={styles.msgBtnFilled}>
+                              <Ionicons name={'checkmark-done-outline'} size={18} color={'#000'} style={{ marginRight: 4 }} />
+                              <Text style={styles.msgBtnTextInverted}>Connected</Text>
+                            </View>
+                            <TouchableOpacity style={[styles.inviteBtn, { marginLeft: 6 }]} onPress={() => { setInviteSelection({}); setInviteModalVisible(true); }}>
+                              <Ionicons name="add-circle-outline" size={18} color="#000" />
+                              <Text style={styles.inviteBtnText}>Invite</Text>
+                            </TouchableOpacity>
+                          </View>
+                        ) : isRequested ? (
+                          <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 8 }}>
+                            <TouchableOpacity style={styles.msgBtnFilled} activeOpacity={0.85} onPress={() => dmPeer && handleCancelFriendRequest(dmPeer.uid)}>
+                              <Ionicons name={'person-add-outline'} size={18} color={'#000'} style={{ marginRight: 4 }} />
+                              <Text style={styles.msgBtnTextInverted}>Request Sent</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={[styles.inviteBtn, { marginLeft: 6 }]} onPress={() => { setInviteSelection({}); setInviteModalVisible(true); }}>
+                              <Ionicons name="add-circle-outline" size={18} color="#000" />
+                              <Text style={styles.inviteBtnText}>Invite</Text>
+                            </TouchableOpacity>
+                          </View>
+                        ) : (
+                          <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 8 }}>
+                            <TouchableOpacity style={styles.msgBtn} activeOpacity={0.85} onPress={() => dmPeer && handleAddFriend(dmPeer.uid)}>
+                              <Ionicons name="person-add-outline" size={18} color={'#1ae9ef'} style={{ marginRight: 4 }} />
+                              <Text style={styles.msgBtnText}>Add Friend</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={[styles.inviteBtn, { marginLeft: 6 }]} onPress={() => { setInviteSelection({}); setInviteModalVisible(true); }}>
+                              <Ionicons name="add-circle-outline" size={18} color="#000" />
+                              <Text style={styles.inviteBtnText}>Invite</Text>
+                            </TouchableOpacity>
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                  </>
+                );
+              })()
+            ) : activityInfo ? (
               <>
-                <Image source={{ uri: dmPeer.photo || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(dmPeer.username) }} style={styles.headerImage} />
-                <View style={{ flex: 1, marginLeft: 10 }}>
-                  <Text style={styles.headerTitle}>{dmPeer.username}</Text>
+                {/* Activity group: circular avatar with ActivityIcon */}
+                <View
+                  style={{
+                    width: 38,
+                    height: 38,
+                    borderRadius: 19,
+                    borderWidth: 1,
+                    borderColor: '#1ae9ef',
+                    marginLeft: 6,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: 'transparent',
+                  }}
+                >
+                  {activityInfo?.type ? (
+                    <ActivityIcon activity={activityInfo.type} size={22} color="#1ae9ef" />
+                  ) : null}
                 </View>
-              </>
-            ) : (
-              <>
-                <Ionicons name="people" size={28} color="#1ae9ef" style={{ marginLeft: 6, marginRight: 4 }} />
-                {activityInfo?.type ? (
-                  <ActivityIcon activity={activityInfo.type} size={24} color="#1ae9ef" />
-                ) : null}
                 <View style={{ flex: 1, marginLeft: 10 }}>
-                  <Text style={{ color: '#1ae9ef', fontWeight: 'bold', fontSize: 17 }}>
-                    {activityInfo?.name || 'Group Chat'}
-                  </Text>
+                  <Text style={{ color: '#1ae9ef', fontWeight: 'bold', fontSize: 17 }}>{activityInfo?.name || 'Group Chat'}</Text>
                   {activityInfo?.date && activityInfo?.time && (
                     <Text style={{ color: '#fff', fontSize: 12, fontWeight: '500' }}>
                       Scheduled for {formatDate(activityInfo.date)} at {activityInfo.time}
                     </Text>
                   )}
                 </View>
-                <TouchableOpacity onPress={() => {/* open group info/settings */}} style={styles.headerInfo}>
+                <TouchableOpacity onPress={openInfoMenu} style={styles.headerInfo}>
+                  <Ionicons name="information-circle-outline" size={26} color="#1ae9ef" />
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                {/* Custom group: show group photo and title like DM */}
+                <Image
+                  source={{ uri: (groupMeta?.photoUrl) || ('https://ui-avatars.com/api/?name=' + encodeURIComponent(groupMeta?.title || 'Group Chat')) }}
+                  style={styles.headerImage}
+                />
+                <View style={{ flex: 1, marginLeft: 10 }}>
+                  <Text style={styles.headerTitle}>{groupMeta?.title || 'Group Chat'}</Text>
+                </View>
+                <TouchableOpacity onPress={openInfoMenu} style={styles.headerInfo}>
                   <Ionicons name="information-circle-outline" size={26} color="#1ae9ef" />
                 </TouchableOpacity>
               </>
             )}
           </View>
+
+          {/* Invite modal for DM peer */}
+          <Modal
+            visible={inviteModalVisible}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setInviteModalVisible(false)}
+          >
+            <View style={styles.menuOverlay}>
+              <Pressable style={StyleSheet.absoluteFill} onPress={() => setInviteModalVisible(false)} />
+              <View style={styles.modalPanel} pointerEvents="auto">
+                <Text style={styles.modalTitle}>Invite {dmPeer?.username || 'user'}</Text>
+                {myJoinedActivities.length === 0 ? (
+                  <Text style={styles.placeholderText}>You haven't joined any activities yet.</Text>
+                ) : (
+                  <FlatList
+                    data={myJoinedActivities}
+                    keyExtractor={(a: any) => a.id}
+                    renderItem={({ item }: any) => {
+                      const targetAlreadyJoined = !!(dmPeer && Array.isArray(item?.joinedUserIds) && item.joinedUserIds.includes(dmPeer.uid));
+                      return (
+                        <Pressable
+                          style={[styles.row, { justifyContent: 'space-between' }, targetAlreadyJoined && { opacity: 0.45 }]}
+                          onPress={() => {
+                            if (targetAlreadyJoined) {
+                              showToast(`${dmPeer?.username || 'User'} is already in this activity`);
+                              return;
+                            }
+                            setInviteSelection(prev => ({ ...prev, [item.id]: !prev[item.id] }));
+                          }}
+                        >
+                          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <ActivityIcon activity={item.activity} size={22} color="#1ae9ef" />
+                            <View style={{ marginLeft: 8 }}>
+                              <Text style={{ color: '#fff', fontWeight: '600' }} numberOfLines={1}>{item.activity}</Text>
+                              <Text style={{ color: '#bbb', fontSize: 12 }}>{item.date} • {item.time}</Text>
+                            </View>
+                          </View>
+                          {targetAlreadyJoined ? (
+                            <Text style={{ color: '#bbb', fontSize: 12, fontWeight: '600' }}>Joined</Text>
+                          ) : (
+                            <Ionicons name={inviteSelection[item.id] ? 'checkbox' : 'square-outline'} size={22} color={inviteSelection[item.id] ? '#1ae9ef' : '#666'} />
+                          )}
+                        </Pressable>
+                      );
+                    }}
+                    ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
+                    style={{ maxHeight: 320, marginVertical: 8 }}
+                  />
+                )}
+                <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}>
+                  <TouchableOpacity onPress={() => setInviteModalVisible(false)} style={[styles.modalButton, { backgroundColor: '#8e2323' }]}> 
+                    <Text style={{ color: '#fff', fontWeight: '600' }}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={async () => {
+                      if (!dmPeer) return;
+                      const selectedIds = Object.keys(inviteSelection).filter(id => inviteSelection[id]);
+                      if (selectedIds.length === 0) { setInviteModalVisible(false); return; }
+                      const eligible = selectedIds.filter((id) => {
+                        const act = (allActivities || []).find((a: any) => a.id === id);
+                        const joinedIds = (act as any)?.joinedUserIds || [];
+                        return !(Array.isArray(joinedIds) && dmPeer && joinedIds.includes(dmPeer.uid));
+                      });
+                      if (eligible.length === 0) { showToast(`${dmPeer.username} is already in those activities`); return; }
+                      try {
+                        const { sentIds } = await sendActivityInvites(dmPeer.uid, eligible);
+                        if (sentIds.length > 0) showToast(sentIds.length === 1 ? 'Invite sent' : `Sent ${sentIds.length} invites`);
+                        else showToast('No invites sent');
+                      } catch { showToast('Could not send invites'); }
+                      setInviteModalVisible(false);
+                      setInviteSelection({});
+                    }}
+                    style={[styles.modalButton, { backgroundColor: '#1ae9ef', marginLeft: 8 }]}
+                  > 
+                    <Text style={{ color: '#000', fontWeight: '700' }}>Send</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          </Modal>
+
+          {/* Group info menu (only for group chats) */}
+          <Modal
+            visible={optionsVisible}
+            transparent
+            animationType="fade"
+            onRequestClose={closeInfoMenu}
+          >
+            <View style={styles.menuOverlay}>
+              <Pressable style={StyleSheet.absoluteFill} onPress={closeInfoMenu} />
+              <View style={styles.menuPanel} pointerEvents="auto">
+                {groupMeta ? (
+                  <>
+                    <TouchableOpacity style={styles.menuItem} onPress={() => { setEditVisible(true); setOptionsVisible(false); }}>
+                      <Text style={styles.menuItemText}>Edit group (title & photo)</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.menuItem} onPress={() => { setAddUsersVisible(true); setOptionsVisible(false); }}>
+                      <Text style={styles.menuItemText}>Add users</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.menuItem} onPress={() => { setParticipantsVisible(true); setOptionsVisible(false); }}>
+                      <Text style={styles.menuItemText}>View participants</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.menuItemDanger} onPress={() => { setOptionsVisible(false); handleLeaveCustomGroup(); }}>
+                      <Text style={styles.menuItemDangerText}>Leave group</Text>
+                    </TouchableOpacity>
+                  </>
+                ) : (
+                  <>
+                    <TouchableOpacity style={styles.menuItem} onPress={() => { setParticipantsVisible(true); setOptionsVisible(false); }}>
+                      <Text style={styles.menuItemText}>View participants</Text>
+                    </TouchableOpacity>
+                    {!!chatActivityId && (
+                      <TouchableOpacity style={styles.menuItem} onPress={() => { setOptionsVisible(false); navigation.navigate('ActivityDetails' as any, { activityId: chatActivityId }); }}>
+                        <Text style={styles.menuItemText}>Go to activity details</Text>
+                      </TouchableOpacity>
+                    )}
+                  </>
+                )}
+                <TouchableOpacity style={[styles.menuItem, { marginTop: 8 }]} onPress={closeInfoMenu}>
+                  <Text style={[styles.menuItemText, { color: '#aaa' }]}>Close</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </Modal>
+
+          {/* Edit custom group modal */}
+          <Modal
+            visible={!!(editVisible && groupMeta)}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setEditVisible(false)}
+          >
+            <View style={styles.menuOverlay}>
+              <Pressable style={StyleSheet.absoluteFill} onPress={() => setEditVisible(false)} />
+              {groupMeta && (
+                <View style={styles.modalPanel} pointerEvents="auto">
+                  <Text style={styles.modalTitle}>Edit group</Text>
+                  <TouchableOpacity onPress={handlePickEditPhoto} style={styles.photoPickerRow}>
+                    {editPhotoUri || groupMeta.photoUrl ? (
+                      <Image source={{ uri: editPhotoUri || groupMeta.photoUrl }} style={styles.headerImage} />
+                    ) : (
+                      <View style={[styles.headerImage, { alignItems: 'center', justifyContent: 'center', backgroundColor: '#0c0c0c', borderWidth: 1, borderColor: '#1ae9ef' }]}>
+                        <Ionicons name="image" size={18} color="#1ae9ef" />
+                      </View>
+                    )}
+                    <Text style={{ color: '#fff', marginLeft: 10 }}>Change group photo</Text>
+                  </TouchableOpacity>
+                  <TextInput
+                    style={styles.input}
+                    value={editTitle}
+                    onChangeText={(t) => setEditTitle(t.slice(0, 25))}
+                    placeholder="Group title"
+                    placeholderTextColor="#888"
+                  />
+                  <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}>
+                    <TouchableOpacity onPress={() => setEditVisible(false)} style={[styles.modalButton, { backgroundColor: '#8e2323' }]}> 
+                      <Text style={{ color: '#fff', fontWeight: '600' }}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity disabled={busy} onPress={handleSaveEdit} style={[styles.modalButton, { backgroundColor: '#1ae9ef', marginLeft: 8, opacity: busy ? 0.6 : 1 }]}> 
+                      <Text style={{ color: '#000', fontWeight: '700' }}>Save</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
+            </View>
+          </Modal>
+
+          {/* Add users modal */}
+          <Modal
+            visible={addUsersVisible}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setAddUsersVisible(false)}
+          >
+            <View style={styles.menuOverlay}>
+              <Pressable style={StyleSheet.absoluteFill} onPress={() => setAddUsersVisible(false)} />
+              <View style={styles.modalPanel} pointerEvents="auto">
+                <Text style={styles.modalTitle}>Add users</Text>
+                <Text style={{ color: '#aaa', marginBottom: 8 }}>Select from your connections</Text>
+                <FlatList
+                  data={friends.filter(f => !participantIds.includes(f.uid))}
+                  keyExtractor={(i) => i.uid}
+                  style={{ maxHeight: 260 }}
+                  renderItem={({ item }) => (
+                    <TouchableOpacity
+                      style={styles.row}
+                      onPress={() => setAddingUsersMap(prev => ({ ...prev, [item.uid]: !prev[item.uid] }))}
+                    >
+                      <Image source={{ uri: item.photo || ('https://ui-avatars.com/api/?name=' + encodeURIComponent(item.username)) }} style={styles.rowImage} />
+                      <Text style={styles.rowText}>{item.username}</Text>
+                      <Ionicons name={addingUsersMap[item.uid] ? 'checkbox' : 'square-outline'} size={22} color="#1ae9ef" />
+                    </TouchableOpacity>
+                  )}
+                  ListEmptyComponent={<Text style={{ color: '#777', textAlign: 'center', marginVertical: 8 }}>No available friends to add</Text>}
+                />
+                <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}>
+                  <TouchableOpacity onPress={() => { setAddUsersVisible(false); setAddingUsersMap({}); }} style={[styles.modalButton, { backgroundColor: '#8e2323' }]}>
+                    <Text style={{ color: '#fff', fontWeight: '600' }}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity disabled={busy} onPress={handleAddUsers} style={[styles.modalButton, { backgroundColor: '#1ae9ef', marginLeft: 8, opacity: busy ? 0.6 : 1 }]}>
+                    <Text style={{ color: '#000', fontWeight: '700' }}>Add</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          </Modal>
+
+          {/* Participants modal */}
+          <Modal
+            visible={participantsVisible}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setParticipantsVisible(false)}
+          >
+            <View style={styles.menuOverlay}>
+              <Pressable style={StyleSheet.absoluteFill} onPress={() => setParticipantsVisible(false)} />
+              <View style={styles.modalPanel} pointerEvents="auto">
+                <Text style={styles.modalTitle}>Participants</Text>
+                <FlatList
+                  data={participants}
+                  keyExtractor={(i) => i.uid}
+                  style={{ maxHeight: 300 }}
+                  renderItem={({ item }) => {
+                    const me = auth.currentUser?.uid;
+                    const isMe = item.uid === me;
+                    return (
+                      <View style={[styles.row, { alignItems: 'center' }]}>
+                        <TouchableOpacity onPress={() => goToUserProfile(item.uid)} style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                          <Image source={{ uri: item.photo || ('https://ui-avatars.com/api/?name=' + encodeURIComponent(item.username)) }} style={styles.rowImage} />
+                          <Text style={[styles.rowText, { flex: 1 }]}>{item.username}{isMe ? ' (You)' : ''}</Text>
+                        </TouchableOpacity>
+                        {!isMe && groupMeta && (
+                          <>
+                            <TouchableOpacity onPress={() => handleMessageUser(item.uid)} style={[styles.chip, { backgroundColor: '#1ae9ef' }]}>
+                              <Text style={{ color: '#000', fontWeight: '700' }}>Message</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity onPress={() => handleAddFriend(item.uid)} style={[styles.chip, { marginLeft: 6, borderColor: '#1ae9ef', borderWidth: 1 }]}>
+                              <Text style={{ color: '#1ae9ef', fontWeight: '700' }}>Add Friend</Text>
+                            </TouchableOpacity>
+                          </>
+                        )}
+                      </View>
+                    );
+                  }}
+                />
+                <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}>
+                  <TouchableOpacity onPress={() => setParticipantsVisible(false)} style={[styles.modalButton, { backgroundColor: '#1e1e1e', borderColor: '#444', borderWidth: 1 }]}>
+                    <Text style={{ color: '#ccc', fontWeight: '600' }}>Close</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          </Modal>
           
           {/* Messages area with loading state */}
           {!isMessagesReady ? (
@@ -672,6 +1243,19 @@ const ChatDetailScreen = () => {
             </View>
           )}
         </View>
+        {/* Bottom toast */}
+        <Animated.View
+          pointerEvents={toastMsg ? 'auto' : 'none'}
+          style={{
+            position: 'absolute', left: 20, right: 20, bottom: 24,
+            backgroundColor: 'rgba(0,0,0,0.85)', borderColor: '#2a2a2a', borderWidth: 1,
+            paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, alignItems: 'center',
+            transform: [{ translateY: toastAnim.interpolate({ inputRange: [0, 1], outputRange: [20, 0] }) }],
+            opacity: toastAnim,
+          }}
+        >
+          <Text style={{ color: '#fff', fontSize: 14, textAlign: 'center' }}>{toastMsg}</Text>
+        </Animated.View>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -897,6 +1481,167 @@ const styles = StyleSheet.create({
     marginHorizontal: 2,
     borderWidth: 2,
     borderColor: '#007575',
+  },
+  // New styles for group info menus/modals
+  menuOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-start',
+    alignItems: 'flex-end',
+    paddingTop: 54,
+    paddingRight: 8,
+    // Ensure overlay sits above all content and captures touches
+    zIndex: 9999,
+    elevation: 20,
+  },
+  menuPanel: {
+    width: 260,
+    backgroundColor: '#18191a',
+    borderRadius: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: '#2a2a2a',
+    zIndex: 10000,
+    elevation: 24,
+  },
+  menuItem: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  menuItemText: {
+    color: '#fff',
+    fontSize: 15,
+  },
+  menuItemDanger: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: '#311',
+    borderTopWidth: 1,
+    borderTopColor: '#3a1f1f',
+  },
+  menuItemDangerText: {
+    color: '#ff4d4f',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  modalPanel: {
+    width: '92%',
+    backgroundColor: '#18191a',
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#2a2a2a',
+    alignSelf: 'center',
+  },
+  modalTitle: {
+    color: '#1ae9ef',
+    fontWeight: 'bold',
+    fontSize: 18,
+    marginBottom: 10,
+  },
+  photoPickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  input: {
+    backgroundColor: '#232323',
+    color: '#fff',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    height: 40,
+  },
+  smallActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: '#1ae9ef',
+  },
+  smallActionText: {
+    color: '#000',
+    fontWeight: '700',
+    fontSize: 12,
+    marginLeft: 6,
+  },
+  // Button styles matching ProfileScreen for consistency
+  inviteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1ae9ef',
+    borderRadius: 16,
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+  },
+  inviteBtnText: {
+    color: '#000',
+    fontWeight: '700',
+    fontSize: 11,
+    marginLeft: 6,
+  },
+  msgBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#1ae9ef',
+    borderRadius: 16,
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+  },
+  msgBtnText: {
+    color: '#1ae9ef',
+    fontWeight: '700',
+    fontSize: 11,
+    marginLeft: 6,
+  },
+  msgBtnFilled: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1ae9ef',
+    borderWidth: 1,
+    borderColor: '#1ae9ef',
+    borderRadius: 16,
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+  },
+  msgBtnTextInverted: {
+    color: '#000',
+    fontWeight: '700',
+    fontSize: 11,
+    marginLeft: 6,
+  },
+  modalButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+  },
+  rowImage: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: '#1ae9ef',
+  },
+  rowText: {
+    color: '#fff',
+    fontSize: 15,
+  },
+  chip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
   },
 });
 

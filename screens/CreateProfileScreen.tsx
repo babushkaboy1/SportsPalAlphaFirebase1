@@ -210,7 +210,10 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
         setAwaitingEmailVerification(true);
         setSentVerification(true);
         startSendCooldown(30);
-        Alert.alert('Verification sent', 'We sent a verification link to your email. Open it to verify.');
+        Alert.alert(
+          'Verification sent',
+          'We sent a verification link to your email. Open it to verify.\n\nTip: If you don\'t see it, check your Spam/Junk or Deleted/Trash folder.'
+        );
       } else {
         // Not authenticated yet: create the account now (requires valid password)
         const checks = getPasswordChecks(password);
@@ -231,7 +234,10 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
           setAwaitingEmailVerification(true);
           setSentVerification(true);
           startSendCooldown(30);
-          Alert.alert('Verification sent', 'We sent a verification link. Open it to verify, then tap "I verified — Refresh".');
+          Alert.alert(
+            'Verification sent',
+            'We sent a verification link. Open it to verify, then tap "I verified — Refresh".\n\nTip: If you don\'t see it, check your Spam/Junk or Deleted/Trash folder.'
+          );
         } catch (e: any) {
           console.error('create+send verification failed', e);
           if (e?.code === 'auth/email-already-in-use') {

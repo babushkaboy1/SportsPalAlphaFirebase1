@@ -89,7 +89,7 @@ const LoginScreen = ({ navigation }: any) => {
   };
 
   return (
-    <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
+    <Animated.View style={{ flex: 1, opacity: fadeAnim, backgroundColor: '#121212' }}>
       <ScrollView
       style={styles.scrollView} // Ensures the overscroll area remains dark.
       contentContainerStyle={styles.container}

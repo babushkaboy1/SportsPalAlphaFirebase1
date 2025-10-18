@@ -127,7 +127,8 @@ service cloud.firestore {
       return hasFriend(u1, u2) && hasFriend(u2, u1);
     }
 
-    // Chats: only participants can read/delete; allow self-join from joined activity; allow DM create for mutual friends
+  // Chats: only participants can read; allow self-join from joined activity;
+    // allow DM create for mutual friends; allow custom group chats (non-activity) created by a participant
     match /chats/{chatId} {
       allow create: if isSignedIn() && (
         // Group/activity chats: creator or self-joiner from joined activity
@@ -143,10 +144,33 @@ service cloud.firestore {
           request.resource.data.participants.size() == 2 &&
           (request.auth.uid in request.resource.data.participants) &&
           isMutualFriends(request.resource.data.participants[0], request.resource.data.participants[1])
+        ) ||
+        // Custom GROUP chats (non-activity): creator must be included in participants
+        // Note: If you want to restrict members to the creator's friends, enforce it via Cloud Functions
+        // or add additional metadata checks. Firestore Rules cannot iterate over a list to verify all members.
+        (
+          ('type' in request.resource.data) && request.resource.data.type == 'group' &&
+          !('activityId' in request.resource.data) &&
+          ('participants' in request.resource.data) && request.resource.data.participants is list &&
+          (request.auth.uid in request.resource.data.participants) &&
+          // Optional basic size constraint
+          (request.resource.data.participants.size() >= 2)
         )
       );
 
-      allow read, delete: if isSignedIn() && (request.auth.uid in resource.data.participants);
+      allow read: if isSignedIn() && (request.auth.uid in resource.data.participants);
+
+      // Only allow deleting the chat when the requester is the last remaining participant.
+      // This guarantees group chats persist until every user has left.
+      allow delete: if isSignedIn() && (
+        (request.auth.uid in resource.data.participants) &&
+        (
+          ('participants' in resource.data) &&
+          resource.data.participants is list &&
+          resource.data.participants.size() == 1 &&
+          (request.auth.uid in resource.data.participants)
+        )
+      );
 
       allow update: if isSignedIn() && (
         // Participants can update their existing chats (e.g., last message metadata). For activity chats, also allow self-join as below.

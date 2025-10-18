@@ -30,12 +30,13 @@ export async function getOrCreateChatForActivity(activityId: string, userId: str
 
     // 2) Try to create deterministic chat document
     try {
-      await setDoc(chatRef, {
-        type: 'group',
-        activityId,
-        participants: [userId],
-        createdAt: serverTimestamp(),
-      });
+        await setDoc(chatRef, {
+          type: 'group',
+          activityId,
+          participants: [userId],
+          createdAt: serverTimestamp(),
+          lastMessageTimestamp: serverTimestamp(), // make fresh activity chats float to top
+        });
       return chatRef.id;
     } catch (e2: any) {
       if (e2?.code === 'permission-denied') {
@@ -64,7 +65,7 @@ export async function deleteActivityChat(activityId: string) {
   try {
     const chatRef = doc(db, 'chats', activityId);
     await updateDoc(chatRef, { participants: arrayRemove('') }).catch(() => {}); // no-op to ensure doc exists
-    await setDoc(chatRef, { __meta: 'cleanup' }, { merge: true }).catch(() => {});
+    await setDoc(chatRef, { __meta: 'cleanup', lastMessageTimestamp: serverTimestamp() }, { merge: true }).catch(() => {});
     // Now delete
     await (await import('firebase/firestore')).deleteDoc(chatRef as any);
   } catch {
@@ -162,4 +163,26 @@ export async function ensureDmChat(targetUserId: string): Promise<string> {
     createdAt: serverTimestamp(),
   }, { merge: true });
   return chatId;
+}
+
+// Create a non-activity group chat with a title and selected participants
+export async function createCustomGroupChat(
+  title: string,
+  participantIds: string[],
+  createdBy: string,
+  photoUrl?: string
+): Promise<string> {
+  // Ensure creator is included
+  const unique = Array.from(new Set([...(participantIds || []), createdBy]));
+  const ref = await addDoc(collection(db, 'chats'), {
+    type: 'group',
+    title,
+    participants: unique,
+    createdAt: serverTimestamp(),
+    createdBy,
+    ...(photoUrl ? { photoUrl } : {}),
+    // Optional: set lastMessageTimestamp to createdAt so it appears on top immediately
+    lastMessageTimestamp: serverTimestamp(),
+  });
+  return ref.id;
 }

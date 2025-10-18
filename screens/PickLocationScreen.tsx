@@ -201,7 +201,7 @@ export default function PickLocationScreen({ navigation, route }: Props) {
   return (
     <View style={{ flex: 1, backgroundColor: '#121212' }}>
       {/* Back Button */}
-      <View style={{ position: 'absolute', top: 40, left: 20, right: 20, zIndex: 20, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+      <View style={{ position: 'absolute', top: Math.max(insets.top + 12, 20), left: 20, right: 20, zIndex: 20, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
         <TouchableOpacity
           style={{ backgroundColor: DARK_TURQUOISE, borderRadius: 24, padding: 8 }}
           onPress={() => navigation.goBack()}
@@ -230,7 +230,7 @@ export default function PickLocationScreen({ navigation, route }: Props) {
         <View
           style={{
             position: 'absolute',
-            top: 90,
+            top: Math.max(insets.top + 62, 90),
             left: 20,
             right: 20,
             backgroundColor: '#1e1e1e',
@@ -329,7 +329,7 @@ export default function PickLocationScreen({ navigation, route }: Props) {
         pointerEvents="box-none"
         style={{
           position: 'absolute',
-          bottom: 90,
+          bottom: Math.max(insets.bottom + 50, 90),
           right: 20,
           zIndex: 50, // ensure it's above the map and confirm button
         }}
@@ -354,7 +354,7 @@ export default function PickLocationScreen({ navigation, route }: Props) {
         style={{
           position: 'absolute', left: 0, right: 0, bottom: 0,
           backgroundColor: DARK_TURQUOISE, paddingVertical: 22,
-          alignItems: 'center', justifyContent: 'center', paddingBottom: 32,
+          alignItems: 'center', justifyContent: 'center', paddingBottom: Math.max(insets.bottom + 12, 24),
           zIndex: 10,
         }}
         onPress={async () => {

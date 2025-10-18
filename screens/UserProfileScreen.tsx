@@ -1,10 +1,10 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, Share, FlatList, Animated, RefreshControl, Alert } from 'react-native';
+import { View, Text, StyleSheet, Image, TouchableOpacity, Share, FlatList, Animated, RefreshControl, Alert, Modal, Pressable } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { doc, getDoc, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot, collection, query as fsQuery, where, getDocs } from 'firebase/firestore';
 import { db, auth } from '../firebaseConfig';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useActivityContext } from '../context/ActivityContext';
@@ -33,6 +33,9 @@ const UserProfileScreen = () => {
   const [isFriend, setIsFriend] = useState(false);
   const [incomingRequest, setIncomingRequest] = useState(false);
   const [theyListMe, setTheyListMe] = useState(false);
+  const [favModalVisible, setFavModalVisible] = useState(false);
+  const [connectionsModalVisible, setConnectionsModalVisible] = useState(false);
+  const [userFriendProfiles, setUserFriendProfiles] = useState<Array<{ uid: string; username: string; photo?: string }>>([]);
 
   useEffect(() => {
     const fetchProfile = async () => {
@@ -82,6 +85,8 @@ const UserProfileScreen = () => {
       const theirFriends: string[] = data?.friends || [];
       setIncomingRequest(Array.isArray(theirSent) && theirSent.includes(me));
       setTheyListMe(Array.isArray(theirFriends) && theirFriends.includes(me));
+      // Keep viewed profile's friends/sports in sync for stats
+      setProfile((prev: any) => prev ? { ...prev, friends: theirFriends, sportsPreferences: data?.sportsPreferences || prev.sportsPreferences } : prev);
     }, (error) => {
       if ((error as any)?.code !== 'permission-denied') {
         console.warn('Viewed profile subscription error:', error);
@@ -122,6 +127,31 @@ const UserProfileScreen = () => {
       setRefreshLocked(false);
     }, 1500);
   };
+
+  // Load viewed user's friend profiles when opening connections modal
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const ids: string[] = Array.isArray(profile?.friends) ? profile!.friends : [];
+        if (!connectionsModalVisible || ids.length === 0) { setUserFriendProfiles([]); return; }
+  const rows: Array<{ uid: string; username: string; photo?: string }> = [];
+        for (let i = 0; i < ids.length; i += 10) {
+          const batch = ids.slice(i, i + 10);
+          const q = fsQuery(collection(db, 'profiles'), where('__name__', 'in', batch));
+          const snap = await getDocs(q);
+          snap.forEach((d) => {
+            const p: any = d.data();
+            rows.push({ uid: d.id, username: p.username || p.username_lower || 'User', photo: p.photo || p.photoURL });
+          });
+        }
+        rows.sort((a, b) => a.username.localeCompare(b.username));
+        setUserFriendProfiles(rows);
+      } catch (e) {
+        setUserFriendProfiles([]);
+      }
+    };
+    load();
+  }, [connectionsModalVisible, profile?.friends]);
 
   const handleAddFriend = async () => {
     try {
@@ -326,8 +356,28 @@ const UserProfileScreen = () => {
           <View style={styles.profileLeftColumn}>
             <Image source={{ uri: profile?.photo || 'https://via.placeholder.com/100' }} style={styles.profileImage} />
           </View>
+          {/* Stats next to avatar */}
+          <View style={styles.statsColumn}>
+            <View style={styles.statsRow}>
+              <TouchableOpacity style={styles.statBlock} activeOpacity={0.8} onPress={() => setConnectionsModalVisible(true)}>
+                <View style={styles.statNumberWrap}><Text style={styles.statNumber}>{profile?.friends?.length || 0}</Text></View>
+                <Text style={styles.statLabel}>Connections</Text>
+                <Text style={[styles.statLabel, { opacity: 0 }]}>_</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.statBlock} activeOpacity={0.8} onPress={() => setFavModalVisible(true)}>
+                <View style={styles.statNumberWrap}><Text style={styles.statNumber}>{(profile?.sportsPreferences || profile?.selectedSports || []).length}</Text></View>
+                <Text style={styles.statLabel}>Favourite{((profile?.sportsPreferences || profile?.selectedSports || []).length === 1) ? '' : 's'}</Text>
+                <Text style={[styles.statLabel, { marginTop: -2 }]}>Sports</Text>
+              </TouchableOpacity>
+              <View style={styles.statBlock}>
+                <View style={styles.statNumberWrap}><Text style={styles.statNumber}>{userJoinedActivities.length}</Text></View>
+                <Text style={styles.statLabel}>Joined</Text>
+                <Text style={[styles.statLabel, { marginTop: -2 }]}>Activities</Text>
+              </View>
+            </View>
+          </View>
         </View>
-        {/* Actions row identical to Profile: two buttons in a row (left then right). Wrap naturally if 3 buttons. */}
+        {/* Actions row identical to own Profile: center-aligned, same sizes/spacings as Edit Profile & Share Profile */}
         {!isSelf && (
           <View style={styles.profileActionsRow}>
             {incomingRequest ? (
@@ -440,6 +490,82 @@ const UserProfileScreen = () => {
           )}
         </View>
       </Animated.View>
+      {/* Favourite sports modal */}
+      <Modal
+        visible={favModalVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setFavModalVisible(false)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setFavModalVisible(false)}>
+          <Pressable style={styles.modalCard} onPress={() => {}}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Text style={{ color: '#1ae9ef', fontWeight: 'bold', fontSize: 18 }}>Favourite Sports</Text>
+              <TouchableOpacity onPress={() => setFavModalVisible(false)} style={{ backgroundColor: '#8e2323', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 }}>
+                <Text style={{ color: '#fff', fontWeight: '700' }}>Close</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={{ height: 10 }} />
+            {((profile?.sportsPreferences || profile?.selectedSports || []) as string[]).length === 0 ? (
+              <Text style={{ color: '#bbb' }}>No favourites yet.</Text>
+            ) : (
+              <FlatList
+                data={(profile?.sportsPreferences || profile?.selectedSports || []) as string[]}
+                keyExtractor={(s, i) => s + i}
+                ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
+                renderItem={({ item }) => (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }}>
+                    <ActivityIcon activity={item} size={22} />
+                    <Text style={{ color: '#fff', marginLeft: 10, fontWeight: '600' }}>{item}</Text>
+                  </View>
+                )}
+              />
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Connections modal */}
+      <Modal
+        visible={connectionsModalVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setConnectionsModalVisible(false)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setConnectionsModalVisible(false)}>
+          <Pressable style={styles.modalCard} onPress={() => {}}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Text style={{ color: '#1ae9ef', fontWeight: 'bold', fontSize: 18 }}>Connections</Text>
+              <TouchableOpacity onPress={() => setConnectionsModalVisible(false)} style={{ backgroundColor: '#8e2323', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 }}>
+                <Text style={{ color: '#fff', fontWeight: '700' }}>Close</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={{ height: 10 }} />
+            {userFriendProfiles.length > 0 ? (
+              <FlatList
+                data={userFriendProfiles}
+                keyExtractor={(u) => u.uid}
+                ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      setConnectionsModalVisible(false);
+                      navigation.navigate('UserProfile' as any, { userId: item.uid });
+                    }}
+                  >
+                    <Image source={{ uri: item.photo || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(item.username) }} style={{ width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: '#1ae9ef' }} />
+                    <Text style={{ color: '#fff', marginLeft: 10, fontWeight: '600' }}>{item.username}</Text>
+                  </TouchableOpacity>
+                )}
+              />
+            ) : (
+              <Text style={{ color: '#bbb' }}>No connections yet.</Text>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -524,6 +650,41 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'flex-start',
   },
+  statsColumn: {
+    flex: 1,
+    justifyContent: 'center',
+    marginLeft: 16,
+    minHeight: 100,
+  },
+  statsRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+  },
+  statBlock: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 84,
+  },
+  statNumber: {
+    color: '#1ae9ef',
+    fontWeight: '800',
+    fontSize: 22,
+    textAlign: 'center',
+    lineHeight: 26,
+  },
+  statLabel: {
+    color: '#aaa',
+    fontWeight: '700',
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: 2,
+  },
+  statNumberWrap: {
+    height: 28,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   profileImage: {
     width: 100,
     height: 100,
@@ -533,11 +694,9 @@ const styles = StyleSheet.create({
   },
   profileActionsRow: {
     flexDirection: 'row',
-    justifyContent: 'flex-start',
-    gap: 8,
-    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 12,
     marginBottom: 10,
-    paddingHorizontal: 20,
   },
   // New: actions bar mirroring Profile page (left cluster + right message)
   profileActionsBar: {
@@ -589,6 +748,27 @@ const styles = StyleSheet.create({
   },
   profileActionTextInverted: {
     color: '#000',
+  },
+  // Modal styles reused for stats popovers
+  modalOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 520,
+    backgroundColor: '#18191a',
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#2a2a2a',
   },
   tabBar: {
     flexDirection: 'row',

@@ -64,6 +64,25 @@ const ProfileScreen = () => {
   const [inviteTargetUser, setInviteTargetUser] = useState<{uid: string; username: string; photo?: string} | null>(null);
   const [inviteSelection, setInviteSelection] = useState<Record<string, boolean>>({});
   const myJoinedActivities = allActivities.filter(a => joinedActivities.includes(a.id));
+  // Stats modals
+  const [favModalVisible, setFavModalVisible] = useState(false);
+  const [connectionsModalVisible, setConnectionsModalVisible] = useState(false);
+
+  // Lightweight bottom toast
+  const toastAnim = useRef(new Animated.Value(0)).current;
+  const [toastMsg, setToastMsg] = useState('');
+  const toastTimeoutRef = useRef<any>(null);
+  const showToast = (msg: string) => {
+    if (!msg) return;
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    setToastMsg(msg);
+    Animated.timing(toastAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+    toastTimeoutRef.current = setTimeout(() => {
+      Animated.timing(toastAnim, { toValue: 0, duration: 200, useNativeDriver: true }).start();
+      toastTimeoutRef.current = null;
+    }, 2000);
+  };
+  useEffect(() => () => { if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current); }, []);
 
   const openInviteModal = (user: {uid: string; username: string; photo?: string}) => {
     setInviteTargetUser(user);
@@ -83,66 +102,28 @@ const ProfileScreen = () => {
       setInviteModalVisible(false);
       return;
     }
-    // Check for activities where target already joined
-    const alreadyJoined: string[] = [];
-    const notJoined: string[] = [];
-    selected.forEach(id => {
+    // Filter out activities the target already joined (UI should already prevent selecting these)
+    const notJoined = selected.filter((id) => {
       const act = allActivities.find(a => a.id === id);
       const joinedIds = (act as any)?.joinedUserIds || [];
-      if (Array.isArray(joinedIds) && joinedIds.includes(inviteTargetUser.uid)) alreadyJoined.push(id);
-      else notJoined.push(id);
+      return !(Array.isArray(joinedIds) && joinedIds.includes(inviteTargetUser.uid));
     });
-
-    // If some are already joined by target, ask inviter whether to auto-join self to those or skip
-    if (alreadyJoined.length > 0) {
-      const first = alreadyJoined[0];
-      const restCount = alreadyJoined.length - 1;
-      const act = allActivities.find(a => a.id === first);
-      const name = act?.activity || 'Activity';
-      const message = alreadyJoined.length > 1
-        ? `${inviteTargetUser.username} is already joined in ${name}${restCount > 0 ? ` and ${restCount} more` : ''}. Do you want to join those and send invites for the remaining?`
-        : `${inviteTargetUser.username} is already joined in ${name}. Do you want to join this and send invites for the remaining?`;
-      return new Promise<void>((resolve) => {
-        Alert.alert(
-          'They already joined',
-          message,
-          [
-            { text: 'Skip those', style: 'cancel', onPress: async () => {
-                // Only send invites for notJoined
-                try {
-                  await sendActivityInvites(inviteTargetUser.uid, notJoined);
-                } catch {}
-                setInviteModalVisible(false);
-                resolve();
-              }
-            },
-            { text: 'Join & continue', style: 'default', onPress: async () => {
-                // Join me to alreadyJoined, then send invites for notJoined
-                try {
-                  for (const id of alreadyJoined) {
-                    const act2 = allActivities.find(a => a.id === id);
-                    if (act2) {
-                      await toggleJoinActivity(act2 as any);
-                    }
-                  }
-                } catch {}
-                try {
-                  await sendActivityInvites(inviteTargetUser.uid, notJoined);
-                } catch {}
-                setInviteModalVisible(false);
-                resolve();
-              }
-            },
-          ]
-        );
-      });
+    if (notJoined.length === 0) {
+      showToast(`${inviteTargetUser.username} is already in those activities`);
+      return;
     }
-
-    // Simple path: send invites
     try {
-      await sendActivityInvites(inviteTargetUser.uid, notJoined);
-    } catch {}
+      const { sentIds } = await sendActivityInvites(inviteTargetUser.uid, notJoined);
+      if (sentIds.length > 0) {
+        showToast(sentIds.length === 1 ? 'Invite sent' : `Sent ${sentIds.length} invites`);
+      } else {
+        showToast('No invites sent');
+      }
+    } catch {
+      showToast('Could not send invites');
+    }
     setInviteModalVisible(false);
+    setInviteSelection({});
   };
   // User search (Friends tab)
   const [userSearchQuery, setUserSearchQuery] = useState('');
@@ -667,8 +648,19 @@ const ProfileScreen = () => {
                     <FlatList
                       data={myJoinedActivities}
                       keyExtractor={(a) => a.id}
-                      renderItem={({ item }) => (
-                        <Pressable style={styles.activityPickRow} onPress={() => toggleSelectInvite(item.id)}>
+                      renderItem={({ item }) => {
+                        const targetAlreadyJoined = !!(inviteTargetUser && Array.isArray(item?.joinedUserIds) && item.joinedUserIds.includes(inviteTargetUser.uid));
+                        return (
+                        <Pressable
+                          style={[styles.activityPickRow, targetAlreadyJoined && { opacity: 0.45 }]}
+                          onPress={() => {
+                            if (targetAlreadyJoined) {
+                              showToast(`${inviteTargetUser?.username || 'User'} is already in this activity`);
+                              return;
+                            }
+                            toggleSelectInvite(item.id);
+                          }}
+                        >
                           <View style={styles.activityPickLeft}>
                             <ActivityIcon activity={item.activity} size={22} color="#1ae9ef" />
                             <View>
@@ -676,13 +668,18 @@ const ProfileScreen = () => {
                               <Text style={styles.activityPickMeta}>{item.date} • {item.time}</Text>
                             </View>
                           </View>
-                          <Ionicons
-                            name={inviteSelection[item.id] ? 'checkbox' : 'square-outline'}
-                            size={22}
-                            color={inviteSelection[item.id] ? '#1ae9ef' : '#666'}
-                          />
+                          {targetAlreadyJoined ? (
+                            <Text style={styles.joinedBadge}>Joined</Text>
+                          ) : (
+                            <Ionicons
+                              name={inviteSelection[item.id] ? 'checkbox' : 'square-outline'}
+                              size={22}
+                              color={inviteSelection[item.id] ? '#1ae9ef' : '#666'}
+                            />
+                          )}
                         </Pressable>
-                      )}
+                        );
+                      }}
                       ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
                       style={{ maxHeight: 280, marginVertical: 8 }}
                     />
@@ -742,6 +739,27 @@ const ProfileScreen = () => {
         <View style={styles.profileLeftColumn}>
           <Image source={{ uri: profile?.photo || 'https://via.placeholder.com/100' }} style={styles.profileImage} />
         </View>
+        {/* Stats next to avatar */}
+        <View style={styles.statsColumn}>
+          <View style={styles.statsRow}>
+            <TouchableOpacity style={styles.statBlock} activeOpacity={0.8} onPress={() => setConnectionsModalVisible(true)}>
+              <View style={styles.statNumberWrap}><Text style={styles.statNumber}>{friends.length}</Text></View>
+              <Text style={styles.statLabel}>Connections</Text>
+              {/* spacer to match two-line labels on other stats */}
+              <Text style={[styles.statLabel, { opacity: 0 }]}>_</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.statBlock} activeOpacity={0.8} onPress={() => setFavModalVisible(true)}>
+              <View style={styles.statNumberWrap}><Text style={styles.statNumber}>{(profile?.sportsPreferences || profile?.selectedSports || []).length}</Text></View>
+              <Text style={styles.statLabel}>Favourite{((profile?.sportsPreferences || profile?.selectedSports || []).length === 1) ? '' : 's'}</Text>
+              <Text style={[styles.statLabel, { marginTop: -2 }]}>Sports</Text>
+            </TouchableOpacity>
+            <View style={styles.statBlock}>
+              <View style={styles.statNumberWrap}><Text style={styles.statNumber}>{myJoinedActivities.length}</Text></View>
+              <Text style={styles.statLabel}>Joined</Text>
+              <Text style={[styles.statLabel, { marginTop: -2 }]}>Activities</Text>
+            </View>
+          </View>
+        </View>
       </View>
 
       {!userId || userId === auth.currentUser?.uid ? (
@@ -790,6 +808,103 @@ const ProfileScreen = () => {
       </View>
 
       <View style={styles.contentContainer}>{renderContent()}</View>
+      {/* Favourite sports modal */}
+      <Modal
+        visible={favModalVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setFavModalVisible(false)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setFavModalVisible(false)}>
+          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Text style={{ color: '#1ae9ef', fontWeight: 'bold', fontSize: 18 }}>Favourite Sports</Text>
+              <TouchableOpacity onPress={() => setFavModalVisible(false)} style={{ backgroundColor: '#8e2323', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 }}>
+                <Text style={{ color: '#fff', fontWeight: '700' }}>Close</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={{ height: 10 }} />
+            {((profile?.sportsPreferences || profile?.selectedSports || []) as string[]).length === 0 ? (
+              <Text style={{ color: '#bbb' }}>No favourites yet.</Text>
+            ) : (
+              <FlatList
+                data={(profile?.sportsPreferences || profile?.selectedSports || []) as string[]}
+                keyExtractor={(s, i) => s + i}
+                ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
+                renderItem={({ item }) => (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }}>
+                    <ActivityIcon activity={item} size={22} />
+                    <Text style={{ color: '#fff', marginLeft: 10, fontWeight: '600' }}>{item}</Text>
+                  </View>
+                )}
+              />
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Connections modal */}
+      <Modal
+        visible={connectionsModalVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setConnectionsModalVisible(false)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setConnectionsModalVisible(false)}>
+          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Text style={{ color: '#1ae9ef', fontWeight: 'bold', fontSize: 18 }}>Connections</Text>
+              <TouchableOpacity onPress={() => setConnectionsModalVisible(false)} style={{ backgroundColor: '#8e2323', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 }}>
+                <Text style={{ color: '#fff', fontWeight: '700' }}>Close</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={{ height: 10 }} />
+            {friends.length === 0 ? (
+              <Text style={{ color: '#bbb' }}>No connections yet.</Text>
+            ) : (
+              <FlatList
+                data={friends}
+                keyExtractor={(u) => u.uid}
+                ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      setConnectionsModalVisible(false);
+                      navigation.navigate('UserProfile' as any, { userId: item.uid });
+                    }}
+                  >
+                    <Image source={{ uri: item.photo || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(item.username) }} style={{ width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: '#1ae9ef' }} />
+                    <Text style={{ color: '#fff', marginLeft: 10, fontWeight: '600' }}>{item.username}</Text>
+                  </TouchableOpacity>
+                )}
+              />
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+      {/* Bottom toast */}
+      <Animated.View
+        pointerEvents={toastMsg ? 'auto' : 'none'}
+        style={{
+          position: 'absolute',
+          left: 20,
+          right: 20,
+          bottom: 24,
+          backgroundColor: 'rgba(0,0,0,0.85)',
+          borderColor: '#2a2a2a',
+          borderWidth: 1,
+          paddingHorizontal: 14,
+          paddingVertical: 10,
+          borderRadius: 10,
+          alignItems: 'center',
+          transform: [{ translateY: toastAnim.interpolate({ inputRange: [0, 1], outputRange: [20, 0] }) }],
+          opacity: toastAnim,
+        }}
+      >
+        <Text style={{ color: '#fff', fontSize: 14, textAlign: 'center' }}>{toastMsg}</Text>
+      </Animated.View>
       </Animated.View>
     </SafeAreaView>
   );
@@ -804,6 +919,11 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#121212',
+  },
+  joinedBadge: {
+    color: '#bbb',
+    fontSize: 12,
+    fontWeight: '600',
   },
   headerRow: {
     flexDirection: 'row',
@@ -831,6 +951,41 @@ const styles = StyleSheet.create({
   profileLeftColumn: {
     alignItems: 'center',
     justifyContent: 'flex-start',
+  },
+  statsColumn: {
+    flex: 1,
+    justifyContent: 'center',
+    marginLeft: 16,
+    minHeight: 100, // match profileImage height to center vertically
+  },
+  statsRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+  },
+  statBlock: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 84,
+  },
+  statNumber: {
+    color: '#1ae9ef',
+    fontWeight: '800',
+    fontSize: 22,
+    textAlign: 'center',
+    lineHeight: 26,
+  },
+  statNumberWrap: {
+    height: 28,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  statLabel: {
+    color: '#aaa',
+    fontWeight: '700',
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: 2,
   },
   profileImage: {
     width: 100,

@@ -18,7 +18,9 @@ import { Swipeable, RectButton } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { fetchUserChats } from '../utils/firestoreChats';
+import * as ImagePicker from 'expo-image-picker';
+import { uploadChatImage } from '../utils/imageUtils';
+import { fetchUserChats, createCustomGroupChat } from '../utils/firestoreChats';
 import { acceptFriendRequest, declineFriendRequest } from '../utils/firestoreFriends';
 import { doc, getDoc, collection, query, onSnapshot, where, orderBy, deleteDoc, getDocs, limit } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
@@ -82,6 +84,12 @@ const ChatsScreen = ({ navigation }: any) => {
   const [refreshLocked, setRefreshLocked] = useState(false);
   const [showActivity, setShowActivity] = useState(false); // notifications view toggle
   const [notificationCount, setNotificationCount] = useState<number>(0);
+  const [createModalVisible, setCreateModalVisible] = useState(false);
+  const [groupTitle, setGroupTitle] = useState('');
+  const [friends, setFriends] = useState<Array<{ uid: string; username: string; photo?: string }>>([]);
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [creating, setCreating] = useState(false);
+  const [groupPhoto, setGroupPhoto] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<any[]>([]);
   const [chatUnreadTotal, setChatUnreadTotal] = useState<number>(0);
   const latestNotificationText = notifications.length > 0
@@ -156,6 +164,10 @@ const ChatsScreen = ({ navigation }: any) => {
                 }
               }
             }
+            if ((chat as any).title) {
+              activityName = (chat as any).title;
+              activityImage = (chat as any).photoUrl || activityImage;
+            }
             if (chat.activityId) {
               const activityDoc = await getDoc(doc(db, 'activities', chat.activityId));
               if (activityDoc.exists()) {
@@ -184,8 +196,10 @@ const ChatsScreen = ({ navigation }: any) => {
               lastSender = senderDoc.exists() ? (senderDoc.data() as any).username || '' : '';
             }
 
-            const lastTsMillis = (chat as any).lastMessageTimestamp?.toMillis ? (chat as any).lastMessageTimestamp.toMillis() : 0;
-            const timeAgo = formatTimeAgo(lastTsMillis);
+            const lastTsMillisRaw = (chat as any).lastMessageTimestamp?.toMillis ? (chat as any).lastMessageTimestamp.toMillis() : 0;
+            const createdMillis = (chat as any).createdAt?.toMillis ? (chat as any).createdAt.toMillis() : 0;
+            const lastTsMillis = lastTsMillisRaw || createdMillis;
+            const timeAgo = formatTimeAgo(lastTsMillis || createdMillis);
 
             // Compute unread count for all chats (messages not sent by me since my last read)
             try {
@@ -307,6 +321,62 @@ const ChatsScreen = ({ navigation }: any) => {
     };
   }, []);
 
+  // Load friends for group-creation selector
+  useEffect(() => {
+    const me = auth.currentUser?.uid;
+    if (!me) return;
+    const unsub = onSnapshot(doc(db, 'profiles', me), async (snap) => {
+      if (!snap.exists()) { setFriends([]); return; }
+      const data: any = snap.data();
+      const friendIds: string[] = Array.isArray(data?.friends) ? data.friends : [];
+      if (!friendIds.length) { setFriends([]); return; }
+      const rows: Array<{ uid: string; username: string; photo?: string }> = [];
+      for (let i = 0; i < friendIds.length; i += 10) {
+        const ids = friendIds.slice(i, i + 10);
+        const q = query(collection(db, 'profiles'), where('__name__', 'in', ids));
+        const snap2 = await getDocs(q);
+        snap2.forEach((d) => {
+          const p: any = d.data();
+          rows.push({ uid: d.id, username: p.username || p.username_lower || 'User', photo: p.photo || p.photoURL });
+        });
+      }
+      rows.sort((a, b) => a.username.localeCompare(b.username));
+      setFriends(rows);
+    }, (error) => {
+      if ((error as any)?.code !== 'permission-denied') {
+        console.warn('Friends load error:', error);
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  const toggleSelectFriend = (uid: string) => setSelected(prev => ({ ...prev, [uid]: !prev[uid] }));
+  const handleCreateGroup = async () => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    const memberIds = Object.keys(selected).filter(k => selected[k]);
+    if (!groupTitle.trim() || memberIds.length < 2) return;
+    try {
+      setCreating(true);
+      let photoUrl: string | undefined = undefined;
+      if (groupPhoto) {
+        try {
+          const uploaded = await uploadChatImage(groupPhoto, uid, `group_${Date.now()}`);
+          photoUrl = uploaded;
+        } catch {}
+      }
+  await createCustomGroupChat(groupTitle.trim().slice(0, 25), memberIds, uid, photoUrl);
+      setCreateModalVisible(false);
+      setGroupTitle('');
+      setSelected({});
+      setGroupPhoto(null);
+    } catch (e) {
+      console.warn('Create group chat failed', e);
+    } finally {
+      setCreating(false);
+    }
+  };
+
   // Restore persisted view (intra-session) from route params
   useEffect(() => {
     if (route?.params?.inboxView === 'notifications') {
@@ -374,14 +444,31 @@ const ChatsScreen = ({ navigation }: any) => {
         </>
       ) : (
         <>
-          {/* Group chat icon */}
-          <View style={{ marginRight: 10 }}>
-            <Ionicons name="people" size={32} color={TURQUOISE} />
-          </View>
-          {/* Sport/activity icon */}
-          <View style={{ marginRight: 10 }}>
-            <ActivityIcon activity={item.activityType} size={28} color={TURQUOISE} />
-          </View>
+          {/* Group avatar:
+              - Activity-based groups: show ActivityIcon inside circular frame
+              - Custom groups: show uploaded group photo (or UI-avatar fallback)
+          */}
+          {item.activityId ? (
+            <View
+              style={{
+                width: 50,
+                height: 50,
+                borderRadius: 25,
+                borderWidth: 1,
+                borderColor: TURQUOISE,
+                marginRight: 12,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <ActivityIcon activity={item.activityType} size={28} color={TURQUOISE} />
+            </View>
+          ) : (
+            <Image
+              source={{ uri: item.image || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(item.name || 'Group') }}
+              style={{ width: 50, height: 50, borderRadius: 25, borderWidth: 1, borderColor: TURQUOISE, marginRight: 12 }}
+            />
+          )}
           {/* Chat info and date/time */}
           <View style={{ flex: 1, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }}>
             <View style={styles.chatInfo}>
@@ -405,7 +492,7 @@ const ChatsScreen = ({ navigation }: any) => {
                 <Text style={{ color: '#aaa', fontSize: 12, marginTop: 2 }}>{item.timeAgo}</Text>
               )}
             </View>
-            {/* Right side: schedule block */}
+            {/* Right side: schedule block for activity-based groups only */}
             <View style={{ alignItems: 'flex-end', marginLeft: 8, maxWidth: 120 }}>
               {item.activityId && item.date && item.time && (
                 <>
@@ -418,7 +505,6 @@ const ChatsScreen = ({ navigation }: any) => {
                 </>
               )}
             </View>
-            {/* (Removed duplicate schedule block) */}
           </View>
         </>
       )}
@@ -506,7 +592,14 @@ const ChatsScreen = ({ navigation }: any) => {
               )}
             </>
           ) : (
-            <Text style={styles.headerTitle}>Inbox</Text>
+            <>
+              <Text style={styles.headerTitle}>Inbox</Text>
+              <View style={styles.headerRightWrap}>
+                <TouchableOpacity onPress={() => setCreateModalVisible(true)} style={styles.squareIconBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Ionicons name="add" size={22} color="#000" />
+                </TouchableOpacity>
+              </View>
+            </>
           )}
         </View>
         <View style={styles.searchContainer}>
@@ -726,6 +819,76 @@ const ChatsScreen = ({ navigation }: any) => {
           />
         )}
       </Animated.View>
+      {createModalVisible && (
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>New Group Chat</Text>
+            <TextInput
+              style={styles.modalInput}
+              placeholder="Group title"
+              placeholderTextColor="#aaa"
+              value={groupTitle}
+              maxLength={25}
+              onChangeText={(t) => setGroupTitle((t || '').slice(0, 25))}
+            />
+            <Text style={{ color: '#777', fontSize: 12, textAlign: 'right', marginTop: 4 }}>{groupTitle.length}/25</Text>
+            <Text style={styles.modalSubtitle}>Group photo (optional)</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+              <TouchableOpacity
+                style={styles.photoPicker}
+                onPress={async () => {
+                  try {
+                    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+                    if (status !== 'granted') return;
+                    const res = await ImagePicker.launchImageLibraryAsync({ allowsEditing: true, quality: 0.8 });
+                    if (!res.canceled && res.assets && res.assets[0]?.uri) {
+                      setGroupPhoto(res.assets[0].uri);
+                    }
+                  } catch {}
+                }}
+              >
+                {groupPhoto ? (
+                  <Image source={{ uri: groupPhoto }} style={{ width: 48, height: 48, borderRadius: 8 }} />
+                ) : (
+                  <Ionicons name="image-outline" size={24} color={TURQUOISE} />
+                )}
+              </TouchableOpacity>
+              <Text style={{ color: '#888', marginLeft: 10 }}>Pick a group picture</Text>
+            </View>
+
+            <Text style={styles.modalSubtitle}>Add friends</Text>
+            <FlatList
+              data={friends}
+              keyExtractor={(item) => item.uid}
+              style={{ maxHeight: 260 }}
+              renderItem={({ item }) => (
+                <TouchableOpacity style={styles.friendRow} onPress={() => toggleSelectFriend(item.uid)}>
+                  <Image source={{ uri: item.photo || `https://ui-avatars.com/api/?name=${encodeURIComponent(item.username)}` }} style={styles.friendAvatar} />
+                  <Text style={styles.friendName}>{item.username}</Text>
+                  <View style={[styles.checkbox, selected[item.uid] ? styles.checkboxOn : styles.checkboxOff]}>
+                    {selected[item.uid] && (
+                      <Ionicons name="checkmark" size={14} color="#fff" />
+                    )}
+                  </View>
+                </TouchableOpacity>
+              )}
+              ListEmptyComponent={<Text style={{ color: '#888', marginVertical: 12 }}>No friends yet</Text>}
+            />
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}>
+              <TouchableOpacity onPress={() => { setCreateModalVisible(false); setSelected({}); setGroupTitle(''); setGroupPhoto(null); }} style={[styles.modalBtn, styles.modalCancelBtn]}> 
+                <Text style={[styles.modalBtnText, styles.modalCancelText]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                disabled={!groupTitle.trim() || Object.values(selected).filter(Boolean).length < 2 || creating}
+                onPress={handleCreateGroup}
+                style={[styles.modalBtn, { backgroundColor: (!groupTitle.trim() || Object.values(selected).filter(Boolean).length < 2 || creating) ? '#1ae9ef55' : '#1ae9ef' }]}
+              >
+                <Text style={[styles.modalBtnText, { color: '#000' }]}>{creating ? 'Creating…' : 'Create'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
     </SafeAreaView>
   );
 };
@@ -784,6 +947,125 @@ const styles = StyleSheet.create({
     color: TURQUOISE,
     fontWeight: 'bold',
     textAlign: 'center',
+  },
+  headerRightWrap: {
+    position: 'absolute',
+    right: 6,
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center',
+  },
+  squareIconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: TURQUOISE,
+    backgroundColor: TURQUOISE,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalCard: {
+    width: '90%',
+    maxWidth: 480,
+    backgroundColor: '#161616',
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#1ae9ef22',
+  },
+  modalTitle: {
+    color: TURQUOISE,
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 10,
+  },
+  modalSubtitle: {
+    color: '#aaa',
+    fontSize: 13,
+    marginTop: 8,
+    marginBottom: 6,
+  },
+  modalInput: {
+    backgroundColor: '#0f0f0f',
+    borderWidth: 1,
+    borderColor: '#2a2a2a',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: '#fff',
+  },
+  friendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+  },
+  friendAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: TURQUOISE,
+  },
+  friendName: {
+    color: '#fff',
+    fontSize: 15,
+    flex: 1,
+  },
+  checkbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 6,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxOn: {
+    borderColor: TURQUOISE,
+    backgroundColor: TURQUOISE,
+  },
+  checkboxOff: {
+    borderColor: '#444',
+    backgroundColor: 'transparent',
+  },
+  modalBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 8,
+    marginLeft: 10,
+  },
+  modalBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  modalCancelBtn: {
+    backgroundColor: '#3a0f12',
+    borderWidth: 1,
+    borderColor: '#8b1a1d',
+  },
+  modalCancelText: {
+    color: '#ff6b6b',
+  },
+  photoPicker: {
+    width: 52,
+    height: 52,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#2a2a2a',
+    backgroundColor: '#0f0f0f',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   searchContainer: {
     flexDirection: 'row',

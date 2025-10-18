@@ -176,19 +176,27 @@ export const InboxBadgeProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           {
             const msgsRef = collection(db, 'chats', chatId, 'messages');
             const qMsgs = query(msgsRef, orderBy('timestamp', 'desc'), limit(30));
-            messageUnsubsRef.current[chatId] = onSnapshot(qMsgs, (mSnap) => {
-              const meta = chatMetaRef.current[chatId];
-              const myUid = auth.currentUser?.uid || uid;
-              const myLast = meta?.lastReadTs || 0;
-              let count = 0;
-              for (const md of mSnap.docs) {
-                const m: any = md.data();
-                const ts = m.timestamp?.toMillis ? m.timestamp.toMillis() : 0;
-                if (myLast && ts <= myLast) break;
-                if (m.senderId && m.senderId !== myUid) count++;
+            messageUnsubsRef.current[chatId] = onSnapshot(
+              qMsgs,
+              (mSnap) => {
+                const meta = chatMetaRef.current[chatId];
+                const myUid = auth.currentUser?.uid || uid;
+                const myLast = meta?.lastReadTs || 0;
+                let count = 0;
+                for (const md of mSnap.docs) {
+                  const m: any = md.data();
+                  const ts = m.timestamp?.toMillis ? m.timestamp.toMillis() : 0;
+                  if (myLast && ts <= myLast) break;
+                  if (m.senderId && m.senderId !== myUid) count++;
+                }
+                updateChatCount(chatId, count);
+              },
+              (err) => {
+                if ((err as any)?.code !== 'permission-denied') {
+                  console.warn('Messages snapshot error:', err);
+                }
               }
-              updateChatCount(chatId, count);
-            });
+            );
           }
         });
         // cleanup removed
