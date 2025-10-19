@@ -1,7 +1,7 @@
 import { collection, query, where, getDocs, addDoc, deleteDoc, doc, updateDoc, arrayUnion, arrayRemove, getDoc } from 'firebase/firestore';
 import { auth, db } from '../firebaseConfig';
 import { Activity } from '../data/activitiesData';
-import { removeUserFromChat } from './firestoreChats';
+import { removeUserFromChat, addSystemMessage, getOrCreateChatForActivity } from './firestoreChats';
 
 export const getUserJoinedActivities = async (): Promise<string[]> => {
   const user = auth.currentUser;
@@ -20,6 +20,15 @@ export const joinActivity = async (activityId: string, userId: string) => {
   await updateDoc(activityRef, {
     joinedUserIds: arrayUnion(userId),
   });
+  // Post a system message into the activity chat
+  try {
+    const chatId = await getOrCreateChatForActivity(activityId, userId);
+    if (chatId) {
+      const p = await getDoc(doc(db, 'profiles', userId));
+      const name = p.exists() ? ((p.data() as any).username || 'Someone') : 'Someone';
+      await addSystemMessage(chatId, `${name} joined the activity`);
+    }
+  } catch {}
 };
 
 export const leaveActivity = async (activityId: string, userId: string) => {
@@ -29,6 +38,12 @@ export const leaveActivity = async (activityId: string, userId: string) => {
   });
   // Remove user from chat participants as well
   await removeUserFromChat(activityId, userId);
+  // Post a system message into the activity chat
+  try {
+    const p = await getDoc(doc(db, 'profiles', userId));
+    const name = p.exists() ? ((p.data() as any).username || 'Someone') : 'Someone';
+    await addSystemMessage(activityId, `${name} left the activity`);
+  } catch {}
 };
 
 export const fetchAllActivities = async (): Promise<Activity[]> => {

@@ -13,6 +13,7 @@ import {
   Animated,
   ActivityIndicator,
   RefreshControl,
+  Keyboard,
 } from 'react-native';
 import { Swipeable, RectButton } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
@@ -133,20 +134,20 @@ const ChatsScreen = ({ navigation }: any) => {
           // Enrich with activity details and use chat doc lastMessage* for instant updates
           const chatsWithDetails = await Promise.all(baseChats.map(async (chat: Chat) => {
             let activityName = 'Group Chat';
-            let activityImage = 'https://via.placeholder.com/50';
+            // Use empty string by default so UI falls back to local default-group icon
+            let activityImage = '';
             let activityType = '';
             let activityDate = '';
             let activityTime = '';
-            // Determine chat type robustly: prefer explicit 'dm', else activityId implies group,
-            // else fall back to participants-length check for legacy docs
+            // Determine chat type robustly:
+            // - Explicit 'dm' wins
+            // - IDs starting with 'dm_' are DMs
+            // - Otherwise, default to 'group' (even if only 2 participants)
             let type: 'dm' | 'group';
-            if ((chat as any).type === 'dm') {
+            if ((chat as any).type === 'dm' || String(chat.id || '').startsWith('dm_')) {
               type = 'dm';
-            } else if ((chat as any).activityId) {
-              type = 'group';
             } else {
-              const parts = Array.isArray((chat as any).participants) ? (chat as any).participants : [];
-              type = parts.length === 2 ? 'dm' : 'group';
+              type = 'group';
             }
             let dmPeerName = '';
             let dmPeerPhoto = '';
@@ -166,14 +167,14 @@ const ChatsScreen = ({ navigation }: any) => {
             }
             if ((chat as any).title) {
               activityName = (chat as any).title;
-              activityImage = (chat as any).photoUrl || activityImage;
+              activityImage = (chat as any).photoUrl || '';
             }
             if (chat.activityId) {
               const activityDoc = await getDoc(doc(db, 'activities', chat.activityId));
               if (activityDoc.exists()) {
                 const activityData: any = activityDoc.data();
                 activityName = activityData.activity || activityData.name || 'Group Chat';
-                activityImage = activityData.image || 'https://via.placeholder.com/50';
+                activityImage = activityData.image || '';
                 activityType = activityData.activity || '';
                 activityDate = activityData.date || '';
                 activityTime = activityData.time || '';
@@ -190,6 +191,19 @@ const ChatsScreen = ({ navigation }: any) => {
             } else if ((chat as any).lastMessageType === 'audio') {
               lastMessage = '🎤 Voice message';
             }
+            // If there is a latest system message, prefer that as a subtle status line
+            // We look at the newest message quickly; this is already fetching recent messages for unread calc
+            try {
+              const msgsRef = collection(db, 'chats', chat.id, 'messages');
+              const qMsgs = query(msgsRef, orderBy('timestamp', 'desc'), limit(1));
+              const snap = await getDocs(qMsgs);
+              if (!snap.empty) {
+                const m: any = snap.docs[0].data();
+                if (m.type === 'system' && typeof m.text === 'string') {
+                  lastMessage = m.text;
+                }
+              }
+            } catch {}
             const senderId = (chat as any).lastMessageSenderId;
             if (senderId) {
               const senderDoc = await getDoc(doc(db, 'profiles', senderId));
@@ -236,18 +250,11 @@ const ChatsScreen = ({ navigation }: any) => {
               lastTsMillis,
             };
           }));
-          // Hide DMs until there is at least one message
-          const filtered = chatsWithDetails.filter((c: any) => {
-            if (c.type === 'dm') {
-              return !!c.lastMessageText || !!c.lastMessageType || !!c.lastMessageSenderId;
-            }
-            return true;
-          });
-          // Sort by latest message time (desc) for both DM and group
-          const sorted = filtered.sort((a: any, b: any) => (b.lastTsMillis || 0) - (a.lastTsMillis || 0));
+          // Show all chats (DMs and groups), even if a DM has no messages yet
+          const sorted = chatsWithDetails.sort((a: any, b: any) => (b.lastTsMillis || 0) - (a.lastTsMillis || 0));
           setChats(sorted);
           // Aggregate unread counts for badge
-          const totalUnread = filtered.reduce((acc: number, c: any) => acc + (c.type === 'dm' ? (c.unreadFromPeer || 0) : 0), 0);
+          const totalUnread = chatsWithDetails.reduce((acc: number, c: any) => acc + (c.type === 'dm' ? (c.unreadFromPeer || 0) : 0), 0);
           setChatUnreadTotal(totalUnread);
           setIsReady(true);
         },
@@ -446,7 +453,7 @@ const ChatsScreen = ({ navigation }: any) => {
         <>
           {/* Group avatar:
               - Activity-based groups: show ActivityIcon inside circular frame
-              - Custom groups: show uploaded group photo (or UI-avatar fallback)
+              - Custom groups: show uploaded group photo or a turquoise group icon fallback
           */}
           {item.activityId ? (
             <View
@@ -464,10 +471,28 @@ const ChatsScreen = ({ navigation }: any) => {
               <ActivityIcon activity={item.activityType} size={28} color={TURQUOISE} />
             </View>
           ) : (
-            <Image
-              source={{ uri: item.image || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(item.name || 'Group') }}
-              style={{ width: 50, height: 50, borderRadius: 25, borderWidth: 1, borderColor: TURQUOISE, marginRight: 12 }}
-            />
+            item.image ? (
+              <Image
+                source={{ uri: item.image }}
+                style={{ width: 50, height: 50, borderRadius: 25, borderWidth: 1, borderColor: TURQUOISE, marginRight: 12 }}
+              />
+            ) : (
+              <View
+                style={{
+                  width: 50,
+                  height: 50,
+                  borderRadius: 25,
+                  borderWidth: 1,
+                  borderColor: TURQUOISE,
+                  marginRight: 12,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: 'transparent',
+                }}
+              >
+                <Ionicons name="people" size={28} color={TURQUOISE} />
+              </View>
+            )
           )}
           {/* Chat info and date/time */}
           <View style={{ flex: 1, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }}>
@@ -830,6 +855,9 @@ const ChatsScreen = ({ navigation }: any) => {
               value={groupTitle}
               maxLength={25}
               onChangeText={(t) => setGroupTitle((t || '').slice(0, 25))}
+              returnKeyType="done"
+              blurOnSubmit={true}
+              onSubmitEditing={() => Keyboard.dismiss()}
             />
             <Text style={{ color: '#777', fontSize: 12, textAlign: 'right', marginTop: 4 }}>{groupTitle.length}/25</Text>
             <Text style={styles.modalSubtitle}>Group photo (optional)</Text>
@@ -861,8 +889,15 @@ const ChatsScreen = ({ navigation }: any) => {
               data={friends}
               keyExtractor={(item) => item.uid}
               style={{ maxHeight: 260 }}
+              keyboardShouldPersistTaps="always"
               renderItem={({ item }) => (
-                <TouchableOpacity style={styles.friendRow} onPress={() => toggleSelectFriend(item.uid)}>
+                <TouchableOpacity
+                  style={styles.friendRow}
+                  onPress={() => {
+                    Keyboard.dismiss();
+                    toggleSelectFriend(item.uid);
+                  }}
+                >
                   <Image source={{ uri: item.photo || `https://ui-avatars.com/api/?name=${encodeURIComponent(item.username)}` }} style={styles.friendAvatar} />
                   <Text style={styles.friendName}>{item.username}</Text>
                   <View style={[styles.checkbox, selected[item.uid] ? styles.checkboxOn : styles.checkboxOff]}>

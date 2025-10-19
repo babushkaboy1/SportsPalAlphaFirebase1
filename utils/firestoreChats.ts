@@ -1,5 +1,5 @@
 // filepath: c:\Users\Thom\Desktop\SportsPal-Alpha-main\utils\firestoreChats.ts
-import { collection, query, where, getDocs, addDoc, serverTimestamp, updateDoc, orderBy, onSnapshot, arrayRemove, arrayUnion, doc, setDoc, getDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, addDoc, serverTimestamp, updateDoc, orderBy, onSnapshot, arrayRemove, arrayUnion, doc, setDoc, getDoc, runTransaction, deleteDoc } from 'firebase/firestore';
 import { db, auth } from '../firebaseConfig';
 
 export async function fetchUserChats(userId: string) {
@@ -134,10 +134,39 @@ export async function markChatRead(chatId: string) {
 export async function removeUserFromChat(activityId: string, userId: string) {
   // Directly update deterministic chat doc for this activity
   try {
-    const chatRef = doc(db, 'chats', activityId);
-    await updateDoc(chatRef, { participants: arrayRemove(userId) });
+    // Reuse the generic helper that also deletes the chat if it falls below threshold
+    await leaveChatWithAutoDelete(activityId, userId);
   } catch (e) {
     // swallow (chat may not exist yet for this activity)
+  }
+}
+
+// Generic helper: user leaves any chat; delete the chat only when the last participant leaves
+export async function leaveChatWithAutoDelete(chatId: string, userId: string) {
+  try {
+    await runTransaction(db, async (tx) => {
+      const chatRef = doc(db, 'chats', chatId);
+      const snap = await tx.get(chatRef);
+      if (!snap.exists()) return;
+      const data: any = snap.data();
+      // Sanitize participants to unique strings
+      const participants: string[] = Array.from(new Set((Array.isArray(data?.participants) ? data.participants : []).filter((p: any) => typeof p === 'string')));
+      if (!participants.includes(userId)) return; // already left
+      const remaining = participants.filter((p) => p !== userId);
+      if (remaining.length > 0) {
+        // Persist chat while there are still participants
+        tx.update(chatRef, { participants: remaining });
+      } else {
+        // Delete only when the last participant leaves
+        tx.delete(chatRef);
+      }
+    });
+  } catch (e) {
+    // Fallback best-effort: try to just remove user
+    try {
+      const chatRef = doc(db, 'chats', chatId);
+      await updateDoc(chatRef, { participants: arrayRemove(userId) } as any);
+    } catch {}
   }
 }
 
@@ -186,3 +215,20 @@ export async function createCustomGroupChat(
   });
   return ref.id;
 }
+
+// Add a lightweight system message (e.g., join/leave/add users). Does not change lastMessage preview.
+export async function addSystemMessage(chatId: string, text: string) {
+  const me = auth.currentUser?.uid;
+  if (!me) return;
+  try {
+    await addDoc(collection(db, 'chats', chatId, 'messages'), {
+      senderId: me,
+      text,
+      type: 'system',
+      timestamp: serverTimestamp(),
+    });
+  } catch {
+    // ignore if no permission (e.g., already left) or chat missing
+  }
+}
+

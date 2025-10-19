@@ -160,8 +160,8 @@ service cloud.firestore {
 
       allow read: if isSignedIn() && (request.auth.uid in resource.data.participants);
 
-      // Only allow deleting the chat when the requester is the last remaining participant.
-      // This guarantees group chats persist until every user has left.
+      // Delete: only allowed when the requester is the sole remaining participant (last person leaving).
+      // This guarantees group chats persist until everyone else has left and the final user exits.
       allow delete: if isSignedIn() && (
         (request.auth.uid in resource.data.participants) &&
         (

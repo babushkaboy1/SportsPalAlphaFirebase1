@@ -23,7 +23,7 @@ import * as NavigationBar from 'expo-navigation-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { listenToMessages, sendMessage, markChatRead, ensureDmChat } from '../utils/firestoreChats';
+import { listenToMessages, sendMessage, markChatRead, ensureDmChat, leaveChatWithAutoDelete, addSystemMessage } from '../utils/firestoreChats';
 import { sendActivityInvites } from '../utils/firestoreInvites';
 import { useActivityContext } from '../context/ActivityContext';
 import { doc, getDoc, onSnapshot } from 'firebase/firestore';
@@ -40,7 +40,7 @@ type Message = {
   id: string;
   senderId: string;
   text: string;
-  type: 'text' | 'image' | 'audio';
+  type: 'text' | 'image' | 'audio' | 'system';
   timestamp?: any;
 };
 
@@ -255,9 +255,9 @@ const ChatDetailScreen = () => {
     const fetchActivity = async () => {
       const chatDoc = await getDoc(doc(db, 'chats', chatId));
       const chatData = chatDoc.data();
-      // Treat as DM if type is 'dm', or no activityId and exactly 2 participants
-      const participants = Array.isArray(chatData?.participants) ? chatData?.participants : [];
-      const isDm = chatData?.type === 'dm' || (!chatData?.activityId && participants.length === 2);
+  // Treat as DM only if type is 'dm' or the chat id follows the DM convention
+  const participants = Array.isArray(chatData?.participants) ? chatData?.participants : [];
+  const isDm = (chatData?.type === 'dm') || String(chatId || '').startsWith('dm_');
       setParticipantIds(participants);
       if (isDm) {
         const myId = auth.currentUser?.uid;
@@ -408,6 +408,20 @@ const ChatDetailScreen = () => {
       if (toAdd.length) {
         await updateDoc(doc(db, 'chats', chatId), { participants: arrayUnion(...toAdd) } as any);
         setParticipantIds([...participantIds, ...toAdd]);
+        // System message: users added
+        const me = auth.currentUser?.uid;
+        try {
+          const addedProfiles = await Promise.all(
+            toAdd.map(async (uid) => {
+              const p = await getDoc(doc(db, 'profiles', uid));
+              return p.exists() ? (p.data() as any).username || 'User' : 'User';
+            })
+          );
+          const myProfileSnap = me ? await getDoc(doc(db, 'profiles', me)) : null;
+          const myName = (myProfileSnap && myProfileSnap.exists()) ? ((myProfileSnap.data() as any).username || 'Someone') : 'Someone';
+          const names = addedProfiles.join(', ');
+          await addSystemMessage(chatId, `${myName} added ${names}`);
+        } catch {}
       }
       setAddUsersVisible(false);
       setAddingUsersMap({});
@@ -427,9 +441,13 @@ const ChatDetailScreen = () => {
         text: 'Leave', style: 'destructive', onPress: async () => {
           try {
             leavingRef.current = true;
-            // Always only remove myself so the chat persists for others (host or not)
-            const chatRef = doc(db, 'chats', chatId);
-            await updateDoc(chatRef, { participants: arrayRemove(me) } as any);
+            // Leave the chat; it will only be deleted when the last participant leaves
+            try {
+              const mySnap = await getDoc(doc(db, 'profiles', me));
+              const myName = mySnap.exists() ? ((mySnap.data() as any).username || 'Someone') : 'Someone';
+              await addSystemMessage(chatId, `${myName} left the group`);
+            } catch {}
+            await leaveChatWithAutoDelete(chatId, me);
           } catch {}
           exitToInbox();
         }
@@ -624,6 +642,22 @@ const ChatDetailScreen = () => {
     const isLastOfGroup = !next || next.senderId !== item.senderId;
     const sender = profiles[item.senderId] || {};
     const isOwn = item.senderId === auth.currentUser?.uid;
+
+    // System message rendering
+    if (item.type === 'system') {
+      return (
+        <View style={{ flex: 1, alignItems: 'center', marginVertical: 8 }}>
+          <Text style={{ color: '#aaa', fontStyle: 'italic', fontSize: 13, textAlign: 'center', paddingHorizontal: 10 }}>
+            {item.text}
+          </Text>
+          <Text style={{ color: '#666', fontSize: 11, marginTop: 2 }}>
+            {item.timestamp
+              ? new Date(item.timestamp.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              : ''}
+          </Text>
+        </View>
+      );
+    }
 
     return (
       <View style={{ flexDirection: 'row', alignItems: 'flex-end' }}>
@@ -854,10 +888,13 @@ const ChatDetailScreen = () => {
             ) : (
               <>
                 {/* Custom group: show group photo and title like DM */}
-                <Image
-                  source={{ uri: (groupMeta?.photoUrl) || ('https://ui-avatars.com/api/?name=' + encodeURIComponent(groupMeta?.title || 'Group Chat')) }}
-                  style={styles.headerImage}
-                />
+                {groupMeta?.photoUrl ? (
+                  <Image source={{ uri: groupMeta.photoUrl }} style={styles.headerImage} />
+                ) : (
+                  <View style={[styles.headerImage, { alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#1ae9ef' }]}> 
+                    <Ionicons name="people" size={22} color="#1ae9ef" />
+                  </View>
+                )}
                 <View style={{ flex: 1, marginLeft: 10 }}>
                   <Text style={styles.headerTitle}>{groupMeta?.title || 'Group Chat'}</Text>
                 </View>
