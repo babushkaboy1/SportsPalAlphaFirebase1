@@ -81,10 +81,28 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         return;
       }
       const firestoreActivities = await fetchAllActivities();
-      setAllActivities(firestoreActivities);
+      // Fetch all unique creatorIds
+      const creatorIds = Array.from(new Set(firestoreActivities.map(a => a.creatorId).filter((id): id is string => typeof id === 'string')));
+      // Fetch all creator profiles in parallel
+      const profiles = await Promise.all(
+        creatorIds.map(async (uid: string) => {
+          const { getDoc, doc } = await import('firebase/firestore');
+          const { db } = await import('../firebaseConfig');
+          const snap = await getDoc(doc(db, 'profiles', uid));
+          return snap.exists() ? { uid, username: snap.data().username } : { uid, username: 'Unknown' };
+        })
+      );
+      // Map creatorId to username
+      const idToUsername: Record<string, string> = {};
+      profiles.forEach(p => { if (typeof p.uid === 'string') idToUsername[p.uid] = p.username; });
+      // Attach creatorUsername to each activity
+      const activitiesWithUsernames = firestoreActivities.map(a => ({
+  ...a,
+  creatorUsername: a.creatorId && idToUsername[a.creatorId] ? idToUsername[a.creatorId] : a.creator,
+      }));
+      setAllActivities(activitiesWithUsernames);
     } catch (e) {
       console.error('Error loading activities:', e);
-      // Do not show fake activities; leave empty on error
       setAllActivities([]);
     }
   };

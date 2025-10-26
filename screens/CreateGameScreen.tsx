@@ -12,6 +12,9 @@ import {
   Modal,
   Animated,
   ActivityIndicator,
+  Image,
+  Pressable,
+  Keyboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -25,6 +28,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { createActivity, joinActivity, fetchAllActivities } from '../utils/firestoreActivities';
+import { normalizeDateFormat } from '../utils/storage';
 import { auth } from '../firebaseConfig'; // Add this import
 import * as Haptics from 'expo-haptics';
 
@@ -47,15 +51,24 @@ const darkMapStyle = [
 
 const CreateGameScreen = () => {
   const navigation = useNavigation<NavigationProp>();
-  const { toggleJoinActivity, reloadAllActivities, setJoinedActivities } = useActivityContext();
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [createdActivityId, setCreatedActivityId] = useState<string | null>(null);
+  const [friendProfiles, setFriendProfiles] = useState<any[]>([]);
+  const [selectedFriendIds, setSelectedFriendIds] = useState<Record<string, boolean>>({});
+  const [invitedFriendIds, setInvitedFriendIds] = useState<string[]>([]); // Track invited friends
+  const [noSelectionHintVisible, setNoSelectionHintVisible] = useState(false);
+  const [invitedState, setInvitedState] = useState(false);
+  const noSelectionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { toggleJoinActivity, reloadAllActivities, setJoinedActivities, profile } = useActivityContext();
   const route = useRoute<RouteProp<RootStackParamList, 'CreateGame'>>();
   const insets = useSafeAreaInsets();
 
-  const [activityName, setActivityName] = useState('');
+  // Removed activityName
+  const [creating, setCreating] = useState(false);
   const [description, setDescription] = useState('');
   const [sport, setSport] = useState<string>('');
   const [location, setLocation] = useState<string>('');
-  const [date, setDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  const [date, setDate] = useState<string>(() => normalizeDateFormat(new Date().toISOString().split('T')[0]));
   const [time, setTime] = useState<string>(() => {
     const now = new Date();
     return `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
@@ -105,12 +118,12 @@ const CreateGameScreen = () => {
 
   // Reset form fields
   const resetForm = () => {
-    setActivityName('');
+  // Removed activityName
     setDescription('');
     setSport('');
     setLocation('');
     // Restore defaults for date/time
-    setDate(new Date().toISOString().split('T')[0]);
+  setDate(normalizeDateFormat(new Date().toISOString().split('T')[0]));
     const now = new Date();
     setTime(`${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`);
     setMaxParticipants(10);
@@ -149,8 +162,26 @@ const CreateGameScreen = () => {
   };
 
   const handleCreateGame = async () => {
-    if (!activityName || !sport || !location || !date || !time) {
-      Alert.alert('Missing Info', 'Please fill in all fields.');
+    // Build missing fields array
+    const missingFields: string[] = [];
+  // Removed name validation
+    if (!sport) missingFields.push('sport');
+    if (!location) missingFields.push('location');
+    if (!date) missingFields.push('date');
+    if (!time) missingFields.push('time');
+    if (!maxParticipants) missingFields.push('max participants');
+
+    if (missingFields.length > 0) {
+      // Build a friendly message
+      let msg = '';
+      if (missingFields.length === 1) {
+        msg = `Choose ${missingFields[0]} before creating activity.`;
+      } else if (missingFields.length === 2) {
+        msg = `Choose ${missingFields[0]} and ${missingFields[1]} before creating activity.`;
+      } else {
+        msg = `Choose ${missingFields.slice(0, -1).join(', ')} and ${missingFields[missingFields.length - 1]} before creating activity.`;
+      }
+      Alert.alert('Missing Info', msg);
       return;
     }
 
@@ -163,15 +194,20 @@ const CreateGameScreen = () => {
       return;
     }
 
+    // If description is empty, set to 'No description'
+    const safeDescription = description && description.trim().length > 0 ? description : 'No description';
+
+    // Get actual username from profile context (or fallback to 'Unknown')
+    const username = profile?.username || 'Unknown';
+
     // Firestore create payload must include creatorId and initial joinedUserIds
     const newGame = {
-      name: activityName,
-      description,
+      description: safeDescription,
       activity: sport,
       location,
       date,
       time,
-      creator: 'You', // display name if available
+      creator: username, // always use actual username
       creatorId: uid,
       joinedUserIds: [uid],
       joinedCount: 1,
@@ -182,25 +218,34 @@ const CreateGameScreen = () => {
     };
 
     try {
+      setCreating(true);
       const newId = await createActivity(newGame as any); // Save to Firestore and get id
-      // No need to call joinActivity; joinedUserIds already includes uid
       setJoinedActivities(prev => Array.from(new Set([...prev, newId])));
       await reloadAllActivities();
-      // Ensure group chat exists and you are a participant
       try {
         const { getOrCreateChatForActivity } = await import('../utils/firestoreChats');
         await getOrCreateChatForActivity(newId, uid);
       } catch {}
 
-      Alert.alert('Game Created', 'Your game has been successfully created!');
       resetForm();
-      // Navigate to Calendar tab and pass selectedDate param (Calendar screen reads it)
-      navigation.navigate('MainTabs', {
-        screen: 'Calendar',
-        params: { selectedDate: date },
-      });
+      setCreatedActivityId(newId);
+      setShowSuccessModal(true);
+      // Load friends for modal
+      const myFriendIds: string[] = Array.isArray(profile?.friends) ? profile.friends : [];
+      if (myFriendIds.length) {
+        try {
+          const users = await import('../utils/firestoreFriends').then(mod => mod.fetchUsersByIds(myFriendIds));
+          setFriendProfiles(users);
+        } catch {
+          setFriendProfiles([]);
+        }
+      } else {
+        setFriendProfiles([]);
+      }
     } catch (e) {
       Alert.alert('Error', 'Could not create game. Please try again.');
+    } finally {
+      setCreating(false);
     }
   };
 
@@ -208,10 +253,10 @@ const CreateGameScreen = () => {
     // Only restore form state if coming back from PickLocation (pickedCoords is present)
     if (route.params?.pickedCoords) {
       if (route.params?.formState) {
-        setActivityName(route.params.formState.activityName || '');
+  // Removed activityName restore
         setDescription(route.params.formState.description || '');
         setSport(route.params.formState.sport || '');
-        setDate(route.params.formState.date || new Date().toISOString().split('T')[0]);
+  setDate(route.params.formState.date ? normalizeDateFormat(route.params.formState.date) : normalizeDateFormat(new Date().toISOString().split('T')[0]));
         setTime(route.params.formState.time || (() => {
           const now = new Date();
           return `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
@@ -226,7 +271,7 @@ const CreateGameScreen = () => {
   // Date/time picker handlers
   const onDateChange = (event: any, selectedDate?: Date) => {
     if (Platform.OS === 'android') setShowDatePicker(false);
-    if (selectedDate) setDate(selectedDate.toISOString().split('T')[0]);
+    if (selectedDate) setDate(normalizeDateFormat(selectedDate.toISOString().split('T')[0]));
   };
 
   const onTimeChange = (event: any, selectedTime?: Date) => {
@@ -287,8 +332,7 @@ const CreateGameScreen = () => {
             <Ionicons name="close" size={18} color="#fff" />
           </View>
           <Animated.Text
-            style={[
-              styles.pullClearText,
+            style={[styles.pullClearText,
               {
                 opacity: pullAnim.interpolate({
                   inputRange: [0, CLEAR_THRESHOLD * 0.6, CLEAR_THRESHOLD],
@@ -301,8 +345,7 @@ const CreateGameScreen = () => {
             Pull to clear form
           </Animated.Text>
           <Animated.Text
-            style={[
-              styles.pullClearText,
+            style={[styles.pullClearText,
               {
                 position: 'absolute',
                 top: 32,
@@ -317,6 +360,158 @@ const CreateGameScreen = () => {
             Release to clear
           </Animated.Text>
         </Animated.View>
+
+        {/* Success Modal Popup */}
+        <Modal
+          visible={showSuccessModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowSuccessModal(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalCard}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Activity Created!</Text>
+              </View>
+              <Text style={styles.modalSubtitle}>
+                Your activity has been successfully created. You can now invite your friends and let people discover this activity from their Discover page.
+              </Text>
+              {friendProfiles.length > 0 ? (
+                <>
+                  <Text style={styles.modalSubtitle}>Select friends to invite to this activity:</Text>
+                  <ScrollView style={{ maxHeight: 260 }}>
+                    {friendProfiles.map((f: any) => {
+                      const invited = invitedFriendIds.includes(f.uid);
+                      const selected = !!selectedFriendIds[f.uid];
+                      return (
+                        <TouchableOpacity
+                          key={f.uid}
+                          style={[styles.friendRow, invited && { opacity: 0.5 }]} // blur if invited
+                          onPress={() => {
+                            if (!invited) {
+                              setSelectedFriendIds(prev => ({ ...prev, [f.uid]: !prev[f.uid] }));
+                            }
+                          }}
+                          activeOpacity={invited ? 1 : 0.7}
+                          disabled={invited}
+                        >
+                          <View style={styles.friendLeft}>
+                            <Image
+                              source={{ uri: f.photo || f.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(f.username || 'User')}` }}
+                              style={styles.friendAvatar}
+                            />
+                            <View>
+                              <Text style={styles.friendName}>{f.username || 'User'}</Text>
+                              {f.bio ? <Text style={styles.friendMeta}>{f.bio}</Text> : null}
+                            </View>
+                          </View>
+                          <View style={[styles.checkbox, (selected || invited) && styles.checkboxSelected]}>
+                            {(selected || invited) && <Ionicons name="checkmark" size={16} color="#121212" />}
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                  <View style={styles.modalActions}>
+                    <TouchableOpacity
+                      style={[styles.modalConfirm,
+                        // Button color logic
+                        Object.keys(selectedFriendIds).some(id => selectedFriendIds[id] && !invitedFriendIds.includes(id))
+                          ? { backgroundColor: '#1ae9ef' } // turquoise
+                          : invitedState
+                            ? { backgroundColor: '#009fa3' } // dark turquoise after invite
+                            : { backgroundColor: '#009fa3' } // dark turquoise when nothing selected
+                      ]}
+                      onPress={async () => {
+                        // Invite logic
+                        const selected = Object.keys(selectedFriendIds).filter(id => selectedFriendIds[id] && !invitedFriendIds.includes(id));
+                        if (selected.length === 0) {
+                          setNoSelectionHintVisible(true);
+                          if (noSelectionTimerRef.current) clearTimeout(noSelectionTimerRef.current);
+                          noSelectionTimerRef.current = setTimeout(() => setNoSelectionHintVisible(false), 1800);
+                          return;
+                        }
+                        let sent = 0;
+                        let skipped = 0;
+                        if (!createdActivityId) return;
+                        const newlyInvited: string[] = [];
+                        for (const friendId of selected) {
+                          try {
+                            const res = await import('../utils/firestoreInvites').then(mod => mod.sendActivityInvites(friendId, [createdActivityId as string]));
+                            if ((res?.sentIds || []).length > 0) {
+                              sent += 1;
+                              newlyInvited.push(friendId);
+                            } else {
+                              skipped += 1;
+                            }
+                          } catch {
+                            skipped += 1;
+                          }
+                        }
+                        setInvitedFriendIds(prev => Array.from(new Set([...prev, ...newlyInvited])));
+                        setInvitedState(true);
+                        // Unselect all after sending
+                        setSelectedFriendIds({});
+                        Alert.alert('Invites',
+                          sent > 0
+                            ? `Sent invites to ${sent} friend${sent === 1 ? '' : 's'}${skipped ? ` (skipped ${skipped} already joined)` : ''}.`
+                            : `No invites sent. ${skipped} skipped (already joined).`
+                        );
+                      }}
+                      disabled={
+                        !Object.keys(selectedFriendIds).some(
+                          id => selectedFriendIds[id] && !invitedFriendIds.includes(id)
+                        )
+                      }
+                    >
+                      <Text
+                        style={[styles.modalConfirmText,
+                          Object.keys(selectedFriendIds).some(id => selectedFriendIds[id] && !invitedFriendIds.includes(id))
+                            ? { color: '#121212' } // black text when selectable
+                            : invitedState
+                              ? { color: '#fff' } // white text after invite
+                              : { color: '#fff' } // white text when nothing selected
+                        ]}
+                      >
+                        {Object.keys(selectedFriendIds).some(id => selectedFriendIds[id] && !invitedFriendIds.includes(id))
+                          ? 'Invite Selected Friends'
+                          : invitedState
+                            ? 'Selected friends invited'
+                            : 'Invite Selected Friends'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              ) : (
+                <Text style={styles.modalSubtitle}>You have no friends to invite yet.</Text>
+              )}
+              <View style={styles.modalActions}>
+                <TouchableOpacity
+                  style={styles.modalConfirm}
+                  onPress={() => {
+                    if (createdActivityId) {
+                      setShowSuccessModal(false);
+                      navigation.navigate('ActivityDetails', { activityId: createdActivityId });
+                    }
+                  }}
+                >
+                  <Text style={styles.modalConfirmText}>Go to Activity Details</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.modalCancel}
+                  onPress={() => setShowSuccessModal(false)}
+                >
+                  <Text style={styles.modalCancelText}>Close</Text>
+                </TouchableOpacity>
+              </View>
+              {noSelectionHintVisible && (
+                <View style={styles.bottomToast} pointerEvents="none">
+                  <Text style={styles.bottomToastText}>No friends selected</Text>
+                </View>
+              )}
+            </View>
+          </View>
+        </Modal>
         <View style={styles.header}>
           <Text style={styles.headerTitle}>Create Activity</Text>
         </View>
@@ -328,26 +523,8 @@ const CreateGameScreen = () => {
           onScrollEndDrag={handleRelease}
           overScrollMode="always"
           alwaysBounceVertical
+          keyboardShouldPersistTaps="handled"
         >
-          <Text style={styles.sectionLabel}>Name your activity</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Activity Name"
-            placeholderTextColor="#ccc"
-            value={activityName}
-            onChangeText={setActivityName}
-          />
-
-          <Text style={styles.sectionLabel}>Description</Text>
-          <TextInput
-            style={[styles.input, { height: 80 }]}
-            placeholder="Description"
-            placeholderTextColor="#ccc"
-            value={description}
-            onChangeText={setDescription}
-            multiline
-          />
-
           <Text style={styles.sectionLabel}>Select Sport</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             {sportOptions.map((option) => (
@@ -366,6 +543,20 @@ const CreateGameScreen = () => {
             ))}
           </ScrollView>
 
+          <Text style={styles.sectionLabel}>Description</Text>
+          <TextInput
+            style={[styles.input, { height: 80 }]} // 3-4 lines
+            placeholder="Describe your activity (optional)"
+            placeholderTextColor="#ccc"
+            value={description}
+            onChangeText={t => setDescription(t.slice(0, 200))}
+            multiline
+            maxLength={200}
+          />
+          <View style={{ flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 4 }}>
+            <Text style={{ color: '#888', fontSize: 13 }}>{description.length}/200</Text>
+          </View>
+
           <Text style={styles.sectionLabel}>Location</Text>
           <TouchableOpacity
             activeOpacity={0.7}
@@ -375,7 +566,6 @@ const CreateGameScreen = () => {
                 darkMapStyle,
                 returnTo: 'CreateGame',
                 formState: {
-                  activityName,
                   description,
                   sport,
                   date,
@@ -406,7 +596,6 @@ const CreateGameScreen = () => {
                   darkMapStyle,
                   returnTo: 'CreateGame',
                   formState: {
-                    activityName,
                     description,
                     sport,
                     date,
@@ -426,9 +615,9 @@ const CreateGameScreen = () => {
           <TouchableOpacity onPress={() => setShowDatePicker(true)} activeOpacity={0.7}>
             <TextInput
               style={styles.input}
-              placeholder="YYYY-MM-DD"
+              placeholder="DD-MM-YYYY"
               placeholderTextColor="#ccc"
-              value={date}
+              value={normalizeDateFormat(date)}
               editable={false}
               pointerEvents="none"
             />
@@ -450,13 +639,13 @@ const CreateGameScreen = () => {
                     </TouchableOpacity>
                   </View>
                   <DateTimePicker
-                    value={date ? new Date(date) : new Date()}
+                    value={date ? new Date(date.split('-').reverse().join('-')) : new Date()}
                     mode="date"
                     display="spinner"
                     themeVariant="dark"
                     onChange={(event, selectedDate) => {
                       if (event.type === 'set' && selectedDate) {
-                        setDate(selectedDate.toISOString().split('T')[0]);
+                        setDate(normalizeDateFormat(selectedDate.toISOString().split('T')[0]));
                       }
                     }}
                     minimumDate={new Date()}
@@ -468,12 +657,12 @@ const CreateGameScreen = () => {
           )}
           {Platform.OS === 'android' && showDatePicker && (
             <DateTimePicker
-              value={date ? new Date(date) : new Date()}
+              value={date ? new Date(date.split('-').reverse().join('-')) : new Date()}
               mode="date"
               display="default"
               onChange={(event, selectedDate) => {
                 setShowDatePicker(false);
-                if (selectedDate) setDate(selectedDate.toISOString().split('T')[0]);
+                if (selectedDate) setDate(normalizeDateFormat(selectedDate.toISOString().split('T')[0]));
               }}
               minimumDate={new Date()}
             />
@@ -599,8 +788,9 @@ const CreateGameScreen = () => {
             </Modal>
           )}
 
-          <TouchableOpacity style={styles.createButton} onPress={handleCreateGame}>
-            <Text style={styles.createButtonText}>Create Activity</Text>
+          <TouchableOpacity style={styles.createButton} onPress={creating ? undefined : handleCreateGame} disabled={creating}>
+            {creating && <ActivityIndicator size="small" color="#fff" />}
+            <Text style={styles.createButtonText}>{creating ? 'Creating Activity' : 'Create Activity'}</Text>
           </TouchableOpacity>
         </ScrollView>
       </Animated.View>
@@ -763,4 +953,24 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     zIndex: 5,
   },
+  // Modal styles copied from ActivityDetailsScreen
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center', padding: 20 },
+  modalCard: { width: '100%', maxWidth: 520, backgroundColor: '#1c1c1e', borderRadius: 16, padding: 16, borderWidth: 1, borderColor: '#2a2a2c' },
+  modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
+  modalTitle: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
+  modalSubtitle: { color: '#9aa0a6', marginBottom: 12 },
+  friendRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: '#2a2a2c' },
+  friendLeft: { flexDirection: 'row', alignItems: 'center' },
+  friendAvatar: { width: 40, height: 40, borderRadius: 20, marginRight: 10, borderWidth: 1, borderColor: '#1ae9ef' },
+  friendName: { color: '#fff', fontWeight: '600' },
+  friendMeta: { color: '#9aa0a6', fontSize: 12 },
+  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: '#1ae9ef', alignItems: 'center', justifyContent: 'center' },
+  checkboxSelected: { backgroundColor: '#1ae9ef' },
+  modalActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 12, flexWrap: 'wrap' },
+  modalCancel: { paddingVertical: 12, paddingHorizontal: 16, backgroundColor: '#2b0f12', borderRadius: 10, borderWidth: 1, borderColor: '#5a1a1f' },
+  modalCancelText: { color: '#ff4d4f', fontWeight: '700' },
+  modalConfirm: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1ae9ef', paddingVertical: 12, paddingHorizontal: 16, borderRadius: 10 },
+  modalConfirmText: { color: '#121212', fontWeight: '700' },
+  bottomToast: { position: 'absolute', left: 0, right: 0, bottom: 22, alignItems: 'center' },
+  bottomToastText: { backgroundColor: 'rgba(26, 233, 239, 0.18)', color: '#cdeff0', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 14, overflow: 'hidden', fontWeight: '600' },
 });

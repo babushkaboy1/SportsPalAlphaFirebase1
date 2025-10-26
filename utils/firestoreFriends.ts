@@ -236,3 +236,13 @@ export async function removeFriend(targetUserId: string) {
   // Commit atomically; if rules prevent the cross-user write, this will throw
   await batch.commit();
 }
+
+// Fetch multiple user profiles by their IDs
+export async function fetchUsersByIds(userIds: string[]): Promise<any[]> {
+  if (!Array.isArray(userIds) || userIds.length === 0) return [];
+  const profileRefs = userIds.map(id => doc(db, 'profiles', id));
+  const profileSnaps = await Promise.all(profileRefs.map(ref => getDoc(ref)));
+  return profileSnaps
+    .map((snap, idx) => snap.exists() ? { uid: userIds[idx], ...snap.data() } : null)
+    .filter(Boolean);
+}

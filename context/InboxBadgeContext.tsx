@@ -144,7 +144,7 @@ export const InboxBadgeProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           const data: any = d.data();
           const chatId = d.id;
           presentIds.add(chatId);
-          const lastRead = data?.lastReadBy?.[me];
+          const lastRead = data?.reads?.[me];
           const lastReadTs = lastRead?.toMillis ? lastRead.toMillis() : 0;
           chatMetaRef.current[chatId] = {
             lastReadTs,
@@ -155,7 +155,7 @@ export const InboxBadgeProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             (async () => {
               try {
                 const msgsRef = collection(db, 'chats', chatId, 'messages');
-                const qMsgs = query(msgsRef, orderBy('timestamp', 'desc'), limit(30));
+                const qMsgs = query(msgsRef, orderBy('timestamp', 'desc'), limit(100));
                 const mSnap = await getDocs(qMsgs);
                 const myUid = auth.currentUser?.uid || uid;
                 let count = 0;
@@ -175,7 +175,7 @@ export const InboxBadgeProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           // Otherwise, attach a listener to update counts on new messages
           {
             const msgsRef = collection(db, 'chats', chatId, 'messages');
-            const qMsgs = query(msgsRef, orderBy('timestamp', 'desc'), limit(30));
+            const qMsgs = query(msgsRef, orderBy('timestamp', 'desc'), limit(100));
             messageUnsubsRef.current[chatId] = onSnapshot(
               qMsgs,
               (mSnap) => {

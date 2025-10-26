@@ -20,43 +20,23 @@ service cloud.firestore {
 
     function isSignedIn() { return request.auth != null; }
 
-    // Profiles: signed-in can read; only owner can write, with small controlled exceptions
+    // ---------- PROFILES ----------
     match /profiles/{uid} {
       allow read: if isSignedIn();
 
       // Owner can manage their own document
       allow create, update, delete: if isSignedIn() && request.auth.uid == uid
 
-      // Friend workflow: controlled cross-user updates
+      // Accept friend request
       || (
-        isSignedIn() && (
-          // ACCEPT: current user (the receiver) updates the sender's profile (uid) to:
-          // - add themselves to friends
-          // - remove themselves from requestsSent
-          request.resource.data.diff(resource.data).changedKeys().hasOnly(['friends', 'requestsSent']) &&
-
-          // friends grows by exactly 1 and includes current user
-          (('friends' in request.resource.data) &&
-            request.resource.data.friends.size() == ((('friends' in resource.data) ? resource.data.friends.size() : 0) + 1) &&
-            request.resource.data.friends.hasAll((('friends' in resource.data) ? resource.data.friends : [])) &&
-            (request.auth.uid in request.resource.data.friends)
-          ) &&
-
-          // requestsSent shrinks by exactly 1 and removes current user
-          (('requestsSent' in resource.data) &&
-            resource.data.requestsSent.size() == ((('requestsSent' in request.resource.data) ? request.resource.data.requestsSent.size() : 0) + 1) &&
-            resource.data.requestsSent.hasAll((('requestsSent' in request.resource.data) ? request.resource.data.requestsSent : [])) &&
-            (request.auth.uid in resource.data.requestsSent) &&
-            !(request.auth.uid in request.resource.data.requestsSent)
-          )
-        )
-      )
-
-      || (
-        isSignedIn() && (
-          // DECLINE: only remove current user from sender's requestsSent; friends unchanged
-          request.resource.data.diff(resource.data).changedKeys().hasOnly(['requestsSent']) &&
-          ('requestsSent' in resource.data) &&
+        isSignedIn() &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(['friends','requestsSent']) &&
+        (('friends' in request.resource.data) &&
+          request.resource.data.friends.size() == ((('friends' in resource.data) ? resource.data.friends.size() : 0) + 1) &&
+          request.resource.data.friends.hasAll((('friends' in resource.data) ? resource.data.friends : [])) &&
+          (request.auth.uid in request.resource.data.friends)
+        ) &&
+        (('requestsSent' in resource.data) &&
           resource.data.requestsSent.size() == ((('requestsSent' in request.resource.data) ? request.resource.data.requestsSent.size() : 0) + 1) &&
           resource.data.requestsSent.hasAll((('requestsSent' in request.resource.data) ? request.resource.data.requestsSent : [])) &&
           (request.auth.uid in resource.data.requestsSent) &&
@@ -64,26 +44,37 @@ service cloud.firestore {
         )
       )
 
+      // Decline friend request
       || (
-        isSignedIn() && (
-          // REMOVE FRIEND: allow a user to remove themselves from another user's friends list
-          request.resource.data.diff(resource.data).changedKeys().hasOnly(['friends']) &&
-          ('friends' in resource.data) &&
-          // friends shrinks by exactly 1 and removes current user
-          resource.data.friends.size() == ((('friends' in request.resource.data) ? request.resource.data.friends.size() : 0) + 1) &&
-          resource.data.friends.hasAll((('friends' in request.resource.data) ? request.resource.data.friends : [])) &&
-          (request.auth.uid in resource.data.friends) &&
-          !(request.auth.uid in request.resource.data.friends)
-        )
+        isSignedIn() &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(['requestsSent']) &&
+        ('requestsSent' in resource.data) &&
+        resource.data.requestsSent.size() == ((('requestsSent' in request.resource.data) ? request.resource.data.requestsSent.size() : 0) + 1) &&
+        resource.data.requestsSent.hasAll((('requestsSent' in request.resource.data) ? request.resource.data.requestsSent : [])) &&
+        (request.auth.uid in resource.data.requestsSent) &&
+        !(request.auth.uid in request.resource.data.requestsSent)
+      )
+
+      // Remove friend
+      || (
+        isSignedIn() &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(['friends']) &&
+        ('friends' in resource.data) &&
+        resource.data.friends.size() == ((('friends' in request.resource.data) ? request.resource.data.friends.size() : 0) + 1) &&
+        resource.data.friends.hasAll((('friends' in request.resource.data) ? request.resource.data.friends : [])) &&
+        (request.auth.uid in resource.data.friends) &&
+        !(request.auth.uid in request.resource.data.friends)
       );
     }
 
-    // Activities: creator full control; others can only join/leave safely
+    // ---------- ACTIVITIES ----------
     match /activities/{activityId} {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && request.resource.data.creatorId == request.auth.uid;
+
       allow update: if isSignedIn() && (
-        resource.data.creatorId == request.auth.uid || (
+        resource.data.creatorId == request.auth.uid ||
+        (
           request.resource.data.diff(resource.data).changedKeys().hasOnly(['joinedUserIds']) &&
           ('joinedUserIds' in request.resource.data) &&
           (
@@ -102,18 +93,15 @@ service cloud.firestore {
           )
         )
       );
-      // Allow creator to delete; also allow the last remaining participant to delete to ensure cleanup when count reaches 0
+
       allow delete: if isSignedIn() && (
-        resource.data.creatorId == request.auth.uid || (
-          ('joinedUserIds' in resource.data) &&
-          resource.data.joinedUserIds is list &&
-          resource.data.joinedUserIds.size() == 1 &&
-          (request.auth.uid in resource.data.joinedUserIds)
-        )
+        resource.data.creatorId == request.auth.uid ||
+        (('joinedUserIds' in resource.data) && resource.data.joinedUserIds is list && resource.data.joinedUserIds.size() == 1 && (request.auth.uid in resource.data.joinedUserIds)) ||
+        (('joinedUserIds' in resource.data) && resource.data.joinedUserIds is list && resource.data.joinedUserIds.size() == 0)
       );
     }
 
-    // Helper: safe friend membership checks
+    // Helpers for friends
     function hasFriend(u1, u2) {
       return (
         get(/databases/$(database)/documents/profiles/$(u1)).data != null &&
@@ -122,60 +110,147 @@ service cloud.firestore {
         get(/databases/$(database)/documents/profiles/$(u1)).data.friends.hasAny([u2])
       );
     }
-
     function isMutualFriends(u1, u2) {
       return hasFriend(u1, u2) && hasFriend(u2, u1);
     }
 
-  // Chats: only participants can read; allow self-join from joined activity;
-    // allow DM create for mutual friends; allow custom group chats (non-activity) created by a participant
+    // ---------- CHATS ----------
     match /chats/{chatId} {
+
+      // CREATE
       allow create: if isSignedIn() && (
-        // Group/activity chats: creator or self-joiner from joined activity
+        // Activity chat (deterministic id)
         (
           ('activityId' in request.resource.data) &&
           (request.auth.uid in request.resource.data.participants) &&
           (request.auth.uid in get(/databases/$(database)/documents/activities/$(request.resource.data.activityId)).data.joinedUserIds)
         ) ||
-        // DMs: exactly two participants who are mutual friends
+        // DM (mutual friends OR allow any signed in users for flexibility)
         (
           ('type' in request.resource.data) && request.resource.data.type == 'dm' &&
           ('participants' in request.resource.data) && request.resource.data.participants is list &&
           request.resource.data.participants.size() == 2 &&
           (request.auth.uid in request.resource.data.participants) &&
-          isMutualFriends(request.resource.data.participants[0], request.resource.data.participants[1])
+          (
+            isMutualFriends(request.resource.data.participants[0], request.resource.data.participants[1])
+            // Allow DM between any users (comment above line and uncomment below if you want stricter friend-only DMs)
+            // || true
+          )
         ) ||
-        // Custom GROUP chats (non-activity): creator must be included in participants
-        // Note: If you want to restrict members to the creator's friends, enforce it via Cloud Functions
-        // or add additional metadata checks. Firestore Rules cannot iterate over a list to verify all members.
+        // Custom group (non-activity); creator is included
         (
-          ('type' in request.resource.data) && request.resource.data.type == 'group' &&
+          ('type' in request.resource.data) && request.resource.data.type == 'Group' &&
           !('activityId' in request.resource.data) &&
           ('participants' in request.resource.data) && request.resource.data.participants is list &&
           (request.auth.uid in request.resource.data.participants) &&
-          // Optional basic size constraint
           (request.resource.data.participants.size() >= 2)
         )
       );
 
+      // READ
       allow read: if isSignedIn() && (request.auth.uid in resource.data.participants);
 
-      // Delete: only allowed when the requester is the sole remaining participant (last person leaving).
-      // This guarantees group chats persist until everyone else has left and the final user exits.
+      // DELETE (when last participant or zero participants)
       allow delete: if isSignedIn() && (
-        (request.auth.uid in resource.data.participants) &&
-        (
-          ('participants' in resource.data) &&
-          resource.data.participants is list &&
-          resource.data.participants.size() == 1 &&
-          (request.auth.uid in resource.data.participants)
-        )
+        (request.auth.uid in resource.data.participants && resource.data.participants is list && resource.data.participants.size() == 1) ||
+        (resource.data.participants is list && resource.data.participants.size() == 0)
       );
 
+      // UPDATE (fine-grained)
       allow update: if isSignedIn() && (
-        // Participants can update their existing chats (e.g., last message metadata). For activity chats, also allow self-join as below.
-        (request.auth.uid in resource.data.participants) || (
-          // Allow self-join for activity chats only
+        // 1) Participants may update lightweight preview fields (BATCH WRITE SUPPORT)
+        (
+          (request.auth.uid in resource.data.participants) &&
+          (
+            request.resource.data.diff(resource.data).changedKeys().hasOnly([
+              'lastMessageText','lastMessageType','lastMessageSenderId','lastMessageTimestamp'
+            ]) ||
+            // Allow empty update (for batch writes that only add message subcollection)
+            request.resource.data.diff(resource.data).changedKeys().size() == 0
+          )
+        )
+
+        // 2) Read receipts: support both 'reads' and 'seen' for backward compatibility
+        || (
+          (request.auth.uid in resource.data.participants) &&
+          (
+            // 'reads' field (new pattern)
+            (
+              request.resource.data.diff(resource.data).changedKeys().hasOnly(['reads']) &&
+              ('reads' in request.resource.data) &&
+              request.resource.data.reads.diff(
+                ('reads' in resource.data) ? resource.data.reads : {}
+              ).changedKeys().hasOnly([request.auth.uid]) &&
+              request.resource.data.reads[request.auth.uid] is timestamp
+            ) ||
+            // 'seen' field (legacy pattern)
+            (
+              request.resource.data.diff(resource.data).changedKeys().hasOnly(['seen']) &&
+              ('seen' in request.resource.data) &&
+              request.resource.data.seen.diff(
+                ('seen' in resource.data) ? resource.data.seen : {}
+              ).changedKeys().hasOnly([request.auth.uid]) &&
+              request.resource.data.seen[request.auth.uid] is timestamp
+            ) ||
+            // 'lastReadBy' field (alternative pattern)
+            (
+              request.resource.data.diff(resource.data).changedKeys().hasOnly(['lastReadBy']) &&
+              ('lastReadBy' in request.resource.data) &&
+              request.resource.data.lastReadBy.diff(
+                ('lastReadBy' in resource.data) ? resource.data.lastReadBy : {}
+              ).changedKeys().hasOnly([request.auth.uid]) &&
+              request.resource.data.lastReadBy[request.auth.uid] is timestamp
+            )
+          )
+        )
+
+        // 3) Typing indicators: only my own key (support adding/updating/deleting)
+        || (
+          (request.auth.uid in resource.data.participants) &&
+          request.resource.data.diff(resource.data).changedKeys().hasOnly(['typing']) &&
+          ('typing' in request.resource.data) &&
+          request.resource.data.typing.diff(
+            ('typing' in resource.data) ? resource.data.typing : {}
+          ).changedKeys().hasOnly([request.auth.uid]) &&
+          (
+            // Allow timestamp or deletion
+            request.resource.data.typing[request.auth.uid] is timestamp ||
+            !(request.auth.uid in request.resource.data.typing)
+          )
+        )
+
+        // 4) Edit group title/photo (participants; not for DMs)
+        || (
+          (request.auth.uid in resource.data.participants) &&
+          (resource.data.type == 'Group' || resource.data.type == 'ActivityGroup') &&
+          (
+            request.resource.data.diff(resource.data).changedKeys().hasOnly(['title']) ||
+            request.resource.data.diff(resource.data).changedKeys().hasOnly(['photoUrl']) ||
+            request.resource.data.diff(resource.data).changedKeys().hasOnly(['title','photoUrl'])
+          )
+        )
+
+        // 5) Add users (participants can add to group; activity self-join handled below)
+        || (
+          (request.auth.uid in resource.data.participants) &&
+          // allow adding participants only for non-activity custom groups (Group). Activity join is handled separately.
+          (resource.data.type in ['Group','ActivityGroup','dm'] ? (resource.data.type == 'Group') : true) &&
+          request.resource.data.diff(resource.data).changedKeys().hasOnly(['participants']) &&
+          request.resource.data.participants.size() >= resource.data.participants.size() &&
+          request.resource.data.participants.hasAll(resource.data.participants)
+        )
+
+        // 6) Remove self (any time)
+        || (
+          (request.auth.uid in resource.data.participants) &&
+          request.resource.data.diff(resource.data).changedKeys().hasOnly(['participants']) &&
+          resource.data.participants.hasAll(request.resource.data.participants) &&
+          (request.auth.uid in resource.data.participants) &&
+          !(request.auth.uid in request.resource.data.participants)
+        )
+
+        // 7) Activity self-join (kept from your original rules)
+        || (
           ('activityId' in resource.data) &&
           request.resource.data.diff(resource.data).changedKeys().hasOnly(['participants']) &&
           request.resource.data.participants.size() == resource.data.participants.size() + 1 &&
@@ -183,40 +258,72 @@ service cloud.firestore {
           (request.auth.uid in request.resource.data.participants) &&
           (request.auth.uid in get(/databases/$(database)/documents/activities/$(resource.data.activityId)).data.joinedUserIds)
         )
+
+        // 8) Last participant removes themselves → []
+        || (
+          request.resource.data.diff(resource.data).changedKeys().hasOnly(['participants']) &&
+          ('participants' in resource.data) &&
+          resource.data.participants is list &&
+          resource.data.participants.size() == 1 &&
+          (request.auth.uid in resource.data.participants) &&
+          request.resource.data.participants.size() == 0
+        )
       );
 
+      // Messages subcollection
       match /messages/{messageId} {
-        allow read: if isSignedIn() && (request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants);
-        allow create: if isSignedIn()
-          && request.auth.uid == request.resource.data.senderId
-          && (request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants);
-        allow update, delete: if false;
+        allow read: if isSignedIn() &&
+          (request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants);
+
+        allow create: if isSignedIn() &&
+          request.auth.uid == request.resource.data.senderId &&
+          (request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants) &&
+          request.resource.data.type in ['text', 'image', 'audio', 'system'] &&
+          request.resource.data.timestamp is timestamp;
+
+        // Allow update only for system to add reactions or other metadata (optional)
+        allow update: if false;
+        
+        // Prevent message deletion by users
+        allow delete: if false;
+
+        // Reactions subcollection
+        match /reactions/{userId} {
+          allow read: if isSignedIn() &&
+            (request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants);
+
+          allow create, update: if isSignedIn() &&
+            request.auth.uid == userId &&
+            (request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants) &&
+            request.resource.data.emoji is string &&
+            request.resource.data.emoji.size() <= 10 &&
+            request.resource.data.createdAt is timestamp;
+
+          allow delete: if isSignedIn() &&
+            request.auth.uid == userId &&
+            (request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants);
+        }
       }
     }
 
-  // Notifications: recipient can read/delete; creation restricted to sender; sender can delete their own pending friend_request or activity_invite
+    // ---------- NOTIFICATIONS ----------
     match /notifications/{id} {
-      // Recipient can read their notifications
       allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
 
-      // Sender creates friend_request, friend_accept, or activity_invite; cannot target self
       allow create: if isSignedIn()
         && request.auth.uid == request.resource.data.fromUserId
         && request.resource.data.userId is string
-        && request.resource.data.type in ['friend_request', 'friend_accept', 'activity_invite']
+        && request.resource.data.type in ['friend_request','friend_accept','activity_invite']
         && request.resource.data.userId != request.auth.uid;
 
-      // Recipient can mark read
       allow update: if isSignedIn()
         && resource.data.userId == request.auth.uid
         && request.resource.data.diff(resource.data).changedKeys().hasOnly(['read'])
         && (resource.data.read == false) && (request.resource.data.read == true);
 
-      // Recipient may delete; additionally allow sender to delete their own pending friend_request (cancel) and activity_invite (retract)
       allow delete: if isSignedIn() && (
-        resource.data.userId == request.auth.uid || (
-          resource.data.fromUserId == request.auth.uid && resource.data.type in ['friend_request', 'activity_invite']
-        )
+        resource.data.userId == request.auth.uid ||
+        (resource.data.fromUserId == request.auth.uid && resource.data.type in ['friend_request','activity_invite'])
       );
     }
 
@@ -226,6 +333,7 @@ service cloud.firestore {
     }
   }
 }
+
 ```
 
 After publishing these rules, try sending a friend request again from another user's profile.

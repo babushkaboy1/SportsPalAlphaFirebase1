@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import Logo from '../components/Logo';
 import { AntDesign, FontAwesome, Ionicons } from '@expo/vector-icons';
-import { signInWithEmailAndPassword, signInWithCredential, GoogleAuthProvider, signOut } from 'firebase/auth';
+import { signInWithEmailAndPassword, signInWithCredential, GoogleAuthProvider, signOut, sendPasswordResetEmail } from 'firebase/auth';
 import { auth } from '../firebaseConfig';
 import * as Google from 'expo-auth-session/providers/google';
 
@@ -68,15 +68,59 @@ const LoginScreen = ({ navigation }: any) => {
     }
   }, [response]);
 
+
   const handleLogin = async () => {
     setIsLoading(true);
     try {
       await signInWithEmailAndPassword(auth, email, password);
       navigation.navigate('MainTabs');
-    } catch (error) {
-      alert("Login error: " + (error as Error).message);
+    } catch (error: any) {
+      let message = 'Login error. Please try again.';
+      let title = 'Login Failed';
+      if (error.code === 'auth/user-not-found') {
+        message = 'No account found with this email address.';
+      } else if (error.code === 'auth/wrong-password') {
+        message = 'Incorrect password. Please try again.';
+      } else if (error.code === 'auth/too-many-requests') {
+        message = 'Too many failed attempts. Your account is temporarily locked. Please try again later or reset your password.';
+      } else if (error.code === 'auth/network-request-failed') {
+        message = 'No internet connection or the connection is too weak. Please check your network and try again.';
+      } else if (error.code === 'auth/user-disabled') {
+        message = 'This account has been banned or disabled. If you believe this is a mistake, please contact support.';
+        title = 'Account Disabled';
+      } else if (error.code === 'auth/invalid-email') {
+        message = 'The email address you entered is not valid.';
+      } else if (error.code === 'auth/operation-not-allowed') {
+        message = 'Email/password sign-in is currently disabled. Please contact support or try another method.';
+      } else if (error.code === 'auth/internal-error') {
+        message = 'An internal error occurred. Please try again.';
+      } else if (error.code === 'auth/invalid-credential') {
+        message = 'Invalid login credentials. Please check your email and password.';
+      }
+      Alert.alert(title, message);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    if (!email) {
+      Alert.alert('Forgot Password', 'Please enter your email address above first.');
+      return;
+    }
+    try {
+      await sendPasswordResetEmail(auth, email);
+      Alert.alert('Password Reset', 'A password reset link has been sent to your email.');
+    } catch (error: any) {
+      let message = 'Could not send reset email.';
+      if (error.code === 'auth/user-not-found') {
+        message = 'No account found with this email.';
+      } else if (error.code === 'auth/invalid-email') {
+        message = 'Invalid email address.';
+      } else if (error.code === 'auth/network-request-failed') {
+        message = 'No internet connection. Please check your network and try again.';
+      }
+      Alert.alert('Reset Failed', message);
     }
   };
 
@@ -91,78 +135,84 @@ const LoginScreen = ({ navigation }: any) => {
   return (
     <Animated.View style={{ flex: 1, opacity: fadeAnim, backgroundColor: '#121212' }}>
       <ScrollView
-      style={styles.scrollView} // Ensures the overscroll area remains dark.
-      contentContainerStyle={styles.container}
-      keyboardShouldPersistTaps="handled"
-      showsVerticalScrollIndicator={false}
-    >
-      {/* Centered Logo */}
-      <Logo />
-      
-      {/* Welcome Title */}
-      <Text style={styles.title}>Welcome to SportsPal</Text>
-      
-      {/* Input Fields */}
-      <TextInput
-        style={styles.input}
-        placeholder="Email"
-        placeholderTextColor="#ccc"
-        autoCapitalize="none"
-        keyboardType="email-address"
-        value={email}
-        onChangeText={setEmail}
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="Password"
-        placeholderTextColor="#ccc"
-        secureTextEntry
-        value={password}
-        onChangeText={setPassword}
-      />
-      
-      {/* Login Button */}
-      <TouchableOpacity style={styles.button} onPress={handleLogin} disabled={isLoading}>
-        {isLoading ? (
-          <ActivityIndicator size="small" color="#fff" />
-        ) : (
-          <Text style={styles.buttonText}>Login</Text>
-        )}
-      </TouchableOpacity>
-      
-      {/* Sign Up Link (directly under Login) */}
-      <TouchableOpacity onPress={handleSignUp}>
-        <Text style={styles.signUpText}>Don't have an account? Sign Up</Text>
-      </TouchableOpacity>
-      
-      {/* Divider */}
-      <Text style={styles.dividerText}>or</Text>
-      
-      {/* Social Login Buttons */}
-      <View style={styles.socialContainer}>
-        <TouchableOpacity 
-          style={styles.socialButton}
-          onPress={() => handleSocialLogin('Apple')}
-        >
-          <AntDesign name="apple" size={22} color="white" style={styles.icon} />
-          <Text style={styles.socialButtonText}>Continue with Apple</Text>
+        style={styles.scrollView}
+        contentContainerStyle={styles.container}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Centered Logo */}
+        <Logo />
+
+        {/* Welcome Title */}
+        <Text style={styles.title}>Welcome to SportsPal</Text>
+
+        {/* Input Fields */}
+        <TextInput
+          style={styles.input}
+          placeholder="Email"
+          placeholderTextColor="#ccc"
+          autoCapitalize="none"
+          keyboardType="email-address"
+          value={email}
+          onChangeText={setEmail}
+        />
+
+        <TextInput
+          style={styles.input}
+          placeholder="Password"
+          placeholderTextColor="#ccc"
+          secureTextEntry
+          value={password}
+          onChangeText={setPassword}
+        />
+
+        {/* Forgot Password Button */}
+        <TouchableOpacity onPress={handleForgotPassword} style={styles.forgotPasswordBtn}>
+          <Text style={styles.forgotPasswordText}>Forgot password?</Text>
         </TouchableOpacity>
-        <TouchableOpacity 
-          style={styles.socialButton}
-          onPress={() => handleSocialLogin('Facebook')}
-        >
-          <FontAwesome name="facebook" size={22} color="white" style={styles.icon} />
-          <Text style={styles.socialButtonText}>Continue with Facebook</Text>
+
+        {/* Login Button */}
+        <TouchableOpacity style={styles.button} onPress={handleLogin} disabled={isLoading}>
+          {isLoading ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <Text style={styles.buttonText}>Login</Text>
+          )}
         </TouchableOpacity>
-        <TouchableOpacity 
-          style={styles.socialButton}
-          onPress={() => promptAsync()}
-        >
-          <AntDesign name="google" size={22} color="white" style={styles.icon} />
-          <Text style={styles.socialButtonText}>Continue with Google</Text>
+
+        {/* Sign Up Link (directly under Login) */}
+        <TouchableOpacity onPress={handleSignUp}>
+          <Text style={styles.signUpText}>Don't have an account? Sign Up</Text>
         </TouchableOpacity>
-      </View>
-    </ScrollView>
+
+        {/* Divider */}
+        <Text style={styles.dividerText}>or</Text>
+
+        {/* Social Login Buttons */}
+        <View style={styles.socialContainer}>
+          <TouchableOpacity
+            style={styles.socialButton}
+            onPress={() => handleSocialLogin('Apple')}
+          >
+            <AntDesign name="apple" size={22} color="white" style={styles.icon} />
+            <Text style={styles.socialButtonText}>Continue with Apple</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.socialButton}
+            onPress={() => handleSocialLogin('Facebook')}
+          >
+            <FontAwesome name="facebook" size={22} color="white" style={styles.icon} />
+            <Text style={styles.socialButtonText}>Continue with Facebook</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.socialButton}
+            onPress={() => promptAsync()}
+          >
+            <AntDesign name="google" size={22} color="white" style={styles.icon} />
+            <Text style={styles.socialButtonText}>Continue with Google</Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
     </Animated.View>
   );
 };
@@ -195,6 +245,18 @@ const styles = StyleSheet.create({
     marginVertical: 10,
     fontSize: 16,
     color: '#fff',
+  },
+  forgotPasswordBtn: {
+    alignSelf: 'flex-end',
+    marginTop: -6,
+    marginBottom: 8,
+    paddingHorizontal: 2,
+  },
+  forgotPasswordText: {
+    color: '#1ae9ef',
+    fontSize: 15,
+    textDecorationLine: 'underline',
+    fontWeight: '600',
   },
   button: {
     width: '100%',

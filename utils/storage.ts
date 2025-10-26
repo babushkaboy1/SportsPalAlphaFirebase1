@@ -1,25 +1,26 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// Normalize date to yyyy-mm-dd format
+// Normalize date to dd-mm-yyyy format
 export const normalizeDateFormat = (date: string): string => {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) return date;
-  if (/^\d{2}-\d{2}-\d{4}$/.test(date)) {
-    const [dd, mm, yyyy] = date.split('-');
-    return `${yyyy}-${mm}-${dd}`;
+  // If already dd-mm-yyyy, return as is
+  if (/^\d{2}-\d{2}-\d{4}$/.test(date)) return date;
+  // If yyyy-mm-dd, convert to dd-mm-yyyy
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    const [yyyy, mm, dd] = date.split('-');
+    return `${dd}-${mm}-${yyyy}`;
+  }
+  // If mm/dd/yyyy or other, try to parse
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(date)) {
+    const [mm, dd, yyyy] = date.split('/');
+    return `${dd}-${mm}-${yyyy}`;
   }
   console.warn(`Unrecognized date format: ${date}`);
   return date;
 };
 
+// Always return dd-mm-yyyy for calendar and display
 export const convertToCalendarFormat = (date: string): string => {
-  if (date.includes('-')) {
-    const parts = date.split('-');
-    if (parts[0].length === 4) {
-      return `${parts[0]}-${parts[1]}-${parts[2]}`; // yyyy-mm-dd
-    }
-    return `${parts[2]}-${parts[1]}-${parts[0]}`; // dd-mm-yyyy to yyyy-mm-dd
-  }
-  return date;
+  return normalizeDateFormat(date);
 };
 
 // Save Profile

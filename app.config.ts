@@ -41,15 +41,22 @@ export default ({ config }: { config: any }) => ({
       "CAMERA",
       "RECORD_AUDIO"
     ],
-    softwareKeyboardLayoutMode: "pan",
+    softwareKeyboardLayoutMode: "resize",
     config: {
       googleMaps: {
         apiKey: process.env.GOOGLE_MAPS_API_KEY
       }
     }
   },
+  // Ensure status bar is not translucent so layout resizing behaves as expected on Android
+  androidStatusBar: { translucent: false },
   web: {
     favicon: "./assets/favicon.png"
+  },
+  // Bundle and experiments for performance
+  assetBundlePatterns: ["**/*"],
+  experiments: {
+    tsconfigPaths: true
   },
   plugins: [
     "expo-font",

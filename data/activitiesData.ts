@@ -3,6 +3,8 @@ export type Activity = {
   activity: string;
   location: string;
   creator: string;
+  creatorId?: string;
+  creatorUsername?: string;
   date: string;
   time: string;
   distance: number;
@@ -12,7 +14,7 @@ export type Activity = {
   isJoined?: boolean;
   latitude: number;
   longitude: number;
-  joinedUserIds?: string[]; // <-- Add this line
+  joinedUserIds?: string[];
 };
 
 export const activities: Activity[] = [
@@ -21,7 +23,7 @@ export const activities: Activity[] = [
     activity: "Basketball",
     location: "Downtown Court",
     creator: "Alice",
-    date: "2025-06-01", // yyyy-mm-dd format
+      date: "01-06-2025", // dd-mm-yyyy format
     time: "18:00",
     distance: 2.5,
     latitude: 37.9838,
@@ -35,7 +37,7 @@ export const activities: Activity[] = [
     activity: "Soccer",
     location: "Local Field",
     creator: "Bob",
-    date: "2025-06-02",
+      date: "02-06-2025",
     time: "16:00",
     distance: 3.2,
     latitude: 37.9750,
@@ -49,7 +51,7 @@ export const activities: Activity[] = [
     activity: "Running",
     location: "Central Park",
     creator: "Charlie",
-    date: "2025-06-03",
+      date: "03-06-2025",
     time: "07:00",
     distance: 1.8,
     latitude: 37.9900,
@@ -63,7 +65,7 @@ export const activities: Activity[] = [
     activity: "Gym",
     location: "Fitness Center",
     creator: "Dave",
-    date: "2025-06-04",
+      date: "04-06-2025",
     time: "10:00",
     distance: 4.0,
     latitude: 37.9800,
@@ -77,7 +79,7 @@ export const activities: Activity[] = [
     activity: "Calisthenics",
     location: "Street Workout",
     creator: "Eve",
-    date: "2025-06-05",
+      date: "05-06-2025",
     time: "15:00",
     distance: 2.2,
     latitude: 37.9850,
@@ -91,7 +93,7 @@ export const activities: Activity[] = [
     activity: "Padel",
     location: "Country Club",
     creator: "Frank",
-    date: "2025-06-06",
+      date: "06-06-2025",
     time: "12:00",
     distance: 3.0,
     latitude: 37.9700,
@@ -105,7 +107,7 @@ export const activities: Activity[] = [
     activity: "Tennis",
     location: "Community Club",
     creator: "Grace",
-    date: "2025-06-07",
+      date: "07-06-2025",
     time: "14:00",
     distance: 2.1,
     latitude: 37.9950,
@@ -119,7 +121,7 @@ export const activities: Activity[] = [
     activity: "Cycling",
     location: "City Trail",
     creator: "Hank",
-    date: "2025-06-08",
+      date: "08-06-2025",
     time: "08:00",
     distance: 5.3,
     latitude: 37.9900,
@@ -133,7 +135,7 @@ export const activities: Activity[] = [
     activity: "Swimming",
     location: "Aquatic Center",
     creator: "Ivan",
-    date: "2025-06-09",
+      date: "09-06-2025",
     time: "09:00",
     distance: 1.5,
     latitude: 37.9755,
@@ -147,7 +149,7 @@ export const activities: Activity[] = [
     activity: "Badminton",
     location: "Recreation Hall",
     creator: "Jill",
-    date: "2025-06-10",
+      date: "10-06-2025",
     time: "17:00",
     distance: 2.8,
     latitude: 37.9805,
@@ -161,7 +163,7 @@ export const activities: Activity[] = [
     activity: "Volleyball",
     location: "Beach Court",
     creator: "Kevin",
-    date: "2025-06-11",
+      date: "11-06-2025",
     time: "11:00",
     distance: 3.5,
     latitude: 37.9705,

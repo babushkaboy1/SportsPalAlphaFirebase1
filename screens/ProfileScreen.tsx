@@ -320,7 +320,7 @@ const ProfileScreen = () => {
         <View style={styles.infoRow}>
           <Ionicons name="person" size={16} color="#1ae9ef" style={styles.infoIcon} />
           <Text style={styles.cardInfoLabel}>Host:</Text>
-          <Text style={styles.cardInfo}>{item.creator}</Text>
+          <Text style={styles.cardInfo}>{item.creatorUsername || item.creator}</Text>
         </View>
         {/* Location */}
         <View style={styles.infoRow}>

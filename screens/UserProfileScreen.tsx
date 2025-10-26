@@ -1,3 +1,18 @@
+import { getDisplayCreatorUsername } from '../utils/getDisplayCreatorUsername';
+
+function HostUsername({ activity }: { activity: any }) {
+  const [username, setUsername] = useState('');
+  useEffect(() => {
+    let mounted = true;
+    const fetchUsername = async () => {
+      const name = await getDisplayCreatorUsername(activity.creatorId, activity.creator);
+      if (mounted) setUsername(name);
+    };
+    fetchUsername();
+    return () => { mounted = false; };
+  }, [activity.creatorId, activity.creator]);
+  return <Text style={styles.cardInfo}>{username}</Text>;
+}
 import React, { useEffect, useState, useRef } from 'react';
 import { View, Text, StyleSheet, Image, TouchableOpacity, Share, FlatList, Animated, RefreshControl, Alert, Modal, Pressable } from 'react-native';
 import * as Haptics from 'expo-haptics';
@@ -282,7 +297,7 @@ const UserProfileScreen = () => {
       <View style={styles.infoRow}>
         <Ionicons name="person" size={16} color="#1ae9ef" style={styles.infoIcon} />
         <Text style={styles.cardInfoLabel}>Host:</Text>
-        <Text style={styles.cardInfo}>{item.creator}</Text>
+  <HostUsername activity={item} />
       </View>
       {/* Location */}
       <View style={styles.infoRow}>

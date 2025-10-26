@@ -11,7 +11,6 @@ export type RootStackParamList = {
       pickedCoords?: { latitude: number; longitude: number; address?: string };
       selectedDate?: string;
       formState?: {
-        activityName: string;
         description: string;
         sport: string;
         date: string;
@@ -24,7 +23,6 @@ export type RootStackParamList = {
   ChatDetail: { chatId: string };
   CreateGame: {
     formState?: {
-      activityName: string;
       description: string;
       sport: string;
       date: string;
@@ -38,7 +36,6 @@ export type RootStackParamList = {
     darkMapStyle?: any;
     returnTo: 'CreateGame';
     formState?: {
-      activityName: string;
       description: string;
       sport: string;
       date: string;
