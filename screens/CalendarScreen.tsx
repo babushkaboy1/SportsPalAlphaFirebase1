@@ -515,10 +515,12 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   joinButton: {
-    paddingVertical: 8,
     paddingHorizontal: 15,
     backgroundColor: '#1ae9ef',
     borderRadius: 5,
+    height: 36,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   joinButtonJoined: {
     backgroundColor: '#007b7b',
@@ -601,13 +603,13 @@ const styles = StyleSheet.create({
   addToCalendarButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    alignSelf: 'flex-end',
-    paddingVertical: 6,
     paddingHorizontal: 12,
     backgroundColor: '#1ae9ef',
     borderRadius: 5,
-    marginTop: 8,
-    marginBottom: 4,
+    height: 36,
+    justifyContent: 'center',
+    marginTop: 0,
+    marginBottom: 0,
   },
   addToCalendarButtonAdded: {
     backgroundColor: '#007b7b',
@@ -619,7 +621,8 @@ const styles = StyleSheet.create({
   },
   cardActions: {
     flexDirection: 'row',
-    justifyContent: 'flex-end',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     marginTop: 10,
   },
   shareButton: {

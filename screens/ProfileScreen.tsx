@@ -38,6 +38,27 @@ import { doc, getDoc, collection, query as fsQuery, orderBy, startAt, endAt, lim
 import { auth, db } from '../firebaseConfig';
 import { activities } from '../data/activitiesData';
 
+import { getDisplayCreatorUsername } from '../utils/getDisplayCreatorUsername';
+
+// Helper component for host username display (shows "You" when appropriate)
+function HostUsername({ activity }: { activity: any }) {
+  const [username, setUsername] = React.useState('');
+  React.useEffect(() => {
+    let mounted = true;
+    const fetchUsername = async () => {
+      try {
+        const name = await getDisplayCreatorUsername(activity.creatorId, activity.creator);
+        if (mounted) setUsername(name);
+      } catch (e) {
+        if (mounted) setUsername(activity.creator || 'User');
+      }
+    };
+    fetchUsername();
+    return () => { mounted = false; };
+  }, [activity.creatorId, activity.creator]);
+  return <Text style={styles.cardInfo}>{username}</Text>;
+}
+
 type ProfileStackParamList = {
   ProfileMain: undefined;
   ActivityDetails: { activityId: string };
@@ -319,8 +340,8 @@ const ProfileScreen = () => {
         {/* Host */}
         <View style={styles.infoRow}>
           <Ionicons name="person" size={16} color="#1ae9ef" style={styles.infoIcon} />
-          <Text style={styles.cardInfoLabel}>Host:</Text>
-          <Text style={styles.cardInfo}>{item.creatorUsername || item.creator}</Text>
+            <Text style={styles.cardInfoLabel}>Host:</Text>
+            <HostUsername activity={item} />
         </View>
         {/* Location */}
         <View style={styles.infoRow}>

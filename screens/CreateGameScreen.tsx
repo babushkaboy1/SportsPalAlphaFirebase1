@@ -788,7 +788,11 @@ const CreateGameScreen = () => {
             </Modal>
           )}
 
-          <TouchableOpacity style={styles.createButton} onPress={creating ? undefined : handleCreateGame} disabled={creating}>
+          <TouchableOpacity
+            style={[styles.createButton, creating ? { backgroundColor: '#009fa3' } : null]}
+            onPress={creating ? undefined : handleCreateGame}
+            disabled={creating}
+          >
             {creating && <ActivityIndicator size="small" color="#fff" />}
             <Text style={styles.createButtonText}>{creating ? 'Creating Activity' : 'Create Activity'}</Text>
           </TouchableOpacity>
