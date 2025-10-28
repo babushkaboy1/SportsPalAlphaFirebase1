@@ -74,9 +74,6 @@ type RootStackParamList = {
 type DiscoverNav = NavigationProp<RootStackParamList, 'ActivityDetails'>;
 
 const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation }) => {
-  React.useLayoutEffect(() => {
-    navigation.setOptions({ gestureEnabled: false });
-  }, [navigation]);
   const { allActivities, isActivityJoined, toggleJoinActivity } = useActivityContext();
 
   // rawSearch holds immediate input, debouncedSearch is used for filtering (debounced)
@@ -176,8 +173,40 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
     }
 
     if (selectedDate) {
-      const formatted = selectedDate.toISOString().split('T')[0];
-      list = list.filter(a => a.date === formatted);
+      // Format selectedDate as local yyyy-mm-dd (avoid toISOString UTC shift)
+      const pad = (n: number) => String(n).padStart(2, '0');
+      const y = selectedDate.getFullYear();
+      const m = pad(selectedDate.getMonth() + 1);
+      const d = pad(selectedDate.getDate());
+      const formattedSelected = `${y}-${m}-${d}`;
+
+      const normalizeActivityDate = (ad: any) => {
+        if (!ad) return null;
+        // Firestore Timestamp
+        if (ad && typeof ad.toDate === 'function') {
+          const dt: Date = ad.toDate();
+          return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+        }
+        if (typeof ad === 'string') {
+          // already yyyy-mm-dd
+          if (/^\d{4}-\d{2}-\d{2}$/.test(ad)) return ad;
+          // dd-mm-yyyy -> convert
+          if (/^\d{2}-\d{2}-\d{4}$/.test(ad)) {
+            const [dd, mm, yyyy] = ad.split('-');
+            return `${yyyy}-${mm}-${dd}`;
+          }
+          // fallback: try Date parse
+          const parsed = new Date(ad);
+          if (!isNaN(parsed.getTime())) return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}`;
+          return ad;
+        }
+        if (ad instanceof Date) {
+          return `${ad.getFullYear()}-${pad(ad.getMonth() + 1)}-${pad(ad.getDate())}`;
+        }
+        return String(ad).slice(0, 10);
+      };
+
+      list = list.filter(a => normalizeActivityDate(a.date) === formattedSelected);
     }
 
     // Always use 70 km radius from user location when available
