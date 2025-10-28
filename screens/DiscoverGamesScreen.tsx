@@ -74,6 +74,9 @@ type RootStackParamList = {
 type DiscoverNav = NavigationProp<RootStackParamList, 'ActivityDetails'>;
 
 const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation }) => {
+  React.useLayoutEffect(() => {
+    navigation.setOptions({ gestureEnabled: false });
+  }, [navigation]);
   const { allActivities, isActivityJoined, toggleJoinActivity } = useActivityContext();
 
   // rawSearch holds immediate input, debouncedSearch is used for filtering (debounced)

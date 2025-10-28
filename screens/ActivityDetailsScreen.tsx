@@ -538,19 +538,38 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
         {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity
-            style={[styles.backButton, { left: 16, position: 'absolute', zIndex: 10 }]}
-            onPress={() => navigation.goBack()}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Ionicons name="arrow-back" size={28} color="#1ae9ef" />
-          </TouchableOpacity>
-          <View style={styles.headerTitleContainer}>
-            <ActivityIcon activity={activity.activity} size={28} />
-            <Text style={styles.headerTitle}>{activity.activity} Details</Text>
+        {activity.activity === 'American Football' ? (
+          <View style={{ marginTop: 10, marginBottom: 0, alignItems: 'center', width: '100%' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', width: '95%' }}>
+              <TouchableOpacity
+                style={{ padding: 4, marginRight: 2, left: 0, position: 'absolute', zIndex: 10 }}
+                onPress={() => navigation.goBack()}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <Ionicons name="arrow-back" size={28} color="#1ae9ef" />
+              </TouchableOpacity>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 44 }}>
+                <ActivityIcon activity={activity.activity} size={28} />
+                <Text style={{ fontSize: 28, color: '#1ae9ef', fontWeight: 'bold', marginLeft: 0 }}>American Football</Text>
+              </View>
+            </View>
+            <Text style={{ fontSize: 28, color: '#1ae9ef', fontWeight: 'bold', textAlign: 'center', marginTop: 2 }}>Details</Text>
           </View>
-        </View>
+        ) : (
+          <View style={styles.header}>
+            <TouchableOpacity
+              style={[styles.backButton, { left: 16, position: 'absolute', zIndex: 10 }]}
+              onPress={() => navigation.goBack()}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Ionicons name="arrow-back" size={28} color="#1ae9ef" />
+            </TouchableOpacity>
+            <View style={styles.headerTitleContainer}>
+              <ActivityIcon activity={activity.activity} size={28} />
+              <Text style={styles.headerTitle}>{activity.activity} Details</Text>
+            </View>
+          </View>
+        )}
 
         <ScrollView
           contentContainerStyle={{ flexGrow: 1 }}

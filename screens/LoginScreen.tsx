@@ -12,8 +12,9 @@ import {
   Alert,
 } from 'react-native';
 import Logo from '../components/Logo';
+import { CommonActions } from '@react-navigation/native';
 import { AntDesign, FontAwesome, Ionicons } from '@expo/vector-icons';
-import { signInWithEmailAndPassword, signInWithCredential, GoogleAuthProvider, signOut, sendPasswordResetEmail } from 'firebase/auth';
+import { signInWithEmailAndPassword, signInWithCredential, GoogleAuthProvider, sendPasswordResetEmail } from 'firebase/auth';
 import { auth } from '../firebaseConfig';
 import * as Google from 'expo-auth-session/providers/google';
 
@@ -37,18 +38,17 @@ const LoginScreen = ({ navigation }: any) => {
     }).start();
   }, []);
 
-  // Ensure no lingering session while on Login screen
+  // If already signed in, redirect to MainTabs when this screen appears
   useEffect(() => {
-    // Sign out immediately on mount if a user is cached
-    if (auth.currentUser) {
-      signOut(auth).catch(() => {});
-    }
-    // Also sign out whenever this screen gains focus (e.g., back navigation)
-    const unsubscribe = navigation.addListener('focus', () => {
+    const checkAndRedirect = () => {
       if (auth.currentUser) {
-        signOut(auth).catch(() => {});
+        navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
       }
-    });
+    };
+    // Check immediately
+    checkAndRedirect();
+    // And on focus
+    const unsubscribe = navigation.addListener('focus', checkAndRedirect);
     return unsubscribe;
   }, [navigation]);
 
@@ -57,7 +57,7 @@ const LoginScreen = ({ navigation }: any) => {
       const { id_token } = response.params;
       const credential = GoogleAuthProvider.credential(id_token);
       signInWithCredential(auth, credential)
-        .then(() => navigation.navigate('MainTabs'))
+        .then(() => navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] })))
         .catch(async (err) => {
           if (err.code === 'auth/account-exists-with-different-credential') {
             alert('An account already exists with this email. Please log in with your password first, then link Google in your profile settings.');
@@ -72,8 +72,8 @@ const LoginScreen = ({ navigation }: any) => {
   const handleLogin = async () => {
     setIsLoading(true);
     try {
-      await signInWithEmailAndPassword(auth, email, password);
-      navigation.navigate('MainTabs');
+  await signInWithEmailAndPassword(auth, email, password);
+  navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
     } catch (error: any) {
       let message = 'Login error. Please try again.';
       let title = 'Login Failed';

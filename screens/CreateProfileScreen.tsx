@@ -17,6 +17,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { MediaType } from 'expo-image-picker';
 import Logo from '../components/Logo';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { CommonActions } from '@react-navigation/native';
 import { createUserWithEmailAndPassword, reauthenticateWithCredential, EmailAuthProvider, updatePassword, sendEmailVerification, reload, signOut, getIdToken, signInWithEmailAndPassword, getIdTokenResult } from 'firebase/auth';
 import { doc, setDoc, query, where, getDocs, collection, serverTimestamp } from 'firebase/firestore';
 import { auth, db, storage } from '../firebaseConfig';
@@ -606,8 +607,8 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
             throw err;
           }
         }
-        Alert.alert('Success', 'Your profile has been created!');
-        navigation.navigate('MainTabs');
+  Alert.alert('Success', 'Your profile has been created!');
+  navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
       }
     } catch (error: any) {
       console.error("❌ Error saving profile:", error);
