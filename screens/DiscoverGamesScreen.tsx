@@ -46,9 +46,24 @@ import { getDisplayCreatorUsername } from '../utils/getDisplayCreatorUsername';
 const DEFAULT_RADIUS_KM = 70;
 
 const sportFilterOptions = [
-  'All', 'Basketball', 'Soccer', 'Running', 'Gym',
-  'Calisthenics', 'Padel', 'Tennis', 'Cycling',
-  'Swimming', 'Badminton', 'Volleyball',
+  'All',
+  'American Football',
+  'Badminton',
+  'Basketball',
+  'Boxing',
+  'Calisthenics',
+  'Cycling',
+  'Gym',
+  'Hiking',
+  'Martial Arts',
+  'Padel',
+  'Running',
+  'Soccer',
+  'Swimming',
+  'Table Tennis',
+  'Tennis',
+  'Volleyball',
+  'Yoga',
 ];
 
 type RootStackParamList = {
@@ -364,7 +379,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
             )}
           </View>
 
-          <ScrollView horizontal style={styles.filterWrapper}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterWrapper}>
             {sportFilterOptions.map(option => (
               <TouchableOpacity
                 key={option}

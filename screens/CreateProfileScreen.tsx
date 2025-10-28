@@ -24,11 +24,25 @@ import { compressImage, uploadProfileImage, testStorageConnection } from '../uti
 import { ref, uploadBytes, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import * as ImageManipulator from 'expo-image-manipulator';
 
-// Sports Options for the grid
+// Sports Options for the grid (alphabetical order; grid renders 3 per row)
 const sportsOptions = [
-  'Basketball', 'Soccer', 'Running', 'Gym', 'Calisthenics', 'Padel',
-  'Tennis', 'Cycling', 'Swimming', 'Badminton', 'Volleyball', 'Boxing',
-  'Yoga', 'Martial Arts', 'Table Tennis', 'American Football'
+  'American Football',
+  'Badminton',
+  'Basketball',
+  'Boxing',
+  'Calisthenics',
+  'Cycling',
+  'Gym',
+  'Hiking',
+  'Martial Arts',
+  'Padel',
+  'Running',
+  'Soccer',
+  'Swimming',
+  'Table Tennis',
+  'Tennis',
+  'Volleyball',
+  'Yoga',
 ];
 
 const CreateProfileScreen = ({ navigation, route }: any) => {

@@ -84,6 +84,7 @@ const sportIconMap: Record<string, React.ReactNode> = {
   football: <MaterialCommunityIcons name="soccer" size={28} color={TURQUOISE} />,
   basketball: <MaterialCommunityIcons name="basketball" size={28} color={TURQUOISE} />,
   tennis: <MaterialCommunityIcons name="tennis" size={28} color={TURQUOISE} />,
+  hiking: <MaterialCommunityIcons name="hiking" size={28} color={TURQUOISE} />,
 };
 
 /** ================= Helper Functions ================= */
@@ -636,9 +637,9 @@ const ChatsScreen = ({ navigation }: any) => {
           style={styles.dmAvatar}
         />
       ) : item.activityId ? (
-        <View style={styles.groupAvatar}>
-          {sportIconMap[item.activityType] || <ActivityIcon activity={item.activityType} size={28} color={TURQUOISE} />}
-        </View>
+          <View style={styles.groupAvatar}>
+            {sportIconMap[item.activityType?.toLowerCase?.()] || <ActivityIcon activity={item.activityType} size={28} color={TURQUOISE} />}
+          </View>
       ) : item.image ? (
         <Image source={{ uri: item.image }} style={styles.dmAvatar} />
       ) : (

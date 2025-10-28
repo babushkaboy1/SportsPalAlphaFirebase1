@@ -35,9 +35,23 @@ import * as Haptics from 'expo-haptics';
 const THEME_COLOR = '#1ae9ef';
 
 const sportOptions = [
-  'Basketball', 'Soccer', 'Running', 'Gym',
-  'Calisthenics', 'Padel', 'Tennis', 'Cycling',
-  'Swimming', 'Badminton', 'Volleyball',
+  'American Football',
+  'Badminton',
+  'Basketball',
+  'Boxing',
+  'Calisthenics',
+  'Cycling',
+  'Gym',
+  'Hiking',
+  'Martial Arts',
+  'Padel',
+  'Running',
+  'Soccer',
+  'Swimming',
+  'Table Tennis',
+  'Tennis',
+  'Volleyball',
+  'Yoga',
 ];
 
 type NavigationProp = StackNavigationProp<RootStackParamList, 'MainTabs'>;

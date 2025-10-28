@@ -21,6 +21,8 @@ export const ActivityIcon = ({
       return <MaterialCommunityIcons name="run" size={size} color={color} />;
     case "soccer":
       return <Ionicons name="football-outline" size={size} color={color} />;
+    case "hiking":
+      return <MaterialCommunityIcons name="hiking" size={size} color={color} />;
     case "gym":
       return <Ionicons name="barbell-outline" size={size} color={color} />;
     case "calisthenics":
@@ -37,6 +39,28 @@ export const ActivityIcon = ({
       return <MaterialCommunityIcons name="badminton" size={size} color={color} />;
     case "volleyball":
       return <MaterialCommunityIcons name="volleyball" size={size} color={color} />;
+    case "table tennis":
+    case "table-tennis":
+      return <MaterialCommunityIcons name="table-tennis" size={size} color={color} />;
+    case "boxing":
+      // Flip the boxing glove horizontally so it faces right
+      return (
+        <MaterialCommunityIcons
+          name="boxing-glove"
+          size={size}
+          color={color}
+          style={{ transform: [{ scaleX: -1 }] }}
+        />
+      );
+    case "yoga":
+      return <MaterialCommunityIcons name="yoga" size={size} color={color} />;
+    case "martial arts":
+    case "karate":
+      return <MaterialCommunityIcons name="karate" size={size} color={color} />;
+    case "american football":
+    case "american-football":
+      // Use the american-football ball icon (Ionicons) rather than a helmet
+      return <Ionicons name="american-football" size={size} color={color} />;
     default:
       return <Ionicons name="help-circle-outline" size={size} color={color} />;
   }

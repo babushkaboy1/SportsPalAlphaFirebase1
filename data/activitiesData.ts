@@ -172,6 +172,20 @@ export const activities: Activity[] = [
     maxParticipants: 6,
     joined: false,
   },
+  {
+    id: "12",
+    activity: "Hiking",
+    location: "Trailhead Park",
+    creator: "Lara",
+      date: "12-06-2025",
+    time: "08:30",
+    distance: 8.2,
+    latitude: 37.9650,
+    longitude: 23.7300,
+    joinedCount: 2,
+    maxParticipants: 12,
+    joined: false,
+  },
 ];
 
 activities.forEach((activity) => {
