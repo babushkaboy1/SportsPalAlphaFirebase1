@@ -366,13 +366,17 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
         </View>
 
         <View style={styles.topSection}>
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search by sport or host..."
-            placeholderTextColor="#bbb"
-            value={rawSearchQuery}
-            onChangeText={setRawSearchQuery}
-          />
+          <View style={styles.searchContainer}>
+            <Ionicons name="search" size={18} color="#ccc" />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search by activity or host..."
+              placeholderTextColor="#bbb"
+              value={rawSearchQuery}
+              onChangeText={setRawSearchQuery}
+              returnKeyType="search"
+            />
+          </View>
 
           <View style={styles.sortButtons}>
             <TouchableOpacity
@@ -568,13 +572,15 @@ const styles = StyleSheet.create({
   rollerPicker: { width: '100%', backgroundColor: 'transparent' },
 
   topSection: { paddingHorizontal: 15 },
+  searchContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1e1e1e', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8, marginBottom: 10 },
   searchInput: {
-    backgroundColor: '#1e1e1e',
+    flex: 1,
+    marginLeft: 8,
+    backgroundColor: 'transparent',
     borderRadius: 8,
-    padding: 10,
+    paddingVertical: 0,
     color: '#fff',
     fontSize: 16,
-    marginBottom: 10,
   },
   sortButtons: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
   sortButton: {
