@@ -271,11 +271,19 @@ if (typeof global.atob === 'undefined') {
 
 // Configure Android system UI once on module load/mount
 if (Platform.OS === 'android') {
-  // Set global app background behind system bars
-  SystemUI.setBackgroundColorAsync('#121212').catch(() => {});
-  // Make the navigation bar dark with light buttons
-  NavigationBar.setBackgroundColorAsync('#121212').catch(() => {});
-  NavigationBar.setButtonStyleAsync('light').catch(() => {});
-  // Keep bars visible and overlay content; we'll handle insets in screens
+  // Avoid calling setBackgroundColorAsync on devices using edge-to-edge (Android 10 / API 29+)
+  // because it isn't supported and will produce a warning like:
+  // "setBackgroundColorAsync is not supported with edge-to-edge enabled.".
+  const apiLevel = typeof Platform.Version === 'number' ? Platform.Version : parseInt(String(Platform.Version), 10) || 0;
+  if (apiLevel < 29) {
+    // Older devices: safe to set the nav + system background
+    SystemUI.setBackgroundColorAsync('#121212').catch(() => {});
+  // NavigationBar.setBackgroundColorAsync('#121212').catch(() => {});
+  } else {
+    // For Android 10+ we skip setting the background color to avoid the warning.
+    // We still set the button style/visibility below.
+  }
+  // Make buttons light for contrast and keep bars visible; these calls are safe
+  // NavigationBar.setButtonStyleAsync('light').catch(() => {});
   NavigationBar.setVisibilityAsync('visible').catch(() => {});
 }

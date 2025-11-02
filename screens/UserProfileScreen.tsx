@@ -344,6 +344,33 @@ const UserProfileScreen = () => {
     );
   };
 
+  // Sort joined activities by soonest upcoming (date+time). Past items go after upcoming.
+  const parseDateTimeMs = (dateStr?: string, timeStr?: string) => {
+    if (!dateStr || typeof dateStr !== 'string') return Number.POSITIVE_INFINITY;
+    const d = dateStr.trim();
+    let ymd = d;
+    const ddmmyyyy = /^(\d{2})-(\d{2})-(\d{4})$/;
+    const yyyymmdd = /^(\d{4})-(\d{2})-(\d{2})$/;
+    if (ddmmyyyy.test(d)) {
+      const [, dd, mm, yyyy] = d.match(ddmmyyyy)!;
+      ymd = `${yyyy}-${mm}-${dd}`;
+    } else if (!yyyymmdd.test(d)) {
+      const t = new Date(d).getTime();
+      return isNaN(t) ? Number.POSITIVE_INFINITY : t;
+    }
+    const time = (timeStr && typeof timeStr === 'string' ? timeStr.trim() : '00:00') || '00:00';
+    const isoLocal = `${ymd}T${time}`;
+    const ts = new Date(isoLocal).getTime();
+    return isNaN(ts) ? Number.POSITIVE_INFINITY : ts;
+  };
+  const getEventMs = (a: any) => parseDateTimeMs(a?.date, a?.time);
+  const nowMs = Date.now();
+  const upcoming = userJoinedActivities.filter(a => getEventMs(a) >= nowMs);
+  const past = userJoinedActivities.filter(a => getEventMs(a) < nowMs);
+  upcoming.sort((a, b) => getEventMs(a) - getEventMs(b));
+  past.sort((a, b) => getEventMs(b) - getEventMs(a));
+  const sortedUserJoinedActivities = [...upcoming, ...past];
+
   if (!isReady) {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: '#121212' }} edges={['top']} />
@@ -486,7 +513,7 @@ const UserProfileScreen = () => {
         <View style={styles.contentContainer}>
           {activeTab === 'games' ? (
             <FlatList
-              data={userJoinedActivities}
+              data={sortedUserJoinedActivities}
               renderItem={renderActivity}
               keyExtractor={(item) => item.id}
               contentContainerStyle={styles.listContainer}

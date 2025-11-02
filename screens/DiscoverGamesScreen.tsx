@@ -74,7 +74,7 @@ type RootStackParamList = {
 type DiscoverNav = NavigationProp<RootStackParamList, 'ActivityDetails'>;
 
 const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation }) => {
-  const { allActivities, isActivityJoined, toggleJoinActivity } = useActivityContext();
+  const { allActivities, isActivityJoined, toggleJoinActivity, profile } = useActivityContext();
 
   // rawSearch holds immediate input, debouncedSearch is used for filtering (debounced)
   const [rawSearchQuery, setRawSearchQuery] = useState('');
@@ -216,13 +216,88 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
       );
     }
 
-    if (isSortingByDistance && userLocation) {
-      list.sort(
-        (a, b) =>
-          calculateDistance(userLocation.latitude, userLocation.longitude, a.latitude, a.longitude) -
-          calculateDistance(userLocation.latitude, userLocation.longitude, b.latitude, b.longitude)
-      );
-    }
+    // Build favorite sports set from profile
+    const favoriteSports: string[] = (profile?.sportsPreferences || profile?.selectedSports || []) as string[];
+    const favSet = new Set(favoriteSports.map(s => String(s).toLowerCase()));
+
+    // Helpers to compute start time and scores
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const toYmd = (ad: any) => {
+      if (!ad) return null;
+      if (ad && typeof ad.toDate === 'function') {
+        const dt: Date = ad.toDate();
+        return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+      }
+      if (typeof ad === 'string') {
+        if (/^\d{4}-\d{2}-\d{2}$/.test(ad)) return ad;
+        if (/^\d{2}-\d{2}-\d{4}$/.test(ad)) { const [dd, mm, yyyy] = ad.split('-'); return `${yyyy}-${mm}-${dd}`; }
+        const parsed = new Date(ad); if (!isNaN(parsed.getTime())) return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}`;
+        return null;
+      }
+      if (ad instanceof Date) return `${ad.getFullYear()}-${pad(ad.getMonth() + 1)}-${pad(ad.getDate())}`;
+      return null;
+    };
+
+    const getStartDate = (a: any) => {
+      const ymd = toYmd(a.date);
+      if (!ymd) return null;
+      const [y, m, d] = ymd.split('-').map((x: string) => parseInt(x, 10));
+      let hh = 0, mmv = 0;
+      if (typeof a.time === 'string' && /^\d{2}:\d{2}$/.test(a.time)) {
+        const [h, m2] = a.time.split(':').map((x: string) => parseInt(x, 10));
+        hh = h; mmv = m2;
+      }
+      return new Date(y, m - 1, d, hh, mmv);
+    };
+
+    const now = new Date();
+    const timeScore = (a: any) => {
+      const start = getStartDate(a);
+      if (!start) return Number.POSITIVE_INFINITY;
+      const diffMin = Math.round((start.getTime() - now.getTime()) / 60000);
+      // Upcoming first, past to the end
+      return diffMin >= 0 ? diffMin : 1_000_000 + Math.abs(diffMin);
+    };
+
+    const distanceScore = (a: any) => {
+      if (!userLocation) return Number.POSITIVE_INFINITY;
+      return calculateDistance(userLocation.latitude, userLocation.longitude, a.latitude, a.longitude);
+    };
+
+    const sportName = (a: any) => String(a.activity || '').toLowerCase();
+    const isFav = (a: any) => favSet.has(sportName(a));
+
+    // Sorting rules
+    const hasDateFilter = !!selectedDate; // list is already filtered to that date
+    const isAllSports = selectedFilter === 'All';
+
+    list.sort((a, b) => {
+      // Select the strategy based on toggles/filters
+      if (!isAllSports) {
+        // Single activity filter: time -> distance -> alphabetical
+        const t = timeScore(a) - timeScore(b);
+        if (t !== 0) return t;
+        const d = distanceScore(a) - distanceScore(b);
+        if (d !== 0) return d;
+        return sportName(a).localeCompare(sportName(b));
+      }
+
+      if (isSortingByDistance) {
+        // Distance-first: distance -> time -> alphabetical
+        const d = distanceScore(a) - distanceScore(b);
+        if (d !== 0) return d;
+        const t = timeScore(a) - timeScore(b);
+        if (t !== 0) return t;
+        return sportName(a).localeCompare(sportName(b));
+      }
+
+      // Default (no distance sort): favorites first -> alphabetical (within group) -> time soonest
+      const favCmp = (isFav(a) === isFav(b)) ? 0 : (isFav(a) ? -1 : 1);
+      if (favCmp !== 0) return favCmp;
+      const alpha = sportName(a).localeCompare(sportName(b));
+      if (alpha !== 0) return alpha;
+      return timeScore(a) - timeScore(b);
+    });
 
     return list;
   }, [
@@ -233,6 +308,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
     isSortingByDistance,
     userLocation,
     calculateDistance,
+    profile?.sportsPreferences,
   ]);
 
   // Debounce raw search input -> debouncedSearchQuery

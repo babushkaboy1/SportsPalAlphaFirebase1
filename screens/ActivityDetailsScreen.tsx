@@ -14,17 +14,19 @@ import {
   Modal,
   Pressable,
   Animated,
+  ActivityIndicator,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import * as Calendar from 'expo-calendar';
-import MapView, { Marker, PROVIDER_DEFAULT } from 'react-native-maps';
+import MapView, { Marker, PROVIDER_DEFAULT, Polyline, UrlTile } from 'react-native-maps';
 import { useActivityContext } from '../context/ActivityContext';
 import { fetchUsersByIds } from '../utils/firestoreActivities';
 import { getOrCreateChatForActivity } from '../utils/firestoreChats';
-import { auth, db } from '../firebaseConfig';
+import { auth, db, storage } from '../firebaseConfig';
+import { getDownloadURL, ref as storageRef } from 'firebase/storage';
 import { doc, getDoc, updateDoc, arrayUnion, onSnapshot } from 'firebase/firestore';
 import { normalizeDateFormat } from '../utils/storage';
 import { ActivityIcon } from '../components/ActivityIcons';
@@ -35,6 +37,9 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
   const { allActivities, isActivityJoined, toggleJoinActivity, profile } = useActivityContext();
 
   const activity = allActivities.find(a => a.id === activityId);
+  if (activity) {
+    try { console.log('[ActivityDetails] GPX debug for', activity.id, (activity as any).gpx || '(no gpx)'); } catch {}
+  }
 
   const [creatorUsername, setCreatorUsername] = useState<string>('');
   const [userLocation, setUserLocation] = useState<{ latitude: number, longitude: number } | null>(null);
@@ -97,6 +102,12 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
     );
   }
   const [isAddedToCalendar, setIsAddedToCalendar] = useState(false);
+  // GPX viewer modal state
+  const [showGpxModal, setShowGpxModal] = useState(false);
+  const [gpxLoading, setGpxLoading] = useState(false);
+  const [gpxError, setGpxError] = useState<string | null>(null);
+  const [gpxCoords, setGpxCoords] = useState<Array<{ latitude: number; longitude: number }>>([]);
+  const gpxMapRef = useRef<MapView | null>(null);
 
   // Invite friends modal state
   const [inviteFriendsVisible, setInviteFriendsVisible] = useState(false);
@@ -674,6 +685,205 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                 <Text style={styles.description}>{(activity as any).description}</Text>
               </View>
             )}
+            {/* GPX / Route statistics (if present) */}
+            {(activity as any).gpx && (
+              <>
+                <View style={{ marginBottom: 8 }}>
+                  <TouchableOpacity
+                    style={[styles.actionButton, { alignSelf: 'stretch', justifyContent: 'center' }]}
+                    onPress={async () => {
+                      // Diagnostic logs to help identify why "No GPX URL available" appears
+                      console.log('Opening GPX viewer for activity id:', activity.id);
+                      console.log('activity.gpx payload:', (activity as any).gpx);
+
+                      setShowGpxModal(true);
+                      setGpxError(null);
+                      setGpxCoords([]);
+
+                      try {
+                        setGpxLoading(true);
+
+                        // Prefer an explicit downloadUrl, otherwise try to derive one from storagePath
+                        let url: string | null = (activity as any).gpx?.downloadUrl || null;
+                        const storagePath: string | null = (activity as any).gpx?.storagePath || null;
+
+                        console.log('Initial GPX url:', url, 'storagePath:', storagePath);
+
+                        try {
+                          if (!url && storagePath) {
+                            // If storagePath looks like a full url, try to use or resolve it; otherwise resolve via getDownloadURL
+                            if (storagePath.startsWith('http') || storagePath.startsWith('gs://')) {
+                              console.log('storagePath looks like HTTP/GS URI. Attempting to resolve via Storage.getDownloadURL if necessary.');
+                              try {
+                                const r = storageRef(storage, storagePath);
+                                url = await getDownloadURL(r);
+                                console.log('getDownloadURL resolved to:', url);
+                              } catch (e) {
+                                console.warn('getDownloadURL failed for storagePath:', storagePath, e);
+                                // fallback: if it's an http url, use it directly
+                                if (storagePath.startsWith('http')) {
+                                  url = storagePath;
+                                  console.log('Using storagePath directly as URL:', url);
+                                } else {
+                                  url = null;
+                                  console.log('storagePath not usable as direct URL');
+                                }
+                              }
+                            } else {
+                              console.log('storagePath looks like a path (not http/gs). Attempting to create ref and getDownloadURL.');
+                              const r = storageRef(storage, storagePath);
+                              url = await getDownloadURL(r);
+                              console.log('getDownloadURL resolved to:', url);
+                            }
+                          }
+                        } catch (e) {
+                          console.warn('Could not resolve GPX download URL from storagePath', storagePath, e);
+                          url = null;
+                        }
+
+                        if (!url) {
+                          console.warn('No GPX URL available after resolution attempts. downloadUrl:', (activity as any).gpx?.downloadUrl, 'storagePath:', storagePath);
+                          setGpxError('No GPX URL available');
+                          setGpxLoading(false);
+                          return;
+                        }
+
+                        console.log('Fetching GPX from URL:', url);
+                        const resp = await fetch(url, {
+                          headers: {
+                            Accept: 'application/gpx+xml, text/xml, text/plain, */*',
+                          },
+                        });
+                        const ct = resp.headers?.get?.('content-type');
+                        console.log('GPX fetch status:', resp.status, resp.statusText, 'content-type:', ct || '(unknown)');
+
+                        // Read as text; if unusable, try a cloned response (or a re-fetch) as arrayBuffer and decode
+                        let text: string | null = null;
+                        try {
+                          text = await resp.text();
+                        } catch (e) {
+                          console.warn('resp.text() failed (will try binary decode):', e);
+                        }
+                        if (!text || !/<(trkpt|rtept|wpt)\b/i.test(text)) {
+                          try {
+                            let ab: ArrayBuffer | null = null;
+                            if (typeof (resp as any).clone === 'function') {
+                              try {
+                                const resp2 = (resp as any).clone();
+                                ab = await resp2.arrayBuffer();
+                              } catch (e) {
+                                console.warn('clone().arrayBuffer() failed, refetching URL', e);
+                              }
+                            }
+                            if (!ab) {
+                              const resp3 = await fetch(url);
+                              ab = await resp3.arrayBuffer();
+                            }
+                            // Decode
+                            let decoded = '';
+                            try {
+                              // @ts-ignore
+                              decoded = typeof TextDecoder !== 'undefined' ? new TextDecoder('utf-8').decode(ab) : '';
+                            } catch {}
+                            if (!decoded) {
+                              const bytes = new Uint8Array(ab);
+                              let s = '';
+                              for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+                              decoded = s;
+                            }
+                            text = decoded;
+                          } catch (e) {
+                            console.warn('binary decode path failed', e);
+                          }
+                        }
+                        console.log('GPX text length:', typeof text === 'string' ? text.length : '(non-string)');
+
+                        const pts: Array<{ latitude: number; longitude: number }> = [];
+                        const xml = typeof text === 'string' ? text : '';
+
+                        const extractPoints = (tag: 'trkpt' | 'rtept' | 'wpt') => {
+                          const regex = new RegExp(`<${tag}\\b[^>]*>`, 'gi');
+                          let count = 0;
+                          let m: RegExpExecArray | null;
+                          while ((m = regex.exec(xml)) !== null) {
+                            count++;
+                            const tagStr = m[0];
+                            const latMatch = /lat=\"([^\"]+)\"/i.exec(tagStr);
+                            const lonMatch = /lon=\"([^\"]+)\"/i.exec(tagStr);
+                            if (latMatch && lonMatch) {
+                              const lat = parseFloat(latMatch[1].replace(',', '.'));
+                              const lon = parseFloat(lonMatch[1].replace(',', '.'));
+                              if (!Number.isNaN(lat) && !Number.isNaN(lon)) pts.push({ latitude: lat, longitude: lon });
+                            }
+                          }
+                          return count;
+                        };
+
+                        const trkCount = extractPoints('trkpt');
+                        const rteCountBefore = pts.length;
+                        const rteCount = trkCount === 0 ? extractPoints('rtept') : 0;
+                        const wptCountBefore = pts.length;
+                        const wptCount = trkCount === 0 && rteCount === 0 ? extractPoints('wpt') : 0;
+
+                        console.log('GPX point summary -> trkpt:', trkCount, 'rtept:', rteCount === 0 ? 0 : (pts.length - rteCountBefore), 'wpt:', wptCount === 0 ? 0 : (pts.length - wptCountBefore));
+
+                        if (pts.length === 0) {
+                          setGpxError('No track/route/waypoint points found in GPX');
+                        } else {
+                          setGpxCoords(pts);
+                          setTimeout(() => {
+                            try {
+                              if (gpxMapRef.current && pts.length > 0) {
+                                gpxMapRef.current.fitToCoordinates(pts, { edgePadding: { top: 60, right: 60, bottom: 60, left: 60 }, animated: true });
+                              }
+                            } catch (e) {
+                              console.warn('fitToCoordinates failed', e);
+                            }
+                          }, 300);
+                        }
+                      } catch (e: any) {
+                        console.warn('Failed to load GPX', e);
+                        setGpxError('Failed to load GPX file');
+                      } finally {
+                        setGpxLoading(false);
+                      }
+                    }}
+                  >
+                    <Ionicons name="map" size={18} style={[styles.actionIconBold, { marginRight: 8 }]} />
+                    <Text style={styles.actionText}>View Hiking Route (GPX)</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={{ marginVertical: 10, backgroundColor: '#141414', padding: 12, borderRadius: 8 }}>
+                  <Text style={{ color: '#1ae9ef', fontWeight: '700', marginBottom: 8 }}>Route Statistics</Text>
+                  {(() => {
+                    const s: any = (activity as any).gpx.stats || {};
+                    const rows = [
+                      ['Distance', s.distance || '—'],
+                      ['Ascent', s.ascent || '—'],
+                      ['Descent', s.descent || '—'],
+                      ['Max Elevation', s.maxElevation || '—'],
+                      ['Min Elevation', s.minElevation || '—'],
+                      ['Difficulty', s.difficulty || '—'],
+                      ['TrailRank', s.trailRank || '—'],
+                      ['Route Type', s.routeType || '—'],
+                    ];
+                    return rows.map(([label, val]) => (
+                      <View key={label as string} style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                        <Text style={{ color: '#9aa0a6' }}>{label}:</Text>
+                        <Text style={{ color: '#ccc' }}>{val}</Text>
+                      </View>
+                    ));
+                  })()}
+
+                  {(activity as any).gpx.downloadUrl && (
+                    <TouchableOpacity style={{ marginTop: 8 }} onPress={() => { try { Linking.openURL((activity as any).gpx.downloadUrl); } catch {} }}>
+                      <Text style={{ color: '#1ae9ef', fontWeight: '700' }}>Open GPX</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </>
+            )}
 
             {/* Participants */}
             <View style={{ marginVertical: 10 }}>
@@ -754,6 +964,63 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
           </TouchableOpacity>
         </ScrollView>
       </Animated.View>
+
+      {/* GPX Route Modal (shows polyline) */}
+      <Modal
+        visible={showGpxModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowGpxModal(false)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setShowGpxModal(false)}>
+          <Pressable style={[styles.modalCard, { width: '95%', maxWidth: 920, padding: 12 }]} onPress={() => {}}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 16 }}>Hiking Route</Text>
+              <TouchableOpacity onPress={() => setShowGpxModal(false)}>
+                <Ionicons name="close" size={22} color="#9aa0a6" />
+              </TouchableOpacity>
+            </View>
+            <View style={{ height: 420, marginTop: 12, borderRadius: 8, overflow: 'hidden' }}>
+              {gpxLoading ? (
+                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                  <ActivityIndicator size="large" color="#1ae9ef" />
+                </View>
+              ) : gpxError ? (
+                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 12 }}>
+                  <Text style={{ color: '#fff', textAlign: 'center' }}>{gpxError}</Text>
+                </View>
+              ) : gpxCoords && gpxCoords.length > 0 ? (
+                <MapView
+                  ref={(r) => { gpxMapRef.current = r; }}
+                  style={{ flex: 1 }}
+                  provider={Platform.OS === 'android' ? PROVIDER_DEFAULT : undefined}
+                  initialRegion={{
+                    latitude: gpxCoords[0].latitude,
+                    longitude: gpxCoords[0].longitude,
+                    latitudeDelta: 0.05,
+                    longitudeDelta: 0.05,
+                  }}
+                >
+                  {/* OpenStreetMap tiles for the GPX modal only */}
+                  <UrlTile
+                    urlTemplate="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                    maximumZ={19}
+                    flipY={false}
+                  />
+                  <Polyline coordinates={gpxCoords} strokeWidth={4} strokeColor="#1ae9ef" />
+                  {/* Start and end markers */}
+                  <Marker coordinate={gpxCoords[0]} />
+                  <Marker coordinate={gpxCoords[gpxCoords.length - 1]} />
+                </MapView>
+              ) : (
+                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                  <Text style={{ color: '#fff' }}>No route data available</Text>
+                </View>
+              )}
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       {/* Invite Friends Modal */}
       <Modal

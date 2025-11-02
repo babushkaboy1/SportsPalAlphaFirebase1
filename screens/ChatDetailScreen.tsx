@@ -1,13 +1,12 @@
 // screens/ChatDetailScreen.tsx
-// OPTIMIZED VERSION - Instagram-like performance
-// NOTE for Android header visibility with keyboard:
-// In Expo app.json, ensure:
+// OPTIMIZED VERSION (v2.2) – restores Info/Invite flows, anchors reactions next to bubble,
+// speeds up peer delivery, prefetches avatars, and hardens keyboard positioning.
+// Requires: @shopify/flash-list, @react-native-async-storage/async-storage, expo-image
+// PS> npm i @shopify/flash-list @react-native-async-storage/async-storage expo-image
+//
+// ANDROID keyboard: in app.json keep
 // {
-//   "expo": {
-//     "android": {
-//       "softwareKeyboardLayoutMode": "resize"
-//     }
-//   }
+//   "expo": { "android": { "softwareKeyboardLayoutMode": "resize" } }
 // }
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
@@ -16,9 +15,8 @@ import {
   Text,
   StyleSheet,
   TextInput,
-  FlatList,
+  FlatList as RNFlatList,
   TouchableOpacity,
-  Image,
   Platform,
   Alert,
   Keyboard,
@@ -32,7 +30,16 @@ import {
   Dimensions,
   StyleProp,
   ViewStyle,
+  KeyboardAvoidingView,
+  AppState,
+  AppStateStatus,
+  GestureResponderEvent,
+  Image as RNImage,
 } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
+// Fallback to RN FlatList if FlashList hiccups at runtime (defensive)
+const ListComponent: any = (FlashList as unknown as any) || RNFlatList;
+
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { useAudioRecorder, useAudioPlayer, AudioModule, RecordingPresets } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
@@ -40,6 +47,8 @@ import * as Clipboard from 'expo-clipboard';
 import * as NavigationBar from 'expo-navigation-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
+import { Image as ExpoImage } from 'expo-image';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import {
   listenToLatestMessages,
@@ -57,10 +66,20 @@ import { useActivityContext } from '../context/ActivityContext';
 import { normalizeDateFormat } from '../utils/storage';
 import {
   doc, getDoc, onSnapshot, collection, query, where,
-  getDocs, updateDoc, arrayUnion, serverTimestamp
+  getDocs, updateDoc, arrayUnion, serverTimestamp, deleteField
 } from 'firebase/firestore';
 import { db, auth } from '../firebaseConfig';
-import { ActivityIcon } from '../components/ActivityIcons';
+
+// ---- ActivityIcon import made resilient to default/named export shape ----
+import * as ActivityIconsAll from '../components/ActivityIcons';
+const ActivityIconComp: any =
+  // if named export exists
+  (ActivityIconsAll as any).ActivityIcon ||
+  // else if default export exists
+  (ActivityIconsAll as any).default ||
+  // last resort: render nothing (prevents runtime crash)
+  ((_props: any) => null);
+
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../types/navigation';
 import { uploadChatImage } from '../utils/imageUtils';
@@ -71,32 +90,45 @@ type Message = {
   senderId: string;
   text: string;
   type: 'text' | 'image' | 'audio' | 'system';
-  timestamp?: any;
+  timestamp?: any; // Firestore Timestamp | number
   _local?: boolean;
+  status?: 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
+  readBy?: string[];
 };
 
 const PAGE_SIZE = 20;
+const CACHE_LIMIT = 80;
+const CACHE_KEY = (id: string) => `chat_cache_v2_${id}`;
+
 const TURQUOISE = '#1ae9ef';
 const BG = '#121212';
 const CARD = '#1e1e1e';
 const SURFACE = '#18191a';
 const STROKE = '#2a2a2a';
 const DANGER = '#e74c3c';
-const TYPING_FRESH_MS = 3000; // 3 seconds instead of 5
+const TYPING_FRESH_MS = 3000;
+const SWIPE_THRESHOLD = 60;
 
 const REACTIONS = ['👍', '😂', '❤️', '👎', '😮'] as const;
 
-const tsSec = (t: any) =>
-  typeof t === 'number' ? t : t?.seconds ? t.seconds : Math.floor(Date.now() / 1000);
-
-const isGapBig = (a?: any, b?: any, mins = 6) => {
+// ---- Time helpers (millisecond-accurate, fixes mis-ordering) ----
+const tsMs = (t: any): number => {
+  if (!t) return 0;
+  if (typeof t === 'number') {
+    return t > 1e12 ? t : t * 1000;
+  }
+  if (t.seconds != null) {
+    const ns = (t.nanoseconds || 0) / 1e6;
+    return t.seconds * 1000 + ns;
+  }
+  return Date.now();
+};
+const isGapBigMs = (a?: any, b?: any, mins = 6) => {
   if (!a || !b) return false;
-  const da = tsSec(a);
-  const db = tsSec(b);
-  return Math.abs(da - db) > mins * 60;
+  return Math.abs(tsMs(a) - tsMs(b)) > mins * 60 * 1000;
 };
 
-// Typing indicator component
+// ---- Typing indicator dots ----
 const TypingDots = React.memo(({ color = TURQUOISE }: { color?: string }) => {
   const a = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -136,60 +168,70 @@ const oneLine = (s: string, n = 60) => {
   return t.length > n ? t.slice(0, n - 1) + '…' : t;
 };
 
-const makeSwipeToReply = (onReply: () => void) =>
+// ---- Swipe-to-reply ----
+const makeSwipeToReply = (onReply: () => void, swipeAnim: Animated.Value) =>
   PanResponder.create({
-    onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dx) > 18 && Math.abs(g.dy) < 14,
+    onStartShouldSetPanResponder: () => false,
+    onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dx) > 10 && Math.abs(g.dx) > Math.abs(g.dy) * 2,
+    onPanResponderGrant: () => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {}); },
+    onPanResponderMove: (_e, g) => {
+      const clampedDx = Math.max(0, Math.min(g.dx, 80));
+      swipeAnim.setValue(clampedDx);
+      if (g.dx >= SWIPE_THRESHOLD && g.dx < SWIPE_THRESHOLD + 5) {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+      }
+    },
     onPanResponderRelease: (_e, g) => {
-      if (g.dx > 26 && Math.abs(g.dy) < 20) {
-        Haptics.selectionAsync().catch(() => {});
+      if (g.dx >= SWIPE_THRESHOLD) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
         onReply();
       }
+      Animated.spring(swipeAnim, { toValue: 0, useNativeDriver: true, friction: 8, tension: 100 }).start();
+    },
+    onPanResponderTerminate: () => {
+      Animated.spring(swipeAnim, { toValue: 0, useNativeDriver: true, friction: 8, tension: 100 }).start();
     },
   });
 
-// Memoized Message Item Component for better performance
-const MessageItem = React.memo(({
-  item,
-  prev,
-  next,
-  profile,
-  isOwn,
-  myId,
-  reaction,
-  isLastMine,
-  readReceipt,
-  onLongPress,
-  onImagePress,
-  onProfilePress,
-  onReply,
-  handlePlayPauseAudio,
-  playingAudioId,
-  audioPlayer,
-  handleSpeedChange,
-  playbackRate,
-}: any) => {
+// ---- Message Row ----
+type MessageItemProps = {
+  item: Message;
+  prev?: Message;
+  next?: Message;
+  profile: any;
+  isOwn: boolean;
+  myId: string | undefined;
+  reaction?: string;
+  isLastMine: boolean;
+  readReceipt?: React.ReactNode | null;
+  messageStatus: 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
+  onLongPress: (e: GestureResponderEvent, isOwn: boolean) => void;
+  onImagePress: () => void;
+  onProfilePress: () => void;
+  onReply: () => void;
+  handlePlayPauseAudio: (uri: string, id: string) => void;
+  playingAudioId: string | null;
+  audioPlayer: ReturnType<typeof useAudioPlayer>;
+  handleSpeedChange: () => void;
+  playbackRate: number;
+};
+
+const MessageItem = React.memo((props: MessageItemProps) => {
+  const {
+    item, prev, next, profile, isOwn, reaction, isLastMine, readReceipt,
+    messageStatus, onLongPress, onImagePress, onProfilePress, onReply,
+    handlePlayPauseAudio, playingAudioId, audioPlayer, handleSpeedChange, playbackRate
+  } = props;
+
+  const swipeAnim = useRef(new Animated.Value(0)).current;
   const isFirstOfGroup = !prev || prev.senderId !== item.senderId;
   const isLastOfGroup = !next || next.senderId !== item.senderId;
   const sender = profile || {};
 
   const shouldShowTimestamp = () => {
-    const isLastOfGroup = !next || next.senderId !== item.senderId;
-    const gapBefore = isGapBig(item.timestamp, prev?.timestamp, 6);
+    const gapBefore = isGapBigMs(item.timestamp, prev?.timestamp, 6);
     return isLastOfGroup || gapBefore || item.type === 'image';
   };
-
-  if (item.type === 'system') {
-    return (
-      <View style={{ flex: 1, alignItems: 'center', marginVertical: 8 }}>
-        <Text style={{ color: '#aaa', fontStyle: 'italic', fontSize: 13, textAlign: 'center', paddingHorizontal: 10 }}>
-          {item.text}
-        </Text>
-        <Text style={{ color: '#666', fontSize: 11, marginTop: 2 }}>
-          {item.timestamp ? new Date(tsSec(item.timestamp) * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
-        </Text>
-      </View>
-    );
-  }
 
   const bubbleStyle: StyleProp<ViewStyle> = [
     styles.messageBubble,
@@ -204,23 +246,37 @@ const MessageItem = React.memo(({
     },
   ];
 
-  const responder = makeSwipeToReply(onReply);
+  const responder = makeSwipeToReply(() => onReply(), swipeAnim);
+  const replyIconOpacity = swipeAnim.interpolate({ inputRange: [0, SWIPE_THRESHOLD], outputRange: [0, 1], extrapolate: 'clamp' });
+  const replyIconScale = swipeAnim.interpolate({ inputRange: [0, SWIPE_THRESHOLD], outputRange: [0.5, 1], extrapolate: 'clamp' });
+
+  const getStatusIcon = () => {
+    if (!isOwn || !item.timestamp) return null;
+    if (item._local || item.status === 'pending') return <Ionicons name="time-outline" size={12} color={'#006666'} />;
+    if (messageStatus === 'read' || (item.readBy && item.readBy.length > 0)) return <Ionicons name="checkmark-done" size={14} color="#8ecfd1" />;
+    if (item.status === 'delivered' || messageStatus === 'delivered') return <Ionicons name="checkmark-done" size={14} color={'#006666'} />;
+    return <Ionicons name="checkmark" size={12} color={'#006666'} />;
+  };
 
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'flex-end' }}>
+    <View style={{ flexDirection: 'row', alignItems: 'flex-end', position: 'relative' }}>
       {!isOwn && (
         <View style={{ width: 34, alignItems: 'center', marginBottom: isLastOfGroup ? 8 : 2 }}>
           {isLastOfGroup ? (
             <TouchableOpacity onPress={onProfilePress} activeOpacity={0.7}>
               {typeof sender.photo === 'string' && sender.photo ? (
-                <Image
+                <ExpoImage
                   source={{ uri: sender.photo }}
                   style={{ width: 28, height: 28, borderRadius: 14, borderWidth: 1, borderColor: TURQUOISE, alignSelf: 'flex-end' }}
+                  contentFit="cover"
+                  cachePolicy="disk"
                 />
               ) : (
-                <Image
+                <ExpoImage
                   source={require('../assets/default-group.png')}
                   style={{ width: 28, height: 28, borderRadius: 14, borderWidth: 1, borderColor: TURQUOISE, alignSelf: 'flex-end' }}
+                  contentFit="cover"
+                  cachePolicy="disk"
                 />
               )}
             </TouchableOpacity>
@@ -235,118 +291,150 @@ const MessageItem = React.memo(({
           </Text>
         )}
 
-        <View style={bubbleStyle} {...responder.panHandlers}>
-          {reaction ? (
-            <View
-              style={{
-                position: 'absolute',
-                right: -8,
-                top: -8,
-                backgroundColor: '#000',
-                borderRadius: 12,
-                paddingHorizontal: 6,
-                paddingVertical: 3,
-                borderWidth: 1,
-                borderColor: '#222',
-              }}
-            >
-              <Text style={{ fontSize: 12 }}>{reaction}</Text>
-            </View>
-          ) : null}
+        <Animated.View
+          style={{
+            position: 'absolute',
+            right: isOwn ? 'auto' : -40,
+            left: isOwn ? -40 : 'auto',
+            top: '50%',
+            transform: [{ translateY: -12 }, { scale: replyIconScale }],
+            opacity: replyIconOpacity,
+          }}
+          pointerEvents="none"
+        >
+          <Ionicons name="arrow-undo" size={24} color={TURQUOISE} />
+        </Animated.View>
 
-          {item.type === 'text' && (
-            <TouchableOpacity
-              activeOpacity={0.85}
-              delayLongPress={250}
-              onLongPress={onLongPress}
-            >
-              <Text style={[styles.messageText, isOwn && styles.userMessageText]}>{item.text}</Text>
-            </TouchableOpacity>
-          )}
-
-          {item.type === 'audio' && (
-            <View style={styles.audioBubbleRow}>
-              <TouchableOpacity onPress={() => handlePlayPauseAudio(item.text, item.id)} style={styles.audioPlayButton} activeOpacity={0.7}>
-                <MaterialIcons name={playingAudioId === item.id && audioPlayer.playing ? 'pause' : 'play-arrow'} size={18} color="#fff" />
-              </TouchableOpacity>
-              <View style={styles.audioWaveformBar}>
-                <View
-                  style={[
-                    styles.audioWaveformFill,
-                    {
-                      width:
-                        playingAudioId === item.id && audioPlayer.duration > 0
-                          ? `${(audioPlayer.currentTime / audioPlayer.duration) * 100}%`
-                          : '0%',
-                    },
-                  ]}
-                />
+        <Animated.View style={{ transform: [{ translateX: swipeAnim }] }} {...responder.panHandlers}>
+          <View style={bubbleStyle}>
+            {reaction ? (
+              <View style={{ position: 'absolute', right: -8, top: -8, backgroundColor: '#000', borderRadius: 12, paddingHorizontal: 6, paddingVertical: 3, borderWidth: 1, borderColor: '#222' }}>
+                <Text style={{ fontSize: 12 }}>{reaction}</Text>
               </View>
-              <Text style={styles.audioDurationRight}>
-                {playingAudioId === item.id && audioPlayer.duration > 0 ? `${audioPlayer.duration.toFixed(2)}` : '0.00'}
-              </Text>
-              <TouchableOpacity onPress={handleSpeedChange} style={styles.audioSpeedButton} activeOpacity={0.7}>
-                <Text style={styles.audioSpeedText}>{playbackRate}x</Text>
+            ) : null}
+
+            {item.type === 'text' && (
+              <TouchableOpacity activeOpacity={0.85} delayLongPress={220} onLongPress={(e) => onLongPress(e, isOwn)}>
+                <Text style={[styles.messageText, isOwn && styles.userMessageText]}>{item.text}</Text>
               </TouchableOpacity>
-            </View>
-          )}
+            )}
 
-          {item.type === 'image' && item.text ? (
-            <TouchableOpacity
-              activeOpacity={0.9}
-              onPress={onImagePress}
-              onLongPress={onLongPress}
-            >
-              <Image source={{ uri: item.text }} style={[styles.media, { borderWidth: 1, borderColor: TURQUOISE }]} />
-            </TouchableOpacity>
-          ) : item.type === 'image' && !item.text ? (
-            <Text style={styles.placeholderText}>Image not available</Text>
-          ) : null}
+            {item.type === 'audio' && (
+              <View style={styles.audioBubbleRow}>
+                <TouchableOpacity onPress={() => handlePlayPauseAudio(item.text, item.id)} style={styles.audioPlayButton} activeOpacity={0.7}>
+                  <MaterialIcons name={playingAudioId === item.id && audioPlayer.playing ? 'pause' : 'play-arrow'} size={18} color="#fff" />
+                </TouchableOpacity>
+                <View style={styles.audioWaveformBar}>
+                  <View
+                    style={[
+                      styles.audioWaveformFill,
+                      {
+                        width:
+                          playingAudioId === item.id && audioPlayer.duration > 0
+                            ? `${(audioPlayer.currentTime / audioPlayer.duration) * 100}%`
+                            : '0%',
+                      },
+                    ]}
+                  />
+                </View>
+                <Text style={styles.audioDurationRight}>
+                  {playingAudioId === item.id && audioPlayer.duration > 0 ? `${audioPlayer.duration.toFixed(2)}` : '0.00'}
+                </Text>
+                <TouchableOpacity onPress={handleSpeedChange} style={styles.audioSpeedButton} activeOpacity={0.7}>
+                  <Text style={styles.audioSpeedText}>{playbackRate}x</Text>
+                </TouchableOpacity>
+              </View>
+            )}
 
-          {item.type === 'image' ? (
-            <Text style={[styles.messageTime, isOwn && styles.userMessageTime, styles.imageTime, isOwn ? styles.imageTimeRight : styles.imageTimeLeft]}>
-              {item.timestamp
-                ? new Date(tsSec(item.timestamp) * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                : item._local
-                  ? 'Sending…'
-                  : ''}
-            </Text>
-          ) : shouldShowTimestamp() ? (
-            <Text style={[styles.messageTime, isOwn && styles.userMessageTime]}>
-              {item.timestamp
-                ? new Date(tsSec(item.timestamp) * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                : item._local
-                  ? 'Sending…'
-                  : ''}
-            </Text>
-          ) : null}
-        </View>
+            {item.type === 'image' && item.text ? (
+              <TouchableOpacity activeOpacity={0.9} onPress={onImagePress} onLongPress={(e) => onLongPress(e, isOwn)}>
+                <ExpoImage
+                  source={{ uri: item.text }}
+                  style={[styles.media, { borderWidth: 1, borderColor: TURQUOISE }]}
+                  contentFit="cover"
+                  cachePolicy="disk"
+                />
+              </TouchableOpacity>
+            ) : item.type === 'image' && !item.text ? (
+              <Text style={styles.placeholderText}>Image not available</Text>
+            ) : null}
+
+            {item.type === 'image' ? (
+              <View style={[styles.messageTimeContainer, isOwn ? styles.messageTimeRight : styles.messageTimeLeft]}>
+                <Text style={[styles.messageTime, isOwn && styles.userMessageTime, styles.imageTime]}>
+                  {item.timestamp
+                    ? new Date(tsMs(item.timestamp)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                    : item._local ? 'Sending…' : ''}
+                </Text>
+                {isOwn && getStatusIcon()}
+              </View>
+            ) : shouldShowTimestamp() ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: isOwn ? 'flex-end' : 'flex-start', marginTop: 2 }}>
+                <Text style={[styles.messageTime, isOwn && styles.userMessageTime]}>
+                  {item.timestamp
+                    ? new Date(tsMs(item.timestamp)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                    : item._local ? 'Sending…' : ''}
+                </Text>
+                {isOwn && <View style={{ marginLeft: 4 }}>{getStatusIcon()}</View>}
+              </View>
+            ) : null}
+          </View>
+        </Animated.View>
 
         {isLastMine && readReceipt}
       </View>
     </View>
   );
-}, (prevProps, nextProps) => {
-  // Custom comparison for better performance
+}, (p, n) => (
+  p.item.id === n.item.id &&
+  p.item.text === n.item.text &&
+  p.item._local === n.item._local &&
+  p.item.status === n.item.status &&
+  p.isOwn === n.isOwn &&
+  p.reaction === n.reaction &&
+  p.isLastMine === n.isLastMine &&
+  p.messageStatus === n.messageStatus &&
+  p.playingAudioId === n.playingAudioId &&
+  p.audioPlayer?.playing === n.audioPlayer?.playing &&
+  p.audioPlayer?.currentTime === n.audioPlayer?.currentTime &&
+  p.profile?.photo === n.profile?.photo &&
+  p.profile?.username === n.profile?.username &&
+  p.prev?.senderId === n.prev?.senderId &&
+  p.next?.senderId === n.next?.senderId
+));
+
+// ---- Keyboard wrapper: zero gap (supports exact offset) ----
+const KeyboardCompatibleView: React.FC<{
+  children: React.ReactNode;
+  setKbdVisible: (v: boolean) => void;
+  iosOffset: number;
+}> = ({ children, setKbdVisible, iosOffset }) => {
+  const insets = useSafeAreaInsets();
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+
+  useEffect(() => {
+    const onShow = () => { setIsKeyboardVisible(true); setKbdVisible(true); };
+    const onHide = () => { setIsKeyboardVisible(false); setKbdVisible(false); };
+    const sub1 = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow', onShow);
+    const sub2 = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', onHide);
+    return () => { try { sub1.remove(); sub2.remove(); } catch {} };
+  }, [setKbdVisible]);
+
+  const keyboardVerticalOffset = Platform.OS === 'ios' ? Math.max(iosOffset, 0) : Math.max(insets.bottom, 0);
+
   return (
-    prevProps.item.id === nextProps.item.id &&
-    prevProps.item.text === nextProps.item.text &&
-    prevProps.item._local === nextProps.item._local &&
-    prevProps.isOwn === nextProps.isOwn &&
-    prevProps.reaction === nextProps.reaction &&
-    prevProps.isLastMine === nextProps.isLastMine &&
-    prevProps.playingAudioId === nextProps.playingAudioId &&
-    prevProps.audioPlayer?.playing === nextProps.audioPlayer?.playing &&
-    prevProps.audioPlayer?.currentTime === nextProps.audioPlayer?.currentTime &&
-    prevProps.profile?.photo === nextProps.profile?.photo &&
-    prevProps.profile?.username === nextProps.profile?.username &&
-    prevProps.prev?.senderId === nextProps.prev?.senderId &&
-    prevProps.next?.senderId === nextProps.next?.senderId
+    <KeyboardAvoidingView
+      style={{ flex: 1, backgroundColor: BG }}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={keyboardVerticalOffset}
+      enabled
+    >
+      {children}
+    </KeyboardAvoidingView>
   );
-});
+};
 
 const ChatDetailScreen = () => {
-  const [keyboardVisible, setKeyboardVisible] = useState(false);
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
   const route = useRoute<any>();
@@ -355,39 +443,42 @@ const ChatDetailScreen = () => {
   const initialSnapshotId: string | null = route.params?.initialSnapshotId ?? null;
   const initialHeader: any = route.params?.initialHeader;
 
-  // Cleanup typing on unmount
+  const appState = useRef(AppState.currentState);
+  const typingCleanupTimerRef = useRef<any>(null);
   useEffect(() => {
-    return () => {
-      if (chatId) {
-        try { clearTyping(chatId); } catch {};
+    const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
+      if (appState.current.match(/active/) && nextAppState.match(/inactive|background/)) {
+        if (chatId) clearTyping(chatId);
       }
+      appState.current = nextAppState;
+    });
+    return () => {
+      subscription.remove();
+      if (chatId) clearTyping(chatId);
     };
   }, [chatId]);
 
-  // Read receipts: mark read immediately on focus and keep marking every 2s while focused
   useFocusEffect(
     useCallback(() => {
       if (!chatId) return;
-
-      markChatRead(chatId);
-
-      const interval = setInterval(() => {
-        markChatRead(chatId);
-      }, 2000);
-
-      return () => clearInterval(interval);
+      const markRead = async () => {
+        try {
+          await markChatRead(chatId);
+          setMessages(prev => prev.map(msg => ({
+            ...msg,
+            status: msg.senderId !== auth.currentUser?.uid ? 'read' : msg.status
+          })));
+          const me = auth.currentUser?.uid;
+          if (me) setReadsMap(r => ({ ...(r || {}), [me]: { seconds: Math.floor(Date.now() / 1000) } }));
+        } catch {}
+      };
+      markRead();
+      const interval = setInterval(markRead, 2000);
+      return () => { clearInterval(interval); markRead(); };
     }, [chatId])
   );
 
-  
-
   const [messages, setMessages] = useState<Message[]>([]);
-  // Mark read when new messages arrive (if user is at the bottom)
-  useEffect(() => {
-    if (messages.length > 0 && userAtBottomRef.current && chatId) {
-      markChatRead(chatId);
-    }
-  }, [messages.length, chatId]);
   const [profiles, setProfiles] = useState<{ [userId: string]: any }>({});
   const [messageText, setMessageText] = useState('');
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
@@ -415,12 +506,13 @@ const ChatDetailScreen = () => {
   const [activityInfo, setActivityInfo] = useState<{ name: string, type: string, date: string, time: string } | null>(null);
   const [dmPeer, setDmPeer] = useState<{ uid: string; username: string; photo?: string } | null>(null);
   const { allActivities, joinedActivities } = useActivityContext();
-  const myJoinedActivities = useMemo(() => 
+  const myJoinedActivities = useMemo(() =>
     (allActivities || []).filter((a: any) => (joinedActivities || []).includes(a.id)),
     [allActivities, joinedActivities]
   );
   const [inviteModalVisible, setInviteModalVisible] = useState(false);
   const [inviteSelection, setInviteSelection] = useState<Record<string, boolean>>({});
+  // ...existing code...
   const [inviteTargetUid, setInviteTargetUid] = useState<string | null>(null);
   const [inviteTargetName, setInviteTargetName] = useState<string | null>(null);
   const [myFriendIds, setMyFriendIds] = useState<string[]>([]);
@@ -438,11 +530,16 @@ const ChatDetailScreen = () => {
   const [replyTo, setReplyTo] = useState<Message | null>(null);
 
   const [reactionTarget, setReactionTarget] = useState<Message | null>(null);
+  const [reactionAnchor, setReactionAnchor] = useState<{ side: 'left' | 'right'; y: number } | null>(null);
   const reactionAnim = useRef(new Animated.Value(0)).current;
 
   const toastAnim = useRef(new Animated.Value(0)).current;
   const [toastMsg, setToastMsg] = useState('');
   const toastTimeoutRef = useRef<any>(null);
+  // animation for anchored invite panel
+  const inviteAnim = useRef(new Animated.Value(0)).current;
+  const backdropAnim = useRef(new Animated.Value(0)).current;
+  const messageDim = useRef(new Animated.Value(1)).current;
   const showToast = useCallback((msg: string) => {
     if (!msg) return;
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
@@ -454,9 +551,33 @@ const ChatDetailScreen = () => {
     }, 1600);
   }, [toastAnim]);
 
+  useEffect(() => {
+    // animate invite panel in/out and backdrop/message dim
+    Animated.parallel([
+      Animated.timing(inviteAnim, {
+        toValue: inviteModalVisible ? 1 : 0,
+        duration: 180,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(backdropAnim, {
+        toValue: inviteModalVisible ? 1 : 0,
+        duration: 180,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(messageDim, {
+        toValue: inviteModalVisible ? 0.6 : 1,
+        duration: 180,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [inviteModalVisible, inviteAnim, backdropAnim, messageDim]);
+
   const [reactions, setReactions] = useState<Record<string, string>>({});
 
-  const flatListRef = useRef<FlatList>(null);
+  const listRef = useRef<any>(null);
   const isInitialLoad = useRef(true);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [isMessagesReady, setIsMessagesReady] = useState(false);
@@ -472,14 +593,17 @@ const ChatDetailScreen = () => {
   const savedScrollOffsetBeforePrependRef = useRef<number | null>(null);
 
   const [showScrollFab, setShowScrollFab] = useState(false);
-
-  const [readReceiptH, setReadReceiptH] = useState(0);
-  const [kbHeightNum, setKbHeightNum] = useState(0);
-  const kbHeight = useRef(new Animated.Value(0)).current;
+  const scrollFabAnim = useRef(new Animated.Value(0)).current;
 
   const [creatingInvite, setCreatingInvite] = useState(false);
+  const [composerKbdVisible, setComposerKbdVisible] = useState(false);
+
+  const [headerHeight, setHeaderHeight] = useState(54);
+  const [headerInfoLayout, setHeaderInfoLayout] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
 
   const myId = auth.currentUser?.uid;
+  const screenW = Dimensions.get('window').width;
+  const screenH = Dimensions.get('window').height;
 
   const exitToInbox = useCallback(() => {
     if (navigatedAwayRef.current) return;
@@ -506,51 +630,72 @@ const ChatDetailScreen = () => {
   }, [navigation]);
 
   useEffect(() => {
-    if (isMessagesReady) {
-      Animated.timing(fadeAnim, { toValue: 1, duration: 280, useNativeDriver: true }).start();
-    }
+    if (isMessagesReady) Animated.timing(fadeAnim, { toValue: 1, duration: 280, useNativeDriver: true }).start();
   }, [isMessagesReady, fadeAnim]);
 
   useEffect(() => {
     if (Platform.OS === 'android') {
-      NavigationBar.setButtonStyleAsync('light').catch(() => {});
-      NavigationBar.setBackgroundColorAsync('#121212').catch(() => {});
+      // Optionally style navigation bar
+      // NavigationBar.setBackgroundColorAsync('#121212').catch(() => {});
     }
   }, []);
 
-  // Smooth keyboard show: listen for keyboard willShow/didShow and animate scroll to end
   useEffect(() => {
-    const onShow = (e: any) => {
-      const height = e?.endCoordinates?.height || 0;
-      setKbHeightNum(height);
-      if (height > 0 && userAtBottomRef.current) {
+    Animated.spring(scrollFabAnim, { toValue: showScrollFab ? 1 : 0, useNativeDriver: true, friction: 8, tension: 100 }).start();
+  }, [showScrollFab, scrollFabAnim]);
+
+  // ---------- Local disk cache (instant paint) ----------
+  const saveCacheThrottler = useRef<NodeJS.Timeout | null>(null);
+  const saveCache = useCallback((rows: Message[]) => {
+    if (!chatId) return;
+    if (saveCacheThrottler.current) clearTimeout(saveCacheThrottler.current);
+    const toSave = rows
+      .filter(m => !m._local)
+      .slice(-CACHE_LIMIT);
+    saveCacheThrottler.current = setTimeout(async () => {
+      try { await AsyncStorage.setItem(CACHE_KEY(chatId), JSON.stringify(toSave)); } catch {}
+    }, 350);
+  }, [chatId]);
+
+  const loadCache = useCallback(async () => {
+    if (!chatId) return;
+    try {
+      const raw = await AsyncStorage.getItem(CACHE_KEY(chatId));
+      if (raw) {
+        const cached: Message[] = JSON.parse(raw);
+        if (Array.isArray(cached) && cached.length) {
+          setMessages(cached);
+          setIsMessagesReady(true);
+          isInitialLoad.current = false;
+          requestAnimationFrame(() => {
+            listRef.current?.scrollToEnd({ animated: false });
+            userAtBottomRef.current = true;
+          });
+        }
+      }
+    } catch {}
+  }, [chatId]);
+
+  // ---------- Keyboard auto scroll ----------
+  useEffect(() => {
+    const onShow = () => {
+      if (userAtBottomRef.current) {
         requestAnimationFrame(() => {
-          flatListRef.current?.scrollToEnd({ animated: true });
+          setTimeout(() => { listRef.current?.scrollToEnd({ animated: true }); }, Platform.OS === 'ios' ? 50 : 150);
         });
       }
     };
-
-    const onHide = () => {
-      setKbHeightNum(0);
-    };
-
-    const subWillShow = Keyboard.addListener('keyboardWillShow', onShow);
-    const subDidShow = Keyboard.addListener('keyboardDidShow', onShow);
-    const subWillHide = Keyboard.addListener('keyboardWillHide', onHide);
-    const subDidHide = Keyboard.addListener('keyboardDidHide', onHide);
-
-    return () => {
-      try { subWillShow.remove(); } catch {};
-      try { subDidShow.remove(); } catch {};
-      try { subWillHide.remove(); } catch {};
-      try { subDidHide.remove(); } catch {};
-    };
+    const subWillShow = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow', onShow);
+    return () => { try { subWillShow.remove(); } catch {} };
   }, []);
 
-  // Access guard + message loading
+  // ---------- Access + initial load ----------
   useEffect(() => {
     let unsubscribeMessages: undefined | (() => void);
     const ref = doc(db, 'chats', chatId);
+
+    if (!preloadedMessages?.length) loadCache();
+
     const unsubAccess = onSnapshot(
       ref,
       (snap) => {
@@ -579,15 +724,11 @@ const ChatDetailScreen = () => {
         if (!unsubscribeMessages) {
           (async () => {
             try {
-              // Instant load from preloaded data
-              if (preloadedMessages && Array.isArray(preloadedMessages) && preloadedMessages.length) {
+              if (preloadedMessages?.length) {
                 setMessages(preloadedMessages as any);
                 setIsMessagesReady(true);
                 isInitialLoad.current = false;
-                setTimeout(() => { 
-                  flatListRef.current?.scrollToEnd({ animated: false }); 
-                  userAtBottomRef.current = true; 
-                }, 0);
+                setTimeout(() => { listRef.current?.scrollToEnd({ animated: false }); userAtBottomRef.current = true; }, 0);
               }
 
               if (initialSnapshotId) {
@@ -598,53 +739,46 @@ const ChatDetailScreen = () => {
                 } catch {}
               }
 
-              // Fetch latest if no preload
               if (!preloadedMessages || preloadedMessages.length === 0) {
                 const page = await fetchLatestMessagesPage(chatId, PAGE_SIZE);
                 latestDescSnapshotRef.current = page.lastSnapshot || latestDescSnapshotRef.current;
-                setMessages((page.messages || []) as any);
+                const sorted = (page.messages || []).slice().sort((a: any, b: any) => tsMs(a.timestamp) - tsMs(b.timestamp));
+                setMessages(sorted as any);
+                saveCache(sorted as any);
                 setIsMessagesReady(true);
                 isInitialLoad.current = false;
-                setTimeout(() => { 
-                  flatListRef.current?.scrollToEnd({ animated: false }); 
-                  userAtBottomRef.current = true; 
-                }, 0);
+                setTimeout(() => { listRef.current?.scrollToEnd({ animated: false }); userAtBottomRef.current = true; }, 0);
               }
             } catch {}
           })();
 
-          // Real-time listener for new messages
           unsubscribeMessages = listenToLatestMessages(
             chatId,
             50,
             (msgs: any[]) => {
               setMessages((prev) => {
-                const ids = new Set(prev.map((m) => m.id));
-                const newMsgs = msgs.filter((m) => !ids.has(m.id));
-                if (newMsgs.length === 0) return prev;
-                
-                const merged = [...prev, ...newMsgs];
-                const deduped = Array.from(new Map(merged.map((m: any) => [m.id, m])).values());
-                deduped.sort((a: any, b: any) => tsSec(a.timestamp) - tsSec(b.timestamp));
-                return deduped;
+                const ids = new Map(prev.map((m) => [m.id, m]));
+                for (const m of msgs) ids.set(m.id, m);
+                const deduped = Array.from(ids.values()).sort((a: any, b: any) => tsMs(a.timestamp) - tsMs(b.timestamp));
+                const uid = auth.currentUser?.uid;
+                const marked = deduped.map(msg => ({
+                  ...msg,
+                  status: msg.senderId !== uid ? 'delivered' : msg.status
+                }));
+                saveCache(marked);
+                return marked;
               });
-              
+
               markChatRead(chatId);
-              
+
               if (!isInitialLoad.current && userAtBottomRef.current) {
-                setTimeout(() => { 
-                  flatListRef.current?.scrollToEnd({ animated: true }); 
-                  userAtBottomRef.current = true; 
-                }, 60);
+                setTimeout(() => { listRef.current?.scrollToEnd({ animated: true }); userAtBottomRef.current = true; }, 60);
               }
-              
+
               if (isInitialLoad.current) {
                 isInitialLoad.current = false;
                 setIsMessagesReady(true);
-                setTimeout(() => { 
-                  flatListRef.current?.scrollToEnd({ animated: false }); 
-                  userAtBottomRef.current = true; 
-                }, 0);
+                setTimeout(() => { listRef.current?.scrollToEnd({ animated: false }); userAtBottomRef.current = true; }, 0);
               }
             },
             () => {
@@ -665,39 +799,44 @@ const ChatDetailScreen = () => {
         }
       }
     );
-    return () => {
-      if (unsubscribeMessages) unsubscribeMessages();
-      unsubAccess();
-    };
-  }, [chatId, preloadedMessages, initialSnapshotId, exitToInbox, safeExitChat]);
 
-  // Batch profile fetching
+    return () => { if (unsubscribeMessages) unsubscribeMessages(); unsubAccess(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatId]);
+
+  // ---------- Batch profile fetching with disk cache ----------
   useEffect(() => {
     const fetchProfiles = async () => {
       const ids = new Set(messages.map((m) => m.senderId));
+      participantIds.forEach(id => ids.add(id));
       const newProfiles: { [userId: string]: any } = { ...profiles };
       const toFetch = Array.from(ids).filter(id => !newProfiles[id]);
-      
-      if (toFetch.length === 0) return;
 
-      // Batch fetch in groups of 10
+      if (!toFetch.length) return;
+
       for (let i = 0; i < toFetch.length; i += 10) {
         const batch = toFetch.slice(i, i + 10);
-        const q = query(collection(db, 'profiles'), where('__name__', 'in', batch));
+        const qy = query(collection(db, 'profiles'), where('__name__', 'in', batch));
         try {
-          const snap = await getDocs(q);
-          snap.forEach((d) => {
-            newProfiles[d.id] = d.data();
-          });
+          const snap = await getDocs(qy);
+          snap.forEach((d) => { newProfiles[d.id] = d.data(); });
         } catch {}
       }
-      
       setProfiles(newProfiles);
     };
-    if (messages.length) fetchProfiles();
-  }, [messages.length]);
+    fetchProfiles();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length, participantIds.join(',')]);
 
-  // Header meta
+  // Prefetch avatars for instant paint
+  useEffect(() => {
+    const uris = new Set<string>();
+    participantIds.forEach(uid => { const p = profiles[uid]; if (p?.photo) uris.add(p.photo); });
+    messages.forEach(m => { const p = profiles[m.senderId]; if (p?.photo) uris.add(p.photo); });
+    uris.forEach(u => { if (u) RNImage.prefetch(u).catch(() => {}); });
+  }, [participantIds, profiles, messages.length]);
+
+  // ---------- Header meta ----------
   useEffect(() => {
     if (initialHeader) {
       try {
@@ -728,8 +867,8 @@ const ChatDetailScreen = () => {
       setParticipantIds(participants);
 
       if (isDm) {
-        const myId = auth.currentUser?.uid;
-        const peerId = participants.find((p: string) => p !== myId);
+        const me = auth.currentUser?.uid;
+        const peerId = participants.find((p: string) => p !== me);
         if (peerId) {
           const peerDoc = await getDoc(doc(db, 'profiles', peerId));
           if (peerDoc.exists()) {
@@ -743,10 +882,10 @@ const ChatDetailScreen = () => {
         if (activityDoc.exists()) {
           const data = activityDoc.data();
           setActivityInfo({
-            name: data.activity || data.name || 'Activity',
-            type: data.activity || '',
-            date: data.date || '',
-            time: data.time || '',
+            name: (data as any).activity || (data as any).name || 'Activity',
+            type: (data as any).activity || '',
+            date: (data as any).date || '',
+            time: (data as any).time || '',
           });
         }
         setGroupMeta(null);
@@ -761,15 +900,15 @@ const ChatDetailScreen = () => {
     fetchActivity();
   }, [chatId, initialHeader]);
 
-  // Participants list
+  // Participants
   useEffect(() => {
     const load = async () => {
       if (!participantIds.length) { setParticipants([]); return; }
       const rows: Array<{ uid: string; username: string; photo?: string }> = [];
       for (let i = 0; i < participantIds.length; i += 10) {
         const ids = participantIds.slice(i, i + 10);
-        const q = query(collection(db, 'profiles'), where('__name__', 'in', ids));
-        const snap = await getDocs(q);
+        const qy = query(collection(db, 'profiles'), where('__name__', 'in', ids));
+        const snap = await getDocs(qy);
         snap.forEach((d) => {
           const p: any = d.data();
           rows.push({ uid: d.id, username: p.username || p.username_lower || 'User', photo: p.photo || p.photoURL });
@@ -781,49 +920,43 @@ const ChatDetailScreen = () => {
     load();
   }, [participantIds]);
 
-  // Live friend state
+  // Live friend state + friend profiles
   useEffect(() => {
     const me = auth.currentUser?.uid;
     if (!me) return;
     const unsub = onSnapshot(
       doc(db, 'profiles', me),
-      (snap) => {
-        if (!snap.exists()) { setMyFriendIds([]); setMyRequestsSent([]); return; }
+      async (snap) => {
+        if (!snap.exists()) { setMyFriendIds([]); setMyRequestsSent([]); setFriends([]); return; }
         const data: any = snap.data();
-        setMyFriendIds(Array.isArray(data?.friends) ? data.friends : []);
-        setMyRequestsSent(Array.isArray(data?.requestsSent) ? data.requestsSent : []);
+        const fIds = Array.isArray(data?.friends) ? data.friends : [];
+        const req = Array.isArray(data?.requestsSent) ? data.requestsSent : [];
+        setMyFriendIds(fIds);
+        setMyRequestsSent(req);
+
+        // fetch friend profiles used by Add Users modal
+        if (fIds.length) {
+          const out: Array<{ uid: string; username: string; photo?: string }> = [];
+          for (let i = 0; i < fIds.length; i += 10) {
+            const batch = fIds.slice(i, i + 10);
+            try {
+              const qy = query(collection(db, 'profiles'), where('__name__', 'in', batch));
+              const rs = await getDocs(qy);
+              rs.forEach(d => {
+                const p: any = d.data();
+                out.push({ uid: d.id, username: p.username || 'User', photo: p.photo || p.photoURL });
+              });
+            } catch {}
+          }
+          out.sort((a, b) => a.username.localeCompare(b.username));
+          setFriends(out);
+        } else {
+          setFriends([]);
+        }
       },
-      () => { setMyFriendIds([]); setMyRequestsSent([]); }
+      () => { setMyFriendIds([]); setMyRequestsSent([]); setFriends([]); }
     );
     return () => unsub();
-  }, []);
-
-  // Friends for add-users modal
-  useEffect(() => {
-    const me = auth.currentUser?.uid;
-    if (!me) return;
-    const loadFriends = async () => {
-      try {
-        const meDoc = await getDoc(doc(db, 'profiles', me));
-        if (!meDoc.exists()) { setFriends([]); return; }
-        const data: any = meDoc.data();
-        const friendIds: string[] = Array.isArray(data?.friends) ? data.friends : [];
-        if (!friendIds.length) { setFriends([]); return; }
-        const rows: Array<{ uid: string; username: string; photo?: string }> = [];
-        for (let i = 0; i < friendIds.length; i += 10) {
-          const ids = friendIds.slice(i, i + 10);
-          const q2 = query(collection(db, 'profiles'), where('__name__', 'in', ids));
-          const snap2 = await getDocs(q2);
-          snap2.forEach((d) => {
-            const p: any = d.data();
-            rows.push({ uid: d.id, username: p.username || p.username_lower || 'User', photo: p.photo || p.photoURL });
-          });
-        }
-        rows.sort((a, b) => a.username.localeCompare(b.username));
-        setFriends(rows);
-      } catch { }
-    };
-    loadFriends();
   }, []);
 
   const openInfoMenu = useCallback(() => setOptionsVisible(true), []);
@@ -873,17 +1006,15 @@ const ChatDetailScreen = () => {
         setParticipantIds([...participantIds, ...toAdd]);
         const me = auth.currentUser?.uid;
         try {
-          const addedProfiles = await Promise.all(
-            toAdd.map(async (uid) => {
-              const p = await getDoc(doc(db, 'profiles', uid));
-              return p.exists() ? ((p.data() as any).username || 'User') : 'User';
-            })
-          );
+          const addedProfiles = await Promise.all(toAdd.map(async (uid) => {
+            const p = await getDoc(doc(db, 'profiles', uid));
+            return p.exists() ? ((p.data() as any).username || 'User') : 'User';
+          }));
           const myProfileSnap = me ? await getDoc(doc(db, 'profiles', me)) : null;
           const myName = (myProfileSnap && myProfileSnap.exists()) ? ((myProfileSnap.data() as any).username || 'Someone') : 'Someone';
           const names = addedProfiles.join(', ');
           await addSystemMessage(chatId, `${myName} added ${names}`);
-        } catch { }
+        } catch {}
       }
       setAddUsersVisible(false);
       setAddingUsersMap({});
@@ -907,9 +1038,9 @@ const ChatDetailScreen = () => {
               const mySnap = await getDoc(doc(db, 'profiles', me));
               const myName = mySnap.exists() ? ((mySnap.data() as any).username || 'Someone') : 'Someone';
               await addSystemMessage(chatId, `${myName} left the group`);
-            } catch { }
+            } catch {}
             await leaveChatWithAutoDelete(chatId, me);
-          } catch { }
+          } catch {}
           exitToInbox();
         }
       }
@@ -939,7 +1070,6 @@ const ChatDetailScreen = () => {
       Alert.alert('Failed', e?.message || 'Could not send request.');
     }
   };
-
   const handleCancelFriendRequest = async (uid: string) => {
     try {
       setMyRequestsSent((prev) => prev.filter((id) => id !== uid));
@@ -960,7 +1090,7 @@ const ChatDetailScreen = () => {
     navigation.navigate('UserProfile', { userId });
   }, [participantsVisible, optionsVisible, navigation]);
 
-  // Audio handlers
+  // Audio
   const handlePlayPauseAudio = useCallback(async (uri: string, id: string) => {
     if (playingAudioId === id) {
       if (audioPlayer.playing) audioPlayer.pause();
@@ -975,10 +1105,22 @@ const ChatDetailScreen = () => {
   const handleSpeedChange = useCallback(() => {
     const next = playbackRate === 1 ? 1.5 : playbackRate === 1.5 ? 2 : 1;
     setPlaybackRate(next);
-    audioPlayer.playbackRate = next;
+    (audioPlayer as any).playbackRate = next;
   }, [playbackRate, audioPlayer]);
 
-  // OPTIMISTIC SEND
+  // lastMessage touch (boost peer update speed)
+  const touchLastMessage = useCallback(async (type: 'text'|'image'|'audio', text: string, uid: string) => {
+    try {
+      await updateDoc(doc(db, 'chats', chatId), {
+        lastMessageText: type === 'text' ? text : type === 'image' ? 'Sent a photo' : 'Voice message',
+        lastMessageType: type,
+        lastMessageSenderId: uid,
+        lastMessageTimestamp: serverTimestamp(),
+      } as any);
+    } catch {}
+  }, [chatId]);
+
+  // Optimistic send
   const doOptimisticImages = async (uris: string[]) => {
     const uid = auth.currentUser!.uid;
     const locals: Message[] = uris.map((uri) => ({
@@ -988,23 +1130,21 @@ const ChatDetailScreen = () => {
       type: 'image',
       timestamp: { seconds: Math.floor(Date.now() / 1000) },
       _local: true,
+      status: 'pending',
     }));
     setPending((p) => [...p, ...locals]);
     setSelectedImages([]);
-    try {
-      const channelRef = doc(db, 'chats', chatId);
-      await updateDoc(channelRef, {
-        lastMessageText: 'Sent a photo',
-        lastMessageType: 'image',
-        lastMessageSenderId: uid,
-        lastMessageTimestamp: serverTimestamp(),
-      } as any);
-    } catch {}
+
+    requestAnimationFrame(() => { listRef.current?.scrollToEnd({ animated: true }); userAtBottomRef.current = true; });
+
+    await touchLastMessage('image', 'Sent a photo', uid);
+
     for (const preview of locals) {
       try {
         const imageId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         const downloadUrl = await uploadChatImage(preview.text, uid, imageId);
         await sendMessage(chatId, uid, downloadUrl, 'image');
+        setPending((p) => p.filter((x) => x.id !== preview.id).map(msg => msg.id === preview.id ? { ...msg, status: 'sent' } : msg));
       } catch (e: any) {
         Alert.alert('Upload failed', e?.message || 'Could not upload image.');
         setPending((p) => p.filter((x) => x.id !== preview.id));
@@ -1016,7 +1156,6 @@ const ChatDetailScreen = () => {
     if (!auth.currentUser) return;
     const uid = auth.currentUser.uid;
 
-    // Clear typing immediately
     clearTyping(chatId);
 
     if (selectedImages.length) await doOptimisticImages(selectedImages);
@@ -1024,7 +1163,7 @@ const ChatDetailScreen = () => {
     if (messageText.trim()) {
       const text = messageText.trim();
       const localId = `local-${Date.now()}-${Math.random()}`;
-      
+
       const local: Message = {
         id: localId,
         senderId: uid,
@@ -1032,41 +1171,32 @@ const ChatDetailScreen = () => {
         type: 'text',
         timestamp: { seconds: Math.floor(Date.now() / 1000) },
         _local: true,
+        status: 'pending',
       };
-      
-      // INSTANT: Add to pending, clear input
+
       setPending((p) => [...p, local]);
       setMessageText('');
       setReplyTo(null);
-      
-      // INSTANT: Scroll immediately
-      requestAnimationFrame(() => {
-        flatListRef.current?.scrollToEnd({ animated: false });
-        userAtBottomRef.current = true;
-      });
-      
-      // Send in background (do not await — UI is already updated)
+
+      requestAnimationFrame(() => { listRef.current?.scrollToEnd({ animated: true }); userAtBottomRef.current = true; });
+
+      // touch last message immediately for fast peer inbox updates
+      touchLastMessage('text', text, uid);
+
       sendMessage(chatId, uid, text, 'text')
-        .then(() => {
-          setPending((p) => p.filter((m) => m.id !== localId));
-        })
-        .catch((e) => {
-          console.error('Send failed:', e);
-        });
+        .then(() => { setPending((p) => p.filter((m) => m.id !== localId)); })
+        .catch(() => { setPending((p) => p.map(m => m.id === localId ? { ...m, status: 'failed' } : m)); });
     }
-  }, [messageText, selectedImages, chatId]);
+  }, [messageText, selectedImages, chatId, touchLastMessage]);
 
   // Recording
   const startRecording = async () => {
     try {
       const { granted } = await AudioModule.requestRecordingPermissionsAsync();
-      if (!granted) {
-        Alert.alert('Permission Denied', 'Please enable audio recording permissions.');
-        return;
-      }
+      if (!granted) { Alert.alert('Permission Denied', 'Please enable audio recording permissions.'); return; }
       try { if (audioPlayer.playing) audioPlayer.pause(); } catch {}
       try {
-        await AudioModule.setAudioModeAsync?.({
+        await (AudioModule as any).setAudioModeAsync?.({
           allowsRecordingIOS: true,
           playsInSilentModeIOS: true,
           staysActiveInBackground: false,
@@ -1075,24 +1205,27 @@ const ChatDetailScreen = () => {
           playThroughEarpieceAndroid: false,
         } as any);
       } catch {}
-      await audioRecorder.prepareToRecordAsync?.(RecordingPresets.HIGH_QUALITY);
+      await (audioRecorder as any).prepareToRecordAsync?.(RecordingPresets.HIGH_QUALITY);
       await audioRecorder.record();
     } catch {
       Alert.alert('Recording Error', 'Could not start recording. Please try again.');
     }
   };
-  
   const stopRecording = async () => {
     if (!audioRecorder.isRecording || !auth.currentUser) return;
     try {
+      const uid = auth.currentUser.uid;
       const uri = await audioRecorder.stop();
-      if (uri != null) await sendMessage(chatId, auth.currentUser.uid, uri, 'audio');
+      if (uri != null) {
+        await sendMessage(chatId, uid, uri, 'audio');
+        await touchLastMessage('audio', 'Voice message', uid);
+      }
     } catch {
       Alert.alert('Recording Error', 'Could not save the recording.');
     }
   };
 
-  // Typing pings
+  // Typing ping + cleanup
   const pingTyping = useCallback(async () => {
     const now = Date.now();
     if (now - lastTypingPingRef.current < 2500) return;
@@ -1101,44 +1234,35 @@ const ChatDetailScreen = () => {
       const me = auth.currentUser?.uid;
       if (!me) return;
       await updateDoc(doc(db, 'chats', chatId), { [`typing.${me}`]: serverTimestamp() } as any);
+      if (typingCleanupTimerRef.current) clearTimeout(typingCleanupTimerRef.current);
+      typingCleanupTimerRef.current = setTimeout(async () => {
+        try { await updateDoc(doc(db, 'chats', chatId), { [`typing.${me}`]: deleteField() } as any); } catch {}
+      }, TYPING_FRESH_MS);
     } catch { }
   }, [chatId]);
 
   // Camera / gallery
   const handleCameraPress = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Denied', 'Please enable camera permissions.');
-      return;
-    }
+    if (status !== 'granted') { Alert.alert('Permission Denied', 'Please enable camera permissions.'); return; }
     const result = await ImagePicker.launchCameraAsync({ allowsEditing: false, quality: 0.8 });
     if (!result.canceled && result.assets?.length) {
       const MAX = 3;
       setSelectedImages((prev) => {
-        if (prev.length >= MAX) {
-          Alert.alert('Limit reached', 'You can only send up to 3 images at a time.');
-          return prev;
-        }
+        if (prev.length >= MAX) { Alert.alert('Limit reached', 'You can only send up to 3 images at a time.'); return prev; }
         return [...prev, result.assets[0].uri].slice(0, MAX);
       });
     }
   };
-
   const handleGalleryPress = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Denied', 'Please enable gallery permissions.');
-      return;
-    }
+    if (status !== 'granted') { Alert.alert('Permission Denied', 'Please enable gallery permissions.'); return; }
     const result = await ImagePicker.launchImageLibraryAsync({ allowsMultipleSelection: true, allowsEditing: false, quality: 0.8 });
     if (!result.canceled && result.assets?.length) {
       setSelectedImages((prev) => {
         const MAX = 3;
         const remaining = MAX - prev.length;
-        if (remaining <= 0) {
-          Alert.alert('Limit reached', 'You can only send up to 3 images at a time.');
-          return prev;
-        }
+        if (remaining <= 0) { Alert.alert('Limit reached', 'You can only send up to 3 images at a time.'); return prev; }
         const picked = result.assets.map((a) => a.uri).slice(0, remaining);
         const next = [...prev, ...picked];
         if (result.assets.length > remaining) Alert.alert('Limit reached', 'Only the first 3 images will be added.');
@@ -1146,31 +1270,21 @@ const ChatDetailScreen = () => {
       });
     }
   };
+  const handleRemoveImage = useCallback((uriToRemove: string) => setSelectedImages((prev) => prev.filter((uri) => uri !== uriToRemove)), []);
 
-  const handleRemoveImage = useCallback((uriToRemove: string) => 
-    setSelectedImages((prev) => prev.filter((uri) => uri !== uriToRemove)), 
-  []);
-
-  // Merge server + optimistic
+  // Merge server + optimistic and sort by ms
   const renderMessages: Message[] = useMemo(() => {
-    if (!pending.length) return messages;
-    const serverMine = messages.filter((m) => m.senderId === myId);
-    const cleaned = pending.filter((p) => {
-      const near = serverMine.find((m) => {
-        if (m.type !== p.type) return false;
-        if (p.type === 'text' && m.text === p.text) return true;
-        const dt = Math.abs(tsSec(m.timestamp) - tsSec(p.timestamp));
-        return dt < 15;
-      });
-      return !near;
-    });
-    return [...messages, ...cleaned].sort((a, b) => tsSec(a.timestamp) - tsSec(b.timestamp));
-  }, [messages, pending, myId]);
+    if (!pending.length) return messages.slice().sort((a, b) => tsMs(a.timestamp) - tsMs(b.timestamp));
+    const byId = new Map<string, Message>();
+    for (const m of messages) byId.set(m.id, m);
+    for (const p of pending) {
+      const near = messages.find((m) => m.senderId === p.senderId && m.type === p.type && (p.type === 'text' ? m.text === p.text : Math.abs(tsMs(m.timestamp) - tsMs(p.timestamp)) < 15000));
+      if (!near) byId.set(p.id, p);
+    }
+    return Array.from(byId.values()).sort((a, b) => tsMs(a.timestamp) - tsMs(b.timestamp));
+  }, [messages, pending]);
 
-  const imageMessages = useMemo(
-    () => renderMessages.filter((m) => m.type === 'image' && m.text),
-    [renderMessages]
-  );
+  const imageMessages = useMemo(() => renderMessages.filter((m) => m.type === 'image' && m.text), [renderMessages]);
 
   const lastMineIndex = useMemo(() => {
     let idx = -1;
@@ -1181,42 +1295,31 @@ const ChatDetailScreen = () => {
   const readersForMyLast = useMemo(() => {
     const last = lastMineIndex >= 0 ? renderMessages[lastMineIndex] : null;
     if (!last) return [];
-    const lastTs = tsSec(last.timestamp);
+    const lastMs = tsMs(last.timestamp);
     return participantIds.filter((uid) => {
       if (uid === myId) return false;
       const r = (readsMap as any)?.[uid];
-      const rs = tsSec(r);
-      return rs >= lastTs;
+      return tsMs(r) >= lastMs;
     });
   }, [readsMap, renderMessages, lastMineIndex, participantIds, myId]);
 
   const typingUsers = useMemo(() => {
     const now = Date.now();
-    const ids = Object.entries(typingMap || {})
-      .filter(([uid, t]: any) => uid !== myId && now - tsSec(t) * 1000 < TYPING_FRESH_MS)
+    return Object.entries(typingMap || {})
+      .filter(([uid, timestamp]: any) => uid !== myId && (now - tsMs(timestamp)) < TYPING_FRESH_MS)
       .map(([uid]) => uid);
-    return ids;
   }, [typingMap, myId]);
 
-  const bottomSpacer = useMemo(() => {
-    return kbHeightNum + readReceiptH + 12;
-  }, [kbHeightNum, readReceiptH]);
-
-  
-
   const loadOlderMessages = useCallback(async () => {
-    if (loadingOlder) return;
-    if (noMoreOlderRef.current) return;
-    if (!chatId) return;
+    if (loadingOlder || noMoreOlderRef.current || !chatId) return;
     setLoadingOlder(true);
     try {
       const oldestSnapshot = latestDescSnapshotRef.current;
       const res = await fetchOlderMessagesPage(chatId, oldestSnapshot, PAGE_SIZE);
       const older = res.messages || [];
-      if (!older || older.length === 0) {
+      if (!older.length) {
         noMoreOlderRef.current = true;
       } else {
-        // Capture current scroll position & height BEFORE prepending older messages
         const currentOffset = scrollOffsetRef.current || 0;
         const currentHeight = contentHeightRef.current || 0;
         savedScrollOffsetBeforePrependRef.current = currentOffset;
@@ -1226,27 +1329,33 @@ const ChatDetailScreen = () => {
         setMessages((prev) => {
           const ids = new Set(prev.map((m) => m.id));
           const toAdd = older.filter((m: any) => !ids.has(m.id));
-          return [...toAdd, ...prev];
+          const merged = [...toAdd, ...prev].sort((a, b) => tsMs(a.timestamp) - tsMs(b.timestamp));
+          saveCache(merged);
+          return merged;
         });
         latestDescSnapshotRef.current = res.lastSnapshot || latestDescSnapshotRef.current;
       }
-    } catch (e) {
-      // noop
+    } catch {
+      // ignore
     } finally {
       setLoadingOlder(false);
     }
-  }, [chatId, loadingOlder]);
+  }, [chatId, loadingOlder, saveCache]);
 
-  const openReactions = useCallback((msg: Message) => {
+  // ---- Reactions (anchored beside bubble) ----
+  const openReactions = useCallback((msg: Message, e?: GestureResponderEvent, isOwn?: boolean) => {
     setReactionTarget(msg);
+    const y = e?.nativeEvent?.pageY ?? screenH / 2;
+    setReactionAnchor({ side: isOwn ? 'right' : 'left', y: Math.max(80, y - 70) });
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
     reactionAnim.setValue(0);
     Animated.spring(reactionAnim, { toValue: 1, useNativeDriver: true, friction: 6, tension: 120 }).start();
-  }, [reactionAnim]);
+  }, [reactionAnim, screenH]);
 
   const closeReactions = useCallback(() => {
     Animated.timing(reactionAnim, { toValue: 0, duration: 120, useNativeDriver: true }).start(() => {
       setReactionTarget(null);
+      setReactionAnchor(null);
     });
   }, [reactionAnim]);
 
@@ -1271,38 +1380,47 @@ const ChatDetailScreen = () => {
       const isOwn = item.senderId === myId;
       const isLastMine = index === lastMineIndex;
 
+      const getMessageStatus = (): 'pending' | 'sent' | 'delivered' | 'read' | 'failed' => {
+        if (item._local || item.status === 'pending') return 'pending';
+        if (item.status === 'failed') return 'failed';
+        if (isOwn) {
+          const msgMs = tsMs(item.timestamp);
+          const anyoneRead = participantIds.some((uid) => {
+            if (uid === myId) return false;
+            return tsMs((readsMap as any)?.[uid]) >= msgMs;
+          });
+          return anyoneRead ? 'read' : 'delivered';
+        }
+        return item.status || 'delivered';
+      };
+
       const readReceipt = isOwn && isLastMine ? (
         dmPeer ? (
           readersForMyLast.includes(dmPeer.uid) ? (
-            <Text
-              onLayout={(e) => setReadReceiptH(e.nativeEvent.layout.height)}
-              style={{ color: '#8ecfd1', fontSize: 11, marginTop: 4, alignSelf: 'flex-end' }}
-            >
-              Read
-            </Text>
-          ) : (
-            <View onLayout={() => setReadReceiptH(0)} />
-          )
+            <View style={{ flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-end', marginTop: 4 }}>
+              <Text style={{ color: '#8ecfd1', fontSize: 11, marginRight: 4 }}>Read</Text>
+              <Ionicons name="checkmark-done" size={14} color="#8ecfd1" />
+            </View>
+          ) : <View />
         ) : readersForMyLast.length ? (
-          <View
-            onLayout={(e) => setReadReceiptH(e.nativeEvent.layout.height)}
-            style={{ flexDirection: 'row-reverse', alignSelf: 'flex-end', marginTop: 4 }}
-          >
+          <View style={{ flexDirection: 'row-reverse', alignSelf: 'flex-end', marginTop: 4 }}>
             {readersForMyLast.slice(0, 8).map((uid) => {
               const p = profiles[uid] || {};
               return (
-                <Image
+                <ExpoImage
                   key={uid}
                   source={{ uri: p.photo || ('https://ui-avatars.com/api/?name=' + encodeURIComponent(p.username || 'U')) }}
                   style={{ width: 18, height: 18, borderRadius: 9, marginLeft: 4, borderWidth: 1, borderColor: TURQUOISE }}
+                  contentFit="cover"
+                  cachePolicy="disk"
                 />
               );
             })}
           </View>
-        ) : (
-          <View onLayout={() => setReadReceiptH(0)} />
-        )
+        ) : <View />
       ) : null;
+
+      const onItemLongPress = (e: GestureResponderEvent, own: boolean) => openReactions(item, e, own);
 
       return (
         <MessageItem
@@ -1315,13 +1433,11 @@ const ChatDetailScreen = () => {
           reaction={reactions[item.id]}
           isLastMine={isLastMine}
           readReceipt={readReceipt}
-          onLongPress={() => openReactions(item)}
+          messageStatus={getMessageStatus()}
+          onLongPress={onItemLongPress}
           onImagePress={() => {
             const idx = imageMessages.findIndex((m) => m.id === item.id);
-            if (idx >= 0) {
-              setViewerIndex(idx);
-              setViewerOpen(true);
-            }
+            if (idx >= 0) { setViewerIndex(idx); setViewerOpen(true); }
           }}
           onProfilePress={() => navigation.navigate('UserProfile', { userId: item.senderId })}
           onReply={() => setReplyTo(item)}
@@ -1334,73 +1450,85 @@ const ChatDetailScreen = () => {
       );
     },
     [
-      renderMessages,
-      profiles,
-      myId,
-      lastMineIndex,
-      reactions,
-      dmPeer,
-      readersForMyLast,
-      openReactions,
-      imageMessages,
-      navigation,
-      handlePlayPauseAudio,
-      playingAudioId,
-      audioPlayer,
-      handleSpeedChange,
-      playbackRate,
+      renderMessages, profiles, myId, lastMineIndex, reactions, dmPeer,
+      readersForMyLast, participantIds, readsMap, imageMessages, navigation,
+      handlePlayPauseAudio, playingAudioId, audioPlayer, handleSpeedChange, playbackRate, openReactions
     ]
   );
 
   const typingLabel = useMemo(() => {
-    if (!typingUsers.length) return '';
-    if (dmPeer && typingUsers.includes(dmPeer.uid)) return 'typing…';
-    const names = typingUsers
-      .map((uid) => profiles[uid]?.username)
-      .filter(Boolean)
-      .slice(0, 2)
-      .join(' & ');
-    return names ? `${names} ${typingUsers.length > 1 ? 'are' : 'is'} typing…` : 'Someone is typing…';
+    const nowTyping = typingUsers;
+    if (!nowTyping.length) return '';
+    if (dmPeer && nowTyping.includes(dmPeer.uid)) return 'typing…';
+    const names = nowTyping.slice(0, 3).map((uid) => profiles[uid]?.username || 'Someone').filter(Boolean);
+    if (names.length === 0) return '';
+    if (names.length === 1) return `${names[0]} is typing…`;
+    if (names.length === 2) return `${names.join(' and ')} are typing…`;
+    const others = nowTyping.length - 2;
+    return `${names.slice(0, 2).join(', ')} and ${others} ${others === 1 ? 'other' : 'others'} are typing…`;
   }, [typingUsers, profiles, dmPeer]);
 
-  const screenW = Dimensions.get('window').width;
+  const keyExtractor = useCallback((item: Message) => item.id, []);
 
-  const keyExtractor = useCallback((item: Message) => item.id.toString(), []);
-  const getItemLayout = useCallback(
-    (_data: any, index: number) => ({
-      length: 100,
-      offset: 100 * index,
-      index,
-    }),
-    []
-  );
+  const onContentSizeChange = useCallback((_w: number, h: number) => {
+    const newH = h || 0;
+    const oldH = contentHeightRef.current || 0;
+    contentHeightRef.current = newH;
+
+    if (adjustingScrollRef.current) {
+      const delta = newH - (prevContentHeightRef.current || oldH);
+      const baseOffset = savedScrollOffsetBeforePrependRef.current ?? (scrollOffsetRef.current || 0);
+      requestAnimationFrame(() => {
+        listRef.current?.scrollToOffset({ offset: Math.max(0, (baseOffset || 0) + (delta || 0)), animated: false });
+      });
+      adjustingScrollRef.current = false;
+      prevContentHeightRef.current = newH;
+      savedScrollOffsetBeforePrependRef.current = null;
+    } else if (userAtBottomRef.current && newH > oldH) {
+      requestAnimationFrame(() => { listRef.current?.scrollToEnd({ animated: false }); });
+    }
+  }, []);
+
+  const onScroll = useCallback((e: any) => {
+    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+    scrollOffsetRef.current = contentOffset.y || 0;
+    contentHeightRef.current = contentSize?.height || contentHeightRef.current;
+
+    const maxScroll = contentSize.height - layoutMeasurement.height;
+    const isAtBottom = maxScroll <= 0 || contentOffset.y >= maxScroll - 50;
+    userAtBottomRef.current = isAtBottom;
+
+    setShowScrollFab(!isAtBottom && contentOffset.y > 100);
+
+    if (contentOffset.y <= 100 && !loadingOlder) loadOlderMessages().catch(() => {});
+  }, [loadOlderMessages, loadingOlder]);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: BG }} edges={['top']}>
-      {/* Header (always visible) */}
-      <View style={styles.header}>
+      {/* Header */}
+      <View style={styles.header} onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}>
         <TouchableOpacity onPress={safeExitChat} style={styles.headerBack} accessible accessibilityRole="button" accessibilityLabel="Back">
           <Ionicons name="arrow-back" size={26} color={TURQUOISE} />
         </TouchableOpacity>
 
         {dmPeer ? (
           (() => {
-            const isFriend = dmPeer ? myFriendIds.includes(dmPeer.uid) : false;
-            const isRequested = dmPeer ? myRequestsSent.includes(dmPeer.uid) : false;
+            const isFriend = myFriendIds.includes(dmPeer.uid);
+            const isRequested = myRequestsSent.includes(dmPeer.uid);
             return (
               <>
                 <TouchableOpacity onPress={() => dmPeer?.uid && goToUserProfile(dmPeer.uid)} activeOpacity={0.8}>
-                  <Image
-                    source={{ uri: dmPeer.photo || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(dmPeer.username) }}
+                  <ExpoImage
+                    source={{ uri: dmPeer.photo || ('https://ui-avatars.com/api/?name=' + encodeURIComponent(dmPeer.username)) }}
                     style={styles.headerImage}
+                    contentFit="cover"
+                    cachePolicy="disk"
                   />
                 </TouchableOpacity>
                 <View style={{ flex: 1, marginLeft: 10 }}>
                   <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                     <TouchableOpacity onPress={() => dmPeer?.uid && goToUserProfile(dmPeer.uid)} activeOpacity={0.7}>
-                      <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">
-                        {dmPeer.username}
-                      </Text>
+                      <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">{dmPeer.username}</Text>
                     </TouchableOpacity>
                     {isFriend ? (
                       <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 8 }}>
@@ -1410,12 +1538,7 @@ const ChatDetailScreen = () => {
                         </View>
                         <TouchableOpacity
                           style={[styles.inviteBtn, { marginLeft: 6 }]}
-                          onPress={() => {
-                            setInviteSelection({});
-                            setInviteTargetUid(dmPeer?.uid || null);
-                            setInviteTargetName(dmPeer?.username || null);
-                            setInviteModalVisible(true);
-                          }}
+                          onPress={() => { setInviteSelection({}); setInviteTargetUid(dmPeer?.uid || null); setInviteTargetName(dmPeer?.username || null); setInviteModalVisible(true); }}
                         >
                           <Ionicons name="add-circle-outline" size={18} color="#000" />
                           <Text style={styles.inviteBtnText}>Invite</Text>
@@ -1423,22 +1546,13 @@ const ChatDetailScreen = () => {
                       </View>
                     ) : isRequested ? (
                       <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 8 }}>
-                        <TouchableOpacity
-                          style={styles.msgBtnFilled}
-                          activeOpacity={0.85}
-                          onPress={() => dmPeer && handleCancelFriendRequest(dmPeer.uid)}
-                        >
+                        <TouchableOpacity style={styles.msgBtnFilled} activeOpacity={0.85} onPress={() => handleCancelFriendRequest(dmPeer.uid)}>
                           <Ionicons name={'person-add-outline'} size={18} color={'#000'} style={{ marginRight: 4 }} />
                           <Text style={styles.msgBtnTextInverted}>Request Sent</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
                           style={[styles.inviteBtn, { marginLeft: 6 }]}
-                          onPress={() => {
-                            setInviteSelection({});
-                            setInviteTargetUid(dmPeer?.uid || null);
-                            setInviteTargetName(dmPeer?.username || null);
-                            setInviteModalVisible(true);
-                          }}
+                          onPress={() => { setInviteSelection({}); setInviteTargetUid(dmPeer?.uid || null); setInviteTargetName(dmPeer?.username || null); setInviteModalVisible(true); }}
                         >
                           <Ionicons name="add-circle-outline" size={18} color="#000" />
                           <Text style={styles.inviteBtnText}>Invite</Text>
@@ -1446,18 +1560,13 @@ const ChatDetailScreen = () => {
                       </View>
                     ) : (
                       <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 8 }}>
-                        <TouchableOpacity style={styles.msgBtn} activeOpacity={0.85} onPress={() => dmPeer && handleAddFriend(dmPeer.uid)}>
+                        <TouchableOpacity style={styles.msgBtn} activeOpacity={0.85} onPress={() => handleAddFriend(dmPeer.uid)}>
                           <Ionicons name="person-add-outline" size={18} color={TURQUOISE} style={{ marginRight: 4 }} />
                           <Text style={styles.msgBtnText}>Add Friend</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
                           style={[styles.inviteBtn, { marginLeft: 6 }]}
-                          onPress={() => {
-                            setInviteSelection({});
-                            setInviteTargetUid(dmPeer?.uid || null);
-                            setInviteTargetName(dmPeer?.username || null);
-                            setInviteModalVisible(true);
-                          }}
+                          onPress={() => { setInviteSelection({}); setInviteTargetUid(dmPeer?.uid || null); setInviteTargetName(dmPeer?.username || null); setInviteModalVisible(true); }}
                         >
                           <Ionicons name="add-circle-outline" size={18} color="#000" />
                           <Text style={styles.inviteBtnText}>Invite</Text>
@@ -1472,20 +1581,9 @@ const ChatDetailScreen = () => {
         ) : activityInfo ? (
           <>
             <TouchableOpacity onPress={() => { if (chatActivityId) navigation.navigate('ActivityDetails' as any, { activityId: chatActivityId }); }} activeOpacity={0.8}>
-              <View
-                style={{
-                  width: 38,
-                  height: 38,
-                  borderRadius: 19,
-                  borderWidth: 1,
-                  borderColor: TURQUOISE,
-                  marginLeft: 6,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  backgroundColor: 'transparent',
-                }}
-              >
-                {activityInfo?.type ? <ActivityIcon activity={activityInfo.type} size={22} color={TURQUOISE} /> : null}
+              <View style={{ width: 38, height: 38, borderRadius: 19, borderWidth: 1, borderColor: TURQUOISE, marginLeft: 6, alignItems: 'center', justifyContent: 'center', backgroundColor: 'transparent' }}>
+                {/* Safe ActivityIcon usage */}
+                {activityInfo?.type ? <ActivityIconComp activity={activityInfo.type} size={22} color={TURQUOISE} /> : null}
               </View>
             </TouchableOpacity>
             <View style={{ flex: 1, marginLeft: 10 }}>
@@ -1498,14 +1596,14 @@ const ChatDetailScreen = () => {
                 </Text>
               )}
             </View>
-            <TouchableOpacity onPress={openInfoMenu} style={styles.headerInfo}>
+            <TouchableOpacity onPress={openInfoMenu} style={styles.headerInfo} onLayout={(e) => setHeaderInfoLayout(e.nativeEvent.layout)}>
               <Ionicons name="information-circle-outline" size={26} color={TURQUOISE} />
             </TouchableOpacity>
           </>
         ) : (
           <>
             {groupMeta?.photoUrl ? (
-              <Image source={{ uri: groupMeta.photoUrl }} style={styles.headerImage} />
+              <ExpoImage source={{ uri: groupMeta.photoUrl }} style={styles.headerImage} contentFit="cover" cachePolicy="disk" />
             ) : (
               <View style={[styles.headerImage, { alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: TURQUOISE }]}>
                 <Ionicons name="people" size={22} color={TURQUOISE} />
@@ -1514,7 +1612,7 @@ const ChatDetailScreen = () => {
             <View style={{ flex: 1, marginLeft: 10 }}>
               <Text style={styles.headerTitle}>{groupMeta?.title || 'Group Chat'}</Text>
             </View>
-            <TouchableOpacity onPress={openInfoMenu} style={styles.headerInfo}>
+            <TouchableOpacity onPress={openInfoMenu} style={styles.headerInfo} onLayout={(e) => setHeaderInfoLayout(e.nativeEvent.layout)}>
               <Ionicons name="information-circle-outline" size={26} color={TURQUOISE} />
             </TouchableOpacity>
           </>
@@ -1522,319 +1620,260 @@ const ChatDetailScreen = () => {
       </View>
 
       {/* BODY */}
-      <View style={{ flex: 1 }}>
-        {/* Modals */}
-        <Modal visible={inviteModalVisible} transparent animationType="fade" onRequestClose={() => { setInviteModalVisible(false); setInviteTargetUid(null); setInviteTargetName(null); }}>
-          <View style={styles.menuOverlay}>
-            <Pressable style={StyleSheet.absoluteFill} onPress={() => { setInviteModalVisible(false); setInviteTargetUid(null); setInviteTargetName(null); }} />
-            <View style={styles.modalPanel} pointerEvents="auto">
-              <Text style={styles.modalTitle}>Invite {inviteTargetName || dmPeer?.username || 'user'}</Text>
-              {((myJoinedActivities.length === 0) && !initialHasJoinedActivities) ? (
-                <Text style={styles.placeholderText}>You haven't joined any activities yet.</Text>
-              ) : (
-                <FlatList
-                  data={myJoinedActivities}
-                  keyExtractor={(a: any) => a.id}
-                  renderItem={({ item }: any) => {
-                    const targetUid = inviteTargetUid || dmPeer?.uid;
-                    const targetAlreadyJoined = !!(targetUid && Array.isArray(item?.joinedUserIds) && item.joinedUserIds.includes(targetUid));
-                    return (
-                      <Pressable
-                        style={[styles.row, { justifyContent: 'space-between' }, targetAlreadyJoined && { opacity: 0.45 }]}
-                        onPress={() => {
-                          if (targetAlreadyJoined) {
-                            showToast(`${inviteTargetName || dmPeer?.username || 'User'} is already in this activity`);
-                            return;
-                          }
-                          setInviteSelection((prev) => ({ ...prev, [item.id]: !prev[item.id] }));
-                        }}
-                      >
-                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                          <ActivityIcon activity={item.activity} size={22} color={TURQUOISE} />
-                          <View style={{ marginLeft: 8 }}>
-                            <Text style={{ color: '#fff', fontWeight: '600' }} numberOfLines={1}>
-                              {item.activity}
-                            </Text>
-                            <Text style={{ color: '#bbb', fontSize: 12 }}>
-                              {item.date} • {item.time}
-                            </Text>
-                          </View>
-                        </View>
-                        {targetAlreadyJoined ? (
-                          <Text style={{ color: '#bbb', fontSize: 12, fontWeight: '600' }}>Joined</Text>
-                        ) : (
-                          <Ionicons
-                            name={inviteSelection[item.id] ? 'checkbox' : 'square-outline'}
-                            size={22}
-                            color={inviteSelection[item.id] ? TURQUOISE : '#666'}
-                          />
-                        )}
-                      </Pressable>
-                    );
-                  }}
-                  ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
-                  style={{ maxHeight: 320, marginVertical: 8 }}
-                />
-              )}
-              <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}>
-                <TouchableOpacity onPress={() => { setInviteModalVisible(false); setInviteTargetUid(null); setInviteTargetName(null); }} style={[styles.modalButton, { backgroundColor: '#8e2323' }]}>
-                  <Text style={{ color: '#fff', fontWeight: '600' }}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={async () => {
-                    const targetUid = inviteTargetUid || dmPeer?.uid;
-                    if (!targetUid) return;
-                    const selectedIds = Object.keys(inviteSelection).filter((id) => inviteSelection[id]);
-                    if (selectedIds.length === 0) {
-                      setInviteModalVisible(false);
-                      setInviteTargetUid(null);
-                      setInviteTargetName(null);
-                      return;
-                    }
-                    const eligible = selectedIds.filter((id) => {
-                      const act = (allActivities || []).find((a: any) => a.id === id);
-                      const joinedIds = (act as any)?.joinedUserIds || [];
-                      return !(Array.isArray(joinedIds) && joinedIds.includes(targetUid));
-                    });
-                    if (eligible.length === 0) {
-                      showToast(`${inviteTargetName || dmPeer?.username || 'User'} is already in those activities`);
-                      return;
-                    }
-                    try {
-                      setCreatingInvite(true);
-                      const { sentIds } = await sendActivityInvites(targetUid, eligible);
-                      if (sentIds.length > 0) showToast(sentIds.length === 1 ? 'Invite sent' : `Sent ${sentIds.length} invites`);
-                      else showToast('No invites sent');
-                    } catch {
-                      showToast('Could not send invites');
-                    }
-                    setCreatingInvite(false);
-                    setInviteModalVisible(false);
-                    setInviteSelection({});
-                    setInviteTargetUid(null);
-                    setInviteTargetName(null);
-                  }}
-                  style={[styles.modalButton, { backgroundColor: TURQUOISE, marginLeft: 8, opacity: creatingInvite ? 0.6 : 1 }]}
-                >
-                  <Text style={{ color: '#000', fontWeight: '700' }}>{creatingInvite ? 'Sending…' : 'Send'}</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </Modal>
-
+      <KeyboardCompatibleView setKbdVisible={setComposerKbdVisible} iosOffset={headerHeight}>
+        {/* INFO / ACTION MENUS & MODALS */}
+        {/* Top-right Info (i) overlay */}
         <Modal visible={optionsVisible} transparent animationType="fade" onRequestClose={closeInfoMenu}>
-          <View style={styles.menuOverlay}>
-            <Pressable style={StyleSheet.absoluteFill} onPress={closeInfoMenu} />
-            <View style={styles.menuPanel} pointerEvents="auto">
-              {groupMeta ? (
-                <>
-                  <TouchableOpacity style={styles.menuItem} onPress={() => { setEditVisible(true); setOptionsVisible(false); }}>
-                    <Text style={styles.menuItemText}>Edit group (title & photo)</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.menuItem} onPress={() => { setAddUsersVisible(true); setOptionsVisible(false); }}>
-                    <Text style={styles.menuItemText}>Add users</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.menuItem} onPress={() => { setParticipantsVisible(true); setOptionsVisible(false); }}>
-                    <Text style={styles.menuItemText}>View participants</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.menuItemDanger} onPress={() => { setOptionsVisible(false); handleLeaveCustomGroup(); }}>
-                    <Text style={styles.menuItemDangerText}>Leave group</Text>
-                  </TouchableOpacity>
-                </>
-              ) : (
-                <>
-                  <TouchableOpacity style={styles.menuItem} onPress={() => { setParticipantsVisible(true); setOptionsVisible(false); }}>
-                    <Text style={styles.menuItemText}>View participants</Text>
-                  </TouchableOpacity>
-                  {!!chatActivityId && (
-                    <TouchableOpacity
-                      style={styles.menuItem}
-                      onPress={() => { setOptionsVisible(false); navigation.navigate('ActivityDetails' as any, { activityId: chatActivityId }); }}
-                    >
-                      <Text style={styles.menuItemText}>Go to activity details</Text>
-                    </TouchableOpacity>
-                  )}
-                </>
-              )}
-              {chatActivityId ? (
-                <TouchableOpacity style={styles.menuItemDanger} onPress={closeInfoMenu}>
-                  <Text style={styles.menuItemDangerText}>Close</Text>
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity style={[styles.menuItem, { marginTop: 8 }]} onPress={closeInfoMenu}>
-                  <Text style={[styles.menuItemText, { color: '#aaa' }]}>Close</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          </View>
-        </Modal>
+          <Pressable style={styles.menuOverlay} onPress={closeInfoMenu} />
+          <View style={[styles.menuPanel, headerInfoLayout ? { position: 'absolute', top: headerHeight, right: Math.max(8, (screenW - (headerInfoLayout.x + headerInfoLayout.width))) } : {}]}>
+            <TouchableOpacity style={styles.menuItem} onPress={() => { setParticipantsVisible(true); closeInfoMenu(); }}>
+              <Text style={styles.menuItemText}>View Participants</Text>
+            </TouchableOpacity>
 
-        <Modal visible={!!(editVisible && groupMeta)} transparent animationType="fade" onRequestClose={() => setEditVisible(false)}>
-          <View style={styles.menuOverlay}>
-            <Pressable style={StyleSheet.absoluteFill} onPress={() => setEditVisible(false)} />
-            {groupMeta && (
-              <View style={styles.modalPanel} pointerEvents="auto">
-                <Text style={styles.modalTitle}>Edit group</Text>
-                <TouchableOpacity onPress={handlePickEditPhoto} style={styles.photoPickerRow}>
-                  {editPhotoUri || groupMeta.photoUrl ? (
-                    <Image source={{ uri: editPhotoUri || groupMeta.photoUrl }} style={styles.headerImage} />
-                  ) : (
-                    <View
-                      style={[
-                        styles.headerImage,
-                        { alignItems: 'center', justifyContent: 'center', backgroundColor: '#0c0c0c', borderWidth: 1, borderColor: TURQUOISE },
-                      ]}
-                    >
-                      <Ionicons name="image" size={18} color={TURQUOISE} />
-                    </View>
-                  )}
-                  <Text style={{ color: '#fff', marginLeft: 10 }}>Change group photo</Text>
+            {!dmPeer && (
+              <>
+                {!activityInfo && (
+                  <TouchableOpacity style={styles.menuItem} onPress={() => { setAddUsersVisible(true); closeInfoMenu(); }}>
+                    <Text style={styles.menuItemText}>Add People</Text>
+                  </TouchableOpacity>
+                )}
+
+                {!activityInfo && (
+                  <TouchableOpacity style={styles.menuItem} onPress={() => { setEditVisible(true); closeInfoMenu(); }}>
+                    <Text style={styles.menuItemText}>Edit Group</Text>
+                  </TouchableOpacity>
+                )}
+
+                {activityInfo && chatActivityId && (
+                  <TouchableOpacity style={styles.menuItem} onPress={() => { closeInfoMenu(); navigation.navigate('ActivityDetails' as any, { activityId: chatActivityId }); }}>
+                    <Text style={styles.menuItemText}>Activity Details</Text>
+                  </TouchableOpacity>
+                )}
+
+                <View style={{ height: 1, backgroundColor: '#2a2a2a', marginVertical: 4 }} />
+
+                <TouchableOpacity style={styles.menuItemDanger} onPress={handleLeaveCustomGroup}>
+                  <Text style={styles.menuItemDangerText}>Leave Chat</Text>
                 </TouchableOpacity>
-                <TextInput
-                  style={styles.input}
-                  value={editTitle}
-                  onChangeText={(t) => setEditTitle(t.slice(0, 25))}
-                  placeholder="Group title"
-                  placeholderTextColor="#888"
-                />
-                <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}>
-                  <TouchableOpacity onPress={() => setEditVisible(false)} style={[styles.modalButton, { backgroundColor: '#8e2323' }]}>
-                    <Text style={{ color: '#fff', fontWeight: '600' }}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    disabled={busy}
-                    onPress={handleSaveEdit}
-                    style={[styles.modalButton, { backgroundColor: TURQUOISE, marginLeft: 8, opacity: busy ? 0.6 : 1 }]}
-                  >
-                    <Text style={{ color: '#000', fontWeight: '700' }}>Save</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
+              </>
             )}
           </View>
         </Modal>
 
-        <Modal visible={addUsersVisible} transparent animationType="fade" onRequestClose={() => setAddUsersVisible(false)}>
-          <View style={styles.menuOverlay}>
-            <Pressable style={StyleSheet.absoluteFill} onPress={() => setAddUsersVisible(false)} />
-            <View style={styles.modalPanel} pointerEvents="auto">
-              <Text style={styles.modalTitle}>Add users</Text>
-              <Text style={{ color: '#aaa', marginBottom: 8 }}>Select from your connections</Text>
-              <FlatList
-                data={friends.filter((f) => !participantIds.includes(f.uid))}
-                keyExtractor={(i) => i.uid}
-                style={{ maxHeight: 260 }}
-                renderItem={({ item }) => (
-                  <TouchableOpacity style={styles.row} onPress={() => setAddingUsersMap((prev) => ({ ...prev, [item.uid]: !prev[item.uid] }))}>
-                    <Image
-                      source={{ uri: item.photo || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(item.username) }}
-                      style={styles.rowImage}
-                    />
-                    <Text style={styles.rowText}>{item.username}</Text>
-                    <Ionicons name={addingUsersMap[item.uid] ? 'checkbox' : 'square-outline'} size={22} color={TURQUOISE} />
-                  </TouchableOpacity>
-                )}
-                ListEmptyComponent={<Text style={{ color: '#777', textAlign: 'center', marginVertical: 8 }}>No available friends to add</Text>}
-              />
-              <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}>
-                <TouchableOpacity
-                  onPress={() => {
-                    setAddUsersVisible(false);
-                    setAddingUsersMap({});
-                  }}
-                  style={[styles.modalButton, { backgroundColor: '#8e2323' }]}
-                >
-                  <Text style={{ color: '#fff', fontWeight: '600' }}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  disabled={busy}
-                  onPress={handleAddUsers}
-                  style={[styles.modalButton, { backgroundColor: TURQUOISE, marginLeft: 8, opacity: busy ? 0.6 : 1 }]}
-                >
-                  <Text style={{ color: '#000', fontWeight: '700' }}>Add</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </Modal>
-
-        <Modal visible={participantsVisible} transparent animationType="fade" onRequestClose={() => setParticipantsVisible(false)}>
-          <View style={styles.menuOverlay}>
-            <Pressable style={StyleSheet.absoluteFill} onPress={() => setParticipantsVisible(false)} />
-            <View style={styles.modalPanel} pointerEvents="auto">
-              <Text style={styles.modalTitle}>Participants</Text>
-              <FlatList
-                data={participants}
-                keyExtractor={(i) => i.uid}
-                style={{ maxHeight: 300 }}
-                renderItem={({ item }) => {
-                  const me = auth.currentUser?.uid;
-                  const isMe = item.uid === me;
-                  return (
-                    <View style={[styles.row, { alignItems: 'center' }]}>
-                      <TouchableOpacity onPress={() => goToUserProfile(item.uid)} style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
-                        <Image
-                          source={{ uri: item.photo || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(item.username) }}
-                          style={styles.rowImage}
-                        />
-                        <Text style={[styles.rowText, { flex: 1 }]}>
-                          {item.username}
-                          {isMe ? ' (You)' : ''}
-                        </Text>
-                      </TouchableOpacity>
-                      {!isMe && (
-                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                          {myFriendIds.includes(item.uid) ? (
-                            <View style={styles.msgBtnFilled}>
-                              <Ionicons name={'checkmark-done-outline'} size={18} color={'#000'} style={{ marginRight: 6 }} />
-                              <Text style={styles.msgBtnTextInverted}>Connected</Text>
-                            </View>
-                          ) : myRequestsSent.includes(item.uid) ? (
-                            <TouchableOpacity
-                              style={styles.msgBtnFilled}
-                              activeOpacity={0.85}
-                              onPress={() => handleCancelFriendRequest(item.uid)}
-                            >
-                              <Ionicons name={'person-add-outline'} size={18} color={'#000'} style={{ marginRight: 6 }} />
-                              <Text style={styles.msgBtnTextInverted}>Request Sent</Text>
-                            </TouchableOpacity>
-                          ) : (
-                            <TouchableOpacity style={styles.msgBtn} activeOpacity={0.85} onPress={() => handleAddFriend(item.uid)}>
-                              <Ionicons name="person-add-outline" size={18} color={TURQUOISE} style={{ marginRight: 6 }} />
-                              <Text style={styles.msgBtnText}>Add Friend</Text>
-                            </TouchableOpacity>
-                          )}
-
-                          <TouchableOpacity
-                            style={[styles.inviteBtn, { marginLeft: 6 }]}
-                            onPress={() => {
-                              setInviteSelection({});
-                              setInviteTargetUid(item.uid);
-                              setInviteTargetName(item.username);
-                              setInviteModalVisible(true);
-                            }}
-                          >
-                            <Ionicons name="add-circle-outline" size={18} color="#000" />
-                            <Text style={styles.inviteBtnText}>Invite</Text>
-                          </TouchableOpacity>
-                        </View>
-                      )}
+        {/* Participants list (anchored under header) */}
+        {participantsVisible && (
+          <Animated.View style={[styles.modalPanel, { position: 'absolute', top: headerHeight, width: '92%', maxHeight: '75%', alignSelf: 'center', zIndex: 15000 }]}> 
+            <Text style={styles.modalTitle}>Participants</Text>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {participants.map((p) => {
+                const isFriend = myFriendIds.includes(p.uid);
+                const isRequested = myRequestsSent.includes(p.uid);
+                const isMe = p.uid === myId;
+                return (
+                  <View key={p.uid} style={styles.row}>
+                    <TouchableOpacity onPress={() => goToUserProfile(p.uid)} activeOpacity={0.8}>
+                      <ExpoImage source={{ uri: p.photo || ('https://ui-avatars.com/api/?name=' + encodeURIComponent(p.username || 'U')) }} style={styles.rowImage} contentFit="cover" cachePolicy="disk" />
+                    </TouchableOpacity>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.rowText}>{p.username}{isMe ? ' (You)' : ''}</Text>
                     </View>
+                    {!isMe && (
+                      <>
+                        <TouchableOpacity style={[styles.msgBtn, { marginRight: 6 }]} onPress={() => handleMessageUser(p.uid)}>
+                          <Ionicons name="chatbubble-ellipses-outline" size={16} color={TURQUOISE} style={{ marginRight: 4 }} />
+                          <Text style={styles.msgBtnText}>Message</Text>
+                        </TouchableOpacity>
+                        {isFriend ? (
+                          <View style={styles.msgBtnFilled}>
+                            <Ionicons name="checkmark-done-outline" size={16} color={'#000'} style={{ marginRight: 4 }} />
+                            <Text style={styles.msgBtnTextInverted}>Friends</Text>
+                          </View>
+                        ) : isRequested ? (
+                          <TouchableOpacity style={styles.msgBtnFilled} onPress={() => handleCancelFriendRequest(p.uid)}>
+                            <Ionicons name="person-add-outline" size={16} color={'#000'} style={{ marginRight: 4 }} />
+                            <Text style={styles.msgBtnTextInverted}>Cancel</Text>
+                          </TouchableOpacity>
+                        ) : (
+                          <TouchableOpacity style={styles.msgBtn} onPress={() => handleAddFriend(p.uid)}>
+                            <Ionicons name="person-add-outline" size={16} color={TURQUOISE} style={{ marginRight: 4 }} />
+                            <Text style={styles.msgBtnText}>Add</Text>
+                          </TouchableOpacity>
+                        )}
+                      </>
+                    )}
+                  </View>
+                );
+              })}
+            </ScrollView>
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 8 }}>
+              <TouchableOpacity style={[styles.modalButton, { backgroundColor: TURQUOISE }]} onPress={() => setParticipantsVisible(false)}>
+                <Text style={{ color: '#000', fontWeight: '700' }}>Close</Text>
+              </TouchableOpacity>
+            </View>
+          </Animated.View>
+        )}
+
+        {/* Add users (anchored under header) */}
+        {addUsersVisible && (
+          <Animated.View style={[styles.modalPanel, { position: 'absolute', top: headerHeight, width: '92%', maxHeight: '75%', alignSelf: 'center', zIndex: 15000 }]}> 
+            <Text style={styles.modalTitle}>Add people</Text>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {friends
+                .filter(f => !participantIds.includes(f.uid))
+                .map((f) => {
+                  const chosen = !!addingUsersMap[f.uid];
+                  return (
+                    <TouchableOpacity key={f.uid} style={[styles.row, { justifyContent: 'space-between' }]} onPress={() => setAddingUsersMap(m => ({ ...m, [f.uid]: !m[f.uid] }))} activeOpacity={0.8}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <ExpoImage source={{ uri: f.photo || ('https://ui-avatars.com/api/?name=' + encodeURIComponent(f.username || 'U')) }} style={styles.rowImage} contentFit="cover" cachePolicy="disk" />
+                        <Text style={styles.rowText}>{f.username}</Text>
+                      </View>
+                      <View style={[styles.chip, { backgroundColor: chosen ? TURQUOISE : '#2a2a2a' }]}>
+                        <Text style={{ color: chosen ? '#000' : '#ddd', fontWeight: '700' }}>{chosen ? 'Selected' : 'Select'}</Text>
+                      </View>
+                    </TouchableOpacity>
                   );
-                }}
-              />
-              <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}>
+                })}
+              {friends.filter(f => !participantIds.includes(f.uid)).length === 0 && (
+                <Text style={{ color: '#aaa', textAlign: 'center', paddingVertical: 16 }}>No friends available to add.</Text>
+              )}
+            </ScrollView>
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 8 }}>
+              <TouchableOpacity style={[styles.modalButton, { marginRight: 8, backgroundColor: '#2a2a2a' }]} onPress={() => setAddUsersVisible(false)}>
+                <Text style={{ color: '#fff', fontWeight: '700' }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity disabled={busy} style={[styles.modalButton, { backgroundColor: TURQUOISE, opacity: busy ? 0.6 : 1 }]} onPress={handleAddUsers}>
+                <Text style={{ color: '#000', fontWeight: '700' }}>{busy ? 'Adding…' : 'Add'}</Text>
+              </TouchableOpacity>
+            </View>
+          </Animated.View>
+        )}
+
+        {/* Edit group (anchored under header) */}
+        {editVisible && (
+          <Animated.View style={[styles.modalPanel, { position: 'absolute', top: headerHeight, width: '92%', alignSelf: 'center', zIndex: 15000 }]}> 
+            <Text style={styles.modalTitle}>Edit group</Text>
+            <View style={styles.photoPickerRow}>
+              {groupMeta?.photoUrl || editPhotoUri ? (
+                <ExpoImage source={{ uri: (editPhotoUri || groupMeta?.photoUrl)! }} style={{ width: 48, height: 48, borderRadius: 24, marginRight: 10, borderWidth: 1, borderColor: TURQUOISE }} contentFit="cover" />
+              ) : (
+                <View style={{ width: 48, height: 48, borderRadius: 24, marginRight: 10, borderWidth: 1, borderColor: TURQUOISE, alignItems: 'center', justifyContent: 'center' }}>
+                  <Ionicons name="people" size={22} color={TURQUOISE} />
+                </View>
+              )}
+              <TouchableOpacity onPress={handlePickEditPhoto} style={[styles.modalButton, { backgroundColor: '#2a2a2a' }]}>
+                <Text style={{ color: '#fff', fontWeight: '700' }}>Change Photo</Text>
+              </TouchableOpacity>
+            </View>
+            <TextInput
+              style={[styles.input, { marginTop: 8 }]}
+              placeholder="Group title"
+              placeholderTextColor="#999"
+              value={editTitle}
+              onChangeText={setEditTitle}
+              maxLength={25}
+            />
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}>
+              <TouchableOpacity style={[styles.modalButton, { marginRight: 8, backgroundColor: '#2a2a2a' }]} onPress={() => setEditVisible(false)}>
+                <Text style={{ color: '#fff', fontWeight: '700' }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity disabled={busy} style={[styles.modalButton, { backgroundColor: TURQUOISE, opacity: busy ? 0.6 : 1 }]} onPress={handleSaveEdit}>
+                <Text style={{ color: '#000', fontWeight: '700' }}>{busy ? 'Saving…' : 'Save'}</Text>
+              </TouchableOpacity>
+            </View>
+          </Animated.View>
+        )}
+
+        {/* Invite panel anchored under header (bottom-right of header) */}
+        {inviteModalVisible && (
+          <>
+            {/* backdrop: covers chat area; tapping closes invite */}
+            <Pressable style={{ position: 'absolute', left: 0, right: 0, top: headerHeight, bottom: 0 }} onPress={() => { setInviteModalVisible(false); setInviteSelection({}); }}>
+              <Animated.View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', opacity: backdropAnim }} />
+            </Pressable>
+
+            <Animated.View
+              pointerEvents="box-none"
+              style={[
+                styles.invitePanel,
+                {
+                  top: headerHeight, // align directly to bottom of header
+                  opacity: inviteAnim,
+                  transform: [{ scale: inviteAnim.interpolate({ inputRange: [0, 1], outputRange: [0.98, 1] }) }],
+                },
+              ]}
+            >
+              <View style={[styles.modalPanel, { maxHeight: 320, width: 320 }]}> 
+              <Text style={styles.modalTitle}>Invite {inviteTargetName ? inviteTargetName : 'user'}</Text>
+              {myJoinedActivities.length === 0 ? (
+                <Text style={{ color: '#aaa', marginBottom: 6 }}>You haven't joined any activities yet.</Text>
+              ) : null}
+              <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 220 }}>
+                {myJoinedActivities.map((a: any) => {
+                  const chosen = !!inviteSelection[a.id];
+                  const alreadyJoined = Array.isArray(a.joinedUserIds) && !!inviteTargetUid && a.joinedUserIds.includes(inviteTargetUid);
+                  return (
+                    <TouchableOpacity
+                      key={a.id}
+                      style={[styles.row, { justifyContent: 'space-between', opacity: alreadyJoined ? 0.5 : 1 }]}
+                      onPress={alreadyJoined ? undefined : () => setInviteSelection(s => ({ ...s, [a.id]: !s[a.id] }))}
+                      activeOpacity={alreadyJoined ? 1 : 0.8}
+                    >
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <View style={{ width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: TURQUOISE, alignItems: 'center', justifyContent: 'center', marginRight: 10 }}>
+                          {a.activity ? <ActivityIconComp activity={a.activity} size={18} color={TURQUOISE} /> : <Ionicons name="medal-outline" size={18} color={TURQUOISE} />}
+                        </View>
+                        <View>
+                          <Text style={styles.rowText}>{a.name || a.activity || 'Activity'}</Text>
+                          {a.date && a.time ? <Text style={{ color: '#aaa', fontSize: 12 }}>{normalizeDateFormat(a.date)} • {a.time}</Text> : null}
+                        </View>
+                      </View>
+                      {/* right side: Joined label or checkbox */}
+                      {alreadyJoined ? (
+                        <View style={{ paddingHorizontal: 10, paddingVertical: 6 }}>
+                          <Text style={{ color: '#9a9a9a', fontWeight: '700', fontSize: 12 }}>Joined</Text>
+                        </View>
+                      ) : (
+                        <Pressable onPress={() => setInviteSelection(s => ({ ...s, [a.id]: !s[a.id] }))} style={{ padding: 6 }}>
+                          <View style={{ width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: chosen ? TURQUOISE : '#666', backgroundColor: chosen ? TURQUOISE : 'transparent', alignItems: 'center', justifyContent: 'center' }}>
+                            {chosen ? <Ionicons name="checkmark" size={14} color={chosen ? '#000' : '#fff'} /> : null}
+                          </View>
+                        </Pressable>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+              <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 8 }}>
+                <TouchableOpacity style={[styles.modalButton, { marginRight: 8, backgroundColor: '#2a2a2a' }]} onPress={() => setInviteModalVisible(false)}>
+                  <Text style={{ color: '#fff', fontWeight: '700' }}>Cancel</Text>
+                </TouchableOpacity>
                 <TouchableOpacity
-                  onPress={() => setParticipantsVisible(false)}
-                  style={[styles.modalButton, { backgroundColor: '#1e1e1e', borderColor: '#444', borderWidth: 1 }]}
+                  disabled={creatingInvite || !inviteTargetUid}
+                  style={[styles.modalButton, { backgroundColor: TURQUOISE, opacity: creatingInvite ? 0.6 : 1 }]}
+                  onPress={async () => {
+                    try {
+                      setCreatingInvite(true);
+                      const selectedIds = Object.keys(inviteSelection).filter(id => inviteSelection[id]);
+                      if (!selectedIds.length || !inviteTargetUid) { setCreatingInvite(false); return; }
+                      await sendActivityInvites(inviteTargetUid, selectedIds);
+                      setInviteModalVisible(false);
+                      setInviteSelection({});
+                      showToast('Invited!');
+                    } catch (e: any) {
+                      Alert.alert('Invite failed', e?.message || 'Please try again.');
+                    } finally {
+                      setCreatingInvite(false);
+                    }
+                  }}
                 >
-                  <Text style={{ color: '#ccc', fontWeight: '600' }}>Close</Text>
+                  <Text style={{ color: '#000', fontWeight: '700' }}>{creatingInvite ? 'Sending…' : 'Send Invites'}</Text>
                 </TouchableOpacity>
               </View>
             </View>
-          </View>
-        </Modal>
+          </Animated.View>
+          </>
+        )}
 
         {/* Messages list */}
         {!isMessagesReady ? (
@@ -1843,104 +1882,46 @@ const ChatDetailScreen = () => {
           </View>
         ) : (
           <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
-            <FlatList
-              ref={flatListRef}
+            <ListComponent
+              ref={listRef as any}
               data={renderMessages}
               keyExtractor={keyExtractor}
-              contentContainerStyle={[styles.messageList, { paddingBottom: bottomSpacer }]}
               renderItem={renderItem}
-              keyboardDismissMode="interactive"
-              keyboardShouldPersistTaps="handled"
-              removeClippedSubviews={Platform.OS === 'android'}
-              initialNumToRender={PAGE_SIZE}
-              maxToRenderPerBatch={15}
-              windowSize={11}
-              updateCellsBatchingPeriod={50}
-              maintainVisibleContentPosition={{
-                minIndexForVisible: 0,
-                autoscrollToTopThreshold: 10,
-              }}
-              onContentSizeChange={(_w, h) => {
-                const newH = h || 0;
-                const oldH = contentHeightRef.current || 0;
-                contentHeightRef.current = newH;
-
-                if (adjustingScrollRef.current) {
-                  // Use the previously-captured height (prevContentHeightRef) and the saved offset
-                  const delta = newH - (prevContentHeightRef.current || oldH);
-                  const baseOffset = savedScrollOffsetBeforePrependRef.current ?? (scrollOffsetRef.current || 0);
-
-                  requestAnimationFrame(() => {
-                    flatListRef.current?.scrollToOffset({
-                      offset: (baseOffset || 0) + (delta || 0),
-                      animated: false,
-                    });
-                  });
-
-                  adjustingScrollRef.current = false;
-                  prevContentHeightRef.current = newH;
-                  savedScrollOffsetBeforePrependRef.current = null;
-                } else if (userAtBottomRef.current && newH > oldH) {
-                  requestAnimationFrame(() => {
-                    flatListRef.current?.scrollToEnd({ animated: false });
-                  });
-                }
-              }}
-              onScroll={(e) => {
-                const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
-                scrollOffsetRef.current = contentOffset.y || 0;
-                contentHeightRef.current = contentSize?.height || contentHeightRef.current;
-                
-                // Better bottom detection
-                const maxScroll = contentSize.height - layoutMeasurement.height;
-                const isAtBottom = maxScroll <= 0 || contentOffset.y >= maxScroll - 20;
-                
-                userAtBottomRef.current = isAtBottom;
-                setShowScrollFab(!isAtBottom);
-                
-                if (contentOffset.y <= 100 && !loadingOlder) {
-                  loadOlderMessages().catch(() => {});
-                }
-              }}
+              estimatedItemSize={84}
+              onScroll={onScroll}
               scrollEventThrottle={16}
+              contentContainerStyle={styles.messageList}
+              ListHeaderComponent={loadingOlder ? (
+                <View style={{ paddingVertical: 8, alignItems: 'center' }}>
+                  <ActivityIndicator size="small" color={TURQUOISE} />
+                </View>
+              ) : <View style={{ height: 6 }} />}
+              ListFooterComponent={typingLabel ? (
+                <View style={styles.typingIndicatorContainer}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <TypingDots />
+                    <Text style={{ color: '#9adfe2', marginLeft: 8, fontSize: 13 }}>{typingLabel}</Text>
+                  </View>
+                </View>
+              ) : <View style={{ height: 4 }} />}
+              onContentSizeChange={onContentSizeChange}
+              maintainVisibleContentPosition={{ autoscrollToTopThreshold: 10, animateAutoScrollToBottom: true }}
+              drawDistance={screenH * 2}
+              removeClippedSubviews={Platform.OS === 'android'}
               onLayout={() => {
                 if (isInitialLoad.current) {
-                  requestAnimationFrame(() => {
-                    flatListRef.current?.scrollToEnd({ animated: false });
-                    userAtBottomRef.current = true;
-                  });
+                  requestAnimationFrame(() => { listRef.current?.scrollToEnd({ animated: false }); userAtBottomRef.current = true; });
                 }
               }}
-              ListHeaderComponent={
-                loadingOlder ? (
-                  <View style={{ paddingVertical: 8, alignItems: 'center' }}>
-                    <ActivityIndicator size="small" color={TURQUOISE} />
-                  </View>
-                ) : (
-                  <View style={{ height: 6 }} />
-                )
-              }
-              ListFooterComponent={
-                typingLabel ? (
-                  <View style={{ paddingHorizontal: 14, paddingVertical: 6, alignItems: 'flex-start' }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                      <TypingDots />
-                      <Text style={{ color: '#9adfe2', marginLeft: 8, fontSize: 12 }}>{typingLabel}</Text>
-                    </View>
-                  </View>
-                ) : <View style={{ height: 6 }} />
-              }
             />
           </Animated.View>
         )}
 
         {/* Composer */}
-        <Animated.View
+        <View
           style={[
             styles.inputContainer,
-            {
-              paddingBottom: Animated.add(kbHeight, Math.max(insets.bottom, 8)),
-            },
+            { paddingBottom: composerKbdVisible ? 8 : Math.max(insets.bottom, 8), backgroundColor: BG }
           ]}
         >
           {replyTo && (
@@ -1965,7 +1946,7 @@ const ChatDetailScreen = () => {
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 {selectedImages.map((uri) => (
                   <View key={uri} style={styles.previewThumbWrap}>
-                    <Image source={{ uri }} style={styles.previewThumb} />
+                    <ExpoImage source={{ uri }} style={styles.previewThumb} contentFit="cover" cachePolicy="disk" />
                     <TouchableOpacity onPress={() => handleRemoveImage(uri)} style={styles.previewRemoveBtn} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
                       <Ionicons name="close" size={14} color="#fff" />
                     </TouchableOpacity>
@@ -1991,10 +1972,7 @@ const ChatDetailScreen = () => {
               placeholder="Message..."
               placeholderTextColor="#888"
               value={messageText}
-              onChangeText={(t) => {
-                setMessageText(t);
-                if (t.trim().length) pingTyping();
-              }}
+              onChangeText={(t) => { setMessageText(t); if (t.trim().length) pingTyping(); }}
               autoCapitalize="sentences"
               autoCorrect
               textContentType="none"
@@ -2013,31 +1991,43 @@ const ChatDetailScreen = () => {
               <Ionicons name="send" size={20} color="#000" />
             </TouchableOpacity>
           </View>
+        </View>
+
+        {/* Scroll-to-bottom FAB */}
+        <Animated.View
+          style={[
+            styles.scrollFab,
+            {
+              opacity: scrollFabAnim,
+              transform: [
+                { scale: scrollFabAnim },
+                { translateY: scrollFabAnim.interpolate({ inputRange: [0, 1], outputRange: [20, 0] }) },
+              ],
+            },
+          ]}
+          pointerEvents={showScrollFab ? 'auto' : 'none'}
+        >
+          <TouchableOpacity
+            onPress={() => { listRef.current?.scrollToEnd({ animated: true }); userAtBottomRef.current = true; Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {}); }}
+            activeOpacity={0.85}
+            style={{ width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' }}
+          >
+            <Ionicons name="chevron-down" size={22} color="#000" />
+          </TouchableOpacity>
         </Animated.View>
 
-        {showScrollFab && (
-          <TouchableOpacity
-            onPress={() => { flatListRef.current?.scrollToEnd({ animated: true }); userAtBottomRef.current = true; }}
-            style={styles.scrollFab}
-            activeOpacity={0.85}
-          >
-            <Ionicons name="chevron-down" size={20} color="#000" />
-          </TouchableOpacity>
-        )}
-
-        {/* Reaction picker */}
+        {/* Reaction picker (anchored beside bubble) */}
         <Modal visible={!!reactionTarget} transparent animationType="none" onRequestClose={closeReactions}>
           <Pressable style={styles.overlayTapClose} onPress={closeReactions} />
           <Animated.View
             style={[
               styles.reactionBar,
               {
-                transform: [
-                  { translateY: -20 },
-                  { scale: reactionAnim.interpolate({ inputRange: [0, 1], outputRange: [0.85, 1] }) },
-                ],
+                transform: [{ scale: reactionAnim }],
                 opacity: reactionAnim,
-                left: screenW * 0.5 - 130,
+                top: reactionAnchor?.y ?? 140,
+                left: reactionAnchor?.side === 'left' ? 12 : undefined,
+                right: reactionAnchor?.side === 'right' ? 12 : undefined,
               },
             ]}
           >
@@ -2062,10 +2052,7 @@ const ChatDetailScreen = () => {
                 <Text style={styles.reactionActionText}>Copy</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                onPress={() => {
-                  if (reactionTarget) setReplyTo(reactionTarget);
-                  closeReactions();
-                }}
+                onPress={() => { if (reactionTarget) setReplyTo(reactionTarget); closeReactions(); }}
                 style={styles.reactionAction}
               >
                 <Ionicons name="return-down-back-outline" size={16} color="#ddd" />
@@ -2081,7 +2068,7 @@ const ChatDetailScreen = () => {
             <TouchableOpacity onPress={() => setViewerOpen(false)} style={styles.viewerCloseBtn}>
               <Ionicons name="close" size={24} color="#000" />
             </TouchableOpacity>
-            <FlatList
+            <RNFlatList
               horizontal
               pagingEnabled
               data={imageMessages}
@@ -2090,7 +2077,7 @@ const ChatDetailScreen = () => {
               getItemLayout={(_d, i) => ({ length: Dimensions.get('window').width, offset: Dimensions.get('window').width * i, index: i })}
               renderItem={({ item }) => (
                 <View style={{ width: Dimensions.get('window').width, justifyContent: 'center', alignItems: 'center' }}>
-                  <Image source={{ uri: item.text }} style={{ width: '100%', height: '100%', resizeMode: 'contain' }} />
+                  <ExpoImage source={{ uri: item.text }} style={{ width: '100%', height: '100%' }} contentFit="contain" cachePolicy="disk" />
                 </View>
               )}
             />
@@ -2118,7 +2105,7 @@ const ChatDetailScreen = () => {
         >
           <Text style={{ color: '#fff', fontSize: 14, textAlign: 'center' }}>{toastMsg}</Text>
         </Animated.View>
-      </View>
+      </KeyboardCompatibleView>
     </SafeAreaView>
   );
 };
@@ -2142,11 +2129,7 @@ const styles = StyleSheet.create({
   headerTitle: { color: '#fff', fontWeight: 'bold', fontSize: 17, letterSpacing: 0.2 },
   headerInfo: { padding: 4, marginLeft: 8 },
 
-  messageList: {
-    paddingHorizontal: 10,
-    paddingTop: 6,
-    paddingBottom: 0,
-  },
+  messageList: { paddingHorizontal: 10, paddingTop: 6, paddingBottom: 8 },
 
   messageBubble: {
     paddingHorizontal: 12,
@@ -2159,21 +2142,34 @@ const styles = StyleSheet.create({
 
   messageText: { fontSize: 16, color: '#fff' },
   userMessageText: { color: '#000' },
-  messageTime: { fontSize: 11, color: '#cfcfcf', alignSelf: 'flex-end', marginTop: 4 },
+  messageTime: { fontSize: 11, color: '#cfcfcf' },
   userMessageTime: { color: '#004a4a' },
 
-  imageTime: { position: 'absolute', bottom: 4, backgroundColor: 'rgba(0,0,0,0.7)', paddingHorizontal: 4, paddingVertical: 2, borderRadius: 4, fontSize: 11, color: '#fff' },
-  imageTimeRight: { right: 4 },
-  imageTimeLeft: { left: 4 },
+  messageTimeContainer: {
+    position: 'absolute',
+    bottom: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  messageTimeRight: { right: 4 },
+  messageTimeLeft: { left: 4 },
+  imageTime: { fontSize: 11, color: '#fff', marginRight: 2 },
 
   media: { width: 220, height: 160, borderRadius: 12, marginVertical: 2, backgroundColor: '#000' },
   placeholderText: { color: '#888', fontSize: 14 },
+
+  typingIndicatorContainer: { paddingHorizontal: 14, paddingVertical: 8 },
 
   inputContainer: {
     borderTopWidth: 1,
     borderTopColor: '#1ae9ef22',
     backgroundColor: SURFACE,
     paddingHorizontal: 10,
+    paddingTop: 8,
   },
 
   replyHeader: {
@@ -2185,7 +2181,6 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    marginTop: 8,
     marginBottom: 6,
   },
 
@@ -2212,7 +2207,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  inputRow: { flexDirection: 'row', alignItems: 'center' },
+  inputRow: { flexDirection: 'row', alignItems: 'center', paddingBottom: 6 },
   inputCircleButton: {
     width: 36, height: 36, borderRadius: 18,
     backgroundColor: CARD,
@@ -2227,7 +2222,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     marginHorizontal: 8,
     fontSize: 16,
-    height: 38,
+    minHeight: 38,
+    maxHeight: 100,
+    paddingTop: Platform.OS === 'ios' ? 10 : 8,
   },
   sendButton: {
     backgroundColor: TURQUOISE,
@@ -2289,7 +2286,6 @@ const styles = StyleSheet.create({
   rowText: { color: '#fff', fontSize: 15 },
   chip: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16 },
 
-  // DM header action buttons
   inviteBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: TURQUOISE, borderRadius: 16, paddingVertical: 5, paddingHorizontal: 8 },
   inviteBtnText: { color: '#000', fontWeight: '700', fontSize: 11, marginLeft: 6 },
   msgBtn: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: TURQUOISE, borderRadius: 16, paddingVertical: 5, paddingHorizontal: 8 },
@@ -2304,28 +2300,25 @@ const styles = StyleSheet.create({
   // Scroll to bottom FAB
   scrollFab: {
     position: 'absolute',
-    right: 14,
-    bottom: 96,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    right: 16,
+    bottom: 90,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: TURQUOISE,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: '#000',
     shadowColor: '#000',
-    shadowOpacity: 0.22,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 5,
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 8,
   },
 
   // reaction picker
   overlayTapClose: { position: 'absolute', top: 0, bottom: 0, left: 0, right: 0 },
   reactionBar: {
     position: 'absolute',
-    bottom: 140,
     width: 260,
     alignSelf: 'center',
     backgroundColor: '#101010',
@@ -2344,6 +2337,19 @@ const styles = StyleSheet.create({
   reactionDivider: { height: 1, backgroundColor: '#2a2a2a', marginVertical: 6 },
   reactionAction: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 6 },
   reactionActionText: { color: '#ddd', marginLeft: 6, fontSize: 13 },
+  invitePanel: {
+    position: 'absolute',
+    right: 10,
+    width: 320,
+    maxWidth: 420,
+    zIndex: 20000,
+    elevation: 24,
+    // small shadow for iOS
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+  },
 });
 
 export default React.memo(ChatDetailScreen);

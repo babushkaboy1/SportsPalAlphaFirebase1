@@ -7,6 +7,7 @@ import {
   StyleSheet,
   ScrollView,
   Alert,
+  Linking,
   Platform,
   StatusBar,
   Modal,
@@ -15,6 +16,7 @@ import {
   Image,
   Pressable,
   Keyboard,
+  
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -28,7 +30,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { createActivity, joinActivity, fetchAllActivities } from '../utils/firestoreActivities';
-import { normalizeDateFormat } from '../utils/storage';
+import { normalizeDateFormat, uploadGpxFile } from '../utils/storage';
 import { auth } from '../firebaseConfig'; // Add this import
 import * as Haptics from 'expo-haptics';
 
@@ -89,6 +91,30 @@ const CreateGameScreen = () => {
   });
   const [maxParticipants, setMaxParticipants] = useState<number>(10);
   const [selectedCoords, setSelectedCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [gpxFile, setGpxFile] = useState<any>(null);
+  const [gpxUploading, setGpxUploading] = useState(false);
+  const [gpxStats, setGpxStats] = useState<any>({
+    distance: '',
+    ascent: '',
+    difficulty: '',
+    descent: '',
+    maxElevation: '',
+    trailRank: '',
+    minElevation: '',
+    routeType: '',
+  });
+
+  // Keyboard state for adjusting ScrollView padding so inputs appear above keyboard
+  const [keyboardHeight, setKeyboardHeight] = useState<number>(0);
+
+  // Refs for route stats inputs so 'Next' moves to the next field
+  const distanceRef = useRef<any>(null);
+  const ascentRef = useRef<any>(null);
+  const difficultyRef = useRef<any>(null);
+  const descentRef = useRef<any>(null);
+  const maxElevationRef = useRef<any>(null);
+  const trailRankRef = useRef<any>(null);
+  const routeTypeRef = useRef<any>(null);
 
   // Picker modals
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -106,6 +132,14 @@ const CreateGameScreen = () => {
     const timeout = setTimeout(() => setIsReady(true), 500);
     return () => clearTimeout(timeout);
   }, []);
+
+  // Clear GPX when switching away from Hiking
+  useEffect(() => {
+    if (sport !== 'Hiking') {
+      setGpxFile(null);
+      setGpxStats({ distance: '', ascent: '', difficulty: '', descent: '', maxElevation: '', trailRank: '', minElevation: '', routeType: '' });
+    }
+  }, [sport]);
 
   useEffect(() => {
     const setAddressFromCoords = async () => {
@@ -136,6 +170,9 @@ const CreateGameScreen = () => {
     setDescription('');
     setSport('');
     setLocation('');
+    setGpxFile(null);
+    setGpxUploading(false);
+    setGpxStats({ distance: '', ascent: '', difficulty: '', descent: '', maxElevation: '', trailRank: '', minElevation: '', routeType: '' });
     // Restore defaults for date/time
   setDate(normalizeDateFormat(new Date().toISOString().split('T')[0]));
     const now = new Date();
@@ -172,6 +209,47 @@ const CreateGameScreen = () => {
     } else {
       // Just collapse header
       Animated.timing(pullAnim, { toValue: 0, duration: 180, useNativeDriver: false }).start();
+    }
+  };
+
+  // GPX picking & upload
+  const pickGpxFile = async () => {
+    try {
+      // dynamic import so app doesn't crash if expo-document-picker isn't installed
+      // @ts-ignore - optional dependency, dynamically imported
+      const DocumentPicker: any = await import('expo-document-picker');
+      const res = await DocumentPicker.getDocumentAsync({ type: '*/*' });
+      // Support both legacy API ({ type: 'success'|'cancel', uri, name })
+      // and newer API ({ assets: [{ uri, name, ... }], canceled })
+      if (res?.type === 'cancel' || res?.canceled === true) return;
+
+      // Prefer direct uri, then assets[0].uri
+      const uri: string | null = (res as any).uri ?? (res as any)?.assets?.[0]?.uri ?? null;
+      if (!uri) {
+        console.warn('pickGpxFile: picker returned no uri', res);
+        Alert.alert('Unable to read file', 'The selected file did not return a usable URI. Please try again or choose a different file.');
+        return;
+      }
+
+      const assetName = (res as any).name ?? (res as any)?.assets?.[0]?.name;
+      const name = assetName || (uri && uri.split('/').pop()) || 'route.gpx';
+      if (!name.toLowerCase().endsWith('.gpx')) {
+        Alert.alert('Invalid file', 'Please choose a .gpx file.');
+        return;
+      }
+      // Start upload
+      const uid = auth.currentUser?.uid;
+      if (!uid) {
+        Alert.alert('Not signed in', 'Please sign in to upload GPX files.');
+        return;
+      }
+  // Do NOT upload immediately. Store selection locally and upload when creating the activity.
+  setGpxFile({ uri, name });
+    } catch (err: any) {
+      console.warn('pickGpxFile error', err);
+      Alert.alert('Upload failed', err?.message || 'Could not upload GPX file.');
+    } finally {
+      setGpxUploading(false);
     }
   };
 
@@ -214,26 +292,65 @@ const CreateGameScreen = () => {
     // Get actual username from profile context (or fallback to 'Unknown')
     const username = profile?.username || 'Unknown';
 
-    // Firestore create payload must include creatorId and initial joinedUserIds
-    const newGame = {
-      description: safeDescription,
-      activity: sport,
-      location,
-      date,
-      time,
-      creator: username, // always use actual username
-      creatorId: uid,
-      joinedUserIds: [uid],
-      joinedCount: 1,
-      maxParticipants,
-      distance: 0,
-      latitude,
-      longitude,
-    };
-
     try {
       setCreating(true);
-      const newId = await createActivity(newGame as any); // Save to Firestore and get id
+      // If a GPX was selected but not yet uploaded, upload it now and attach the storage info
+      let effectiveGpx: any = gpxFile ? { ...gpxFile } : null;
+      if (effectiveGpx && !effectiveGpx.storagePath) {
+        setGpxUploading(true);
+        try {
+          const dest = `gpx/${uid}/${Date.now()}_${effectiveGpx.name}`;
+          const uploaded = await uploadGpxFile(effectiveGpx.uri, dest);
+          // Use the freshly uploaded values immediately to avoid relying on async state
+          effectiveGpx = {
+            ...effectiveGpx,
+            storagePath: uploaded.storagePath,
+            downloadUrl: uploaded.downloadUrl,
+          };
+          console.log('[CreateGame] GPX upload complete:', effectiveGpx);
+          // Also reflect in state for UI continuity
+          setGpxFile((prev: any) => ({ ...(prev || {}), storagePath: uploaded.storagePath, downloadUrl: uploaded.downloadUrl }));
+        } catch (uploadErr) {
+          console.warn('GPX upload failed during create:', uploadErr);
+          Alert.alert('Upload failed', 'Could not upload GPX file. Activity not created. Please try again.');
+          setCreating(false);
+          return;
+        } finally {
+          setGpxUploading(false);
+        }
+      }
+
+      // Firestore create payload must include creatorId and initial joinedUserIds
+      const newGame = {
+        description: safeDescription,
+        activity: sport,
+        location,
+        date,
+        time,
+        creator: username, // always use actual username
+        creatorId: uid,
+        joinedUserIds: [uid],
+        joinedCount: 1,
+        maxParticipants,
+        distance: 0,
+        latitude,
+        longitude,
+        // include gpx metadata if present
+        ...(effectiveGpx
+          ? {
+              gpx: {
+                filename: effectiveGpx.name || effectiveGpx.filename || null,
+                storagePath: effectiveGpx.storagePath || null,
+                downloadUrl: effectiveGpx.downloadUrl || null,
+                stats: gpxStats,
+              },
+            }
+          : {}),
+      };
+
+  console.log('[CreateGame] Creating activity with GPX:', (newGame as any).gpx || '(none)');
+  const newId = await createActivity(newGame as any); // Save to Firestore and get id
+  console.log('[CreateGame] Activity created with id:', newId);
       setJoinedActivities(prev => Array.from(new Set([...prev, newId])));
       await reloadAllActivities();
       try {
@@ -306,6 +423,20 @@ const CreateGameScreen = () => {
       }).start();
     }
   }, [isReady]);
+
+  // Listen for keyboard show/hide and set bottom padding accordingly (works for Android and iOS)
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const onShow = (e: any) => setKeyboardHeight(e.endCoordinates?.height || 0);
+    const onHide = () => setKeyboardHeight(0);
+    const subShow = Keyboard.addListener(showEvent, onShow);
+    const subHide = Keyboard.addListener(hideEvent, onHide);
+    return () => {
+      try { subShow.remove(); } catch {}
+      try { subHide.remove(); } catch {}
+    };
+  }, []);
 
   if (!isReady) {
     return (
@@ -529,16 +660,16 @@ const CreateGameScreen = () => {
         <View style={styles.header}>
           <Text style={styles.headerTitle}>Create Activity</Text>
         </View>
-        <ScrollView
-          ref={scrollRef}
-          contentContainerStyle={styles.form}
-          scrollEventThrottle={16}
-          onScroll={handleScroll}
-          onScrollEndDrag={handleRelease}
-          overScrollMode="always"
-          alwaysBounceVertical
-          keyboardShouldPersistTaps="handled"
-        >
+          <ScrollView
+            ref={scrollRef}
+            contentContainerStyle={[styles.form, { paddingBottom: Math.max(20, keyboardHeight + 20) }]}
+            scrollEventThrottle={16}
+            onScroll={handleScroll}
+            onScrollEndDrag={handleRelease}
+            overScrollMode="always"
+            alwaysBounceVertical
+            keyboardShouldPersistTaps="handled"
+          >
           <Text style={styles.sectionLabel}>Select Sport</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             {sportOptions.map((option) => (
@@ -571,7 +702,7 @@ const CreateGameScreen = () => {
             <Text style={{ color: '#888', fontSize: 13 }}>{description.length}/200</Text>
           </View>
 
-          <Text style={styles.sectionLabel}>Location</Text>
+          <Text style={styles.sectionLabel}>{sport === 'Hiking' ? 'Meeting point' : 'Location'}</Text>
           <TouchableOpacity
             activeOpacity={0.7}
             onPress={() =>
@@ -591,7 +722,7 @@ const CreateGameScreen = () => {
           >
             <TextInput
               style={styles.input}
-              placeholder="Pick a location"
+              placeholder={sport === 'Hiking' ? 'Pick meeting point' : 'Pick a location'}
               placeholderTextColor="#ccc"
               value={location}
               editable={false}
@@ -620,10 +751,136 @@ const CreateGameScreen = () => {
               }
             >
               <Text style={{ color: '#fff', fontWeight: 'bold' }}>
-                {selectedCoords ? 'Change Location on Map' : 'Pick on Map'}
+                {selectedCoords
+                  ? (sport === 'Hiking' ? 'Change meeting point on map' : 'Change Location on Map')
+                  : (sport === 'Hiking' ? 'Pick meeting point on map' : 'Pick on Map')}
               </Text>
             </TouchableOpacity>
           </View>
+
+          {sport === 'Hiking' && (
+            <>
+              <Text style={styles.sectionLabel}>GPX Route (optional)</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                <TouchableOpacity style={styles.mapButton} onPress={pickGpxFile} disabled={gpxUploading}>
+                  {gpxUploading ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={{ color: '#fff', fontWeight: 'bold' }}>{gpxFile ? 'Replace GPX' : 'Upload GPX (optional)'}</Text>
+                  )}
+                </TouchableOpacity>
+                {gpxFile ? (
+                  <View style={{ marginLeft: 12, flex: 1, alignItems: 'center' }}>
+                    <Text style={{ color: '#fff', fontWeight: '600' }} numberOfLines={1}>{gpxFile.name || gpxFile.filename}</Text>
+                    <TouchableOpacity onPress={() => { setGpxFile(null); setGpxStats({ distance: '', ascent: '', difficulty: '', descent: '', maxElevation: '', trailRank: '', minElevation: '', routeType: '' }); }} style={{ marginTop: 6 }}>
+                      <Text style={{ color: '#ff5a5f', fontWeight: '700' }}>Remove</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+              </View>
+
+              <View style={{ backgroundColor: '#141414', padding: 10, borderRadius: 8, marginBottom: 10 }}>
+                <Text style={{ color: THEME_COLOR, fontWeight: '700', marginBottom: 8 }}>Route Statistics (optional)</Text>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text style={{ color: '#9aa0a6' }}>Distance</Text>
+                  <TextInput
+                    ref={distanceRef}
+                    style={[styles.input, { flex: 1, marginLeft: 12, paddingVertical: 6 }]}
+                    placeholder="e.g. 20.86 km"
+                    placeholderTextColor="#666"
+                    value={gpxStats.distance}
+                    onChangeText={(t) => setGpxStats((s: any) => ({ ...s, distance: t }))}
+                    returnKeyType="next"
+                    blurOnSubmit={false}
+                    onSubmitEditing={() => ascentRef.current?.focus()}
+                  />
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text style={{ color: '#9aa0a6' }}>Ascent</Text>
+                  <TextInput
+                    ref={ascentRef}
+                    style={[styles.input, { flex: 1, marginLeft: 12, paddingVertical: 6 }]}
+                    placeholder="e.g. 345 m"
+                    placeholderTextColor="#666"
+                    value={gpxStats.ascent}
+                    onChangeText={(t) => setGpxStats((s: any) => ({ ...s, ascent: t }))}
+                    returnKeyType="next"
+                    blurOnSubmit={false}
+                    onSubmitEditing={() => difficultyRef.current?.focus()}
+                  />
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text style={{ color: '#9aa0a6' }}>Difficulty</Text>
+                  <TextInput
+                    ref={difficultyRef}
+                    style={[styles.input, { flex: 1, marginLeft: 12, paddingVertical: 6 }]}
+                    placeholder="e.g. Moderate"
+                    placeholderTextColor="#666"
+                    value={gpxStats.difficulty}
+                    onChangeText={(t) => setGpxStats((s: any) => ({ ...s, difficulty: t }))}
+                    returnKeyType="next"
+                    blurOnSubmit={false}
+                    onSubmitEditing={() => descentRef.current?.focus()}
+                  />
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text style={{ color: '#9aa0a6' }}>Descent</Text>
+                  <TextInput
+                    ref={descentRef}
+                    style={[styles.input, { flex: 1, marginLeft: 12, paddingVertical: 6 }]}
+                    placeholder="e.g. 1,135 m"
+                    placeholderTextColor="#666"
+                    value={gpxStats.descent}
+                    onChangeText={(t) => setGpxStats((s: any) => ({ ...s, descent: t }))}
+                    returnKeyType="next"
+                    blurOnSubmit={false}
+                    onSubmitEditing={() => maxElevationRef.current?.focus()}
+                  />
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text style={{ color: '#9aa0a6' }}>Max Elevation</Text>
+                  <TextInput
+                    ref={maxElevationRef}
+                    style={[styles.input, { flex: 1, marginLeft: 12, paddingVertical: 6 }]}
+                    placeholder="e.g. 1,059 m"
+                    placeholderTextColor="#666"
+                    value={gpxStats.maxElevation}
+                    onChangeText={(t) => setGpxStats((s: any) => ({ ...s, maxElevation: t }))}
+                    returnKeyType="next"
+                    blurOnSubmit={false}
+                    onSubmitEditing={() => trailRankRef.current?.focus()}
+                  />
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text style={{ color: '#9aa0a6' }}>TrailRank</Text>
+                  <TextInput
+                    ref={trailRankRef}
+                    style={[styles.input, { flex: 1, marginLeft: 12, paddingVertical: 6 }]}
+                    placeholder="e.g. 10"
+                    placeholderTextColor="#666"
+                    value={gpxStats.trailRank}
+                    onChangeText={(t) => setGpxStats((s: any) => ({ ...s, trailRank: t }))}
+                    returnKeyType="next"
+                    blurOnSubmit={false}
+                    onSubmitEditing={() => routeTypeRef.current?.focus()}
+                  />
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                  <Text style={{ color: '#9aa0a6' }}>Route Type</Text>
+                  <TextInput
+                    ref={routeTypeRef}
+                    style={[styles.input, { flex: 1, marginLeft: 12, paddingVertical: 6 }]}
+                    placeholder="e.g. One-way"
+                    placeholderTextColor="#666"
+                    value={gpxStats.routeType}
+                    onChangeText={(t) => setGpxStats((s: any) => ({ ...s, routeType: t }))}
+                    returnKeyType="done"
+                    onSubmitEditing={() => Keyboard.dismiss()}
+                  />
+                </View>
+              </View>
+            </>
+          )}
 
           <Text style={styles.sectionLabel}>Date</Text>
           <TouchableOpacity onPress={() => setShowDatePicker(true)} activeOpacity={0.7}>
@@ -810,8 +1067,8 @@ const CreateGameScreen = () => {
             {creating && <ActivityIndicator size="small" color="#fff" />}
             <Text style={styles.createButtonText}>{creating ? 'Creating Activity' : 'Create Activity'}</Text>
           </TouchableOpacity>
-        </ScrollView>
-      </Animated.View>
+          </ScrollView>
+        </Animated.View>
     </SafeAreaView>
   );
 };
