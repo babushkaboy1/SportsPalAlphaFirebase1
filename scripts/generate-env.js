@@ -11,9 +11,8 @@ const REQUIRED_KEYS = [
   'FIREBASE_PROJECT_ID',
   'FIREBASE_STORAGE_BUCKET',
   'FIREBASE_MESSAGING_SENDER_ID',
-  'FIREBASE_APP_ID_WEB',
-  'FIREBASE_APP_ID_IOS',
-  'FIREBASE_APP_ID_ANDROID',
+  // We accept either FIREBASE_APP_ID (single) or the platform-specific trio below
+  // The trio will be synthesized from FIREBASE_APP_ID if provided solo
   'FIREBASE_MEASUREMENT_ID',
   'GOOGLE_MAPS_API_KEY',
 ];
@@ -22,8 +21,19 @@ function main() {
   const missing = [];
   const lines = [];
 
+  // Backward/forwards compatibility for appId config:
+  // If a single FIREBASE_APP_ID is provided (common in Expo/EAS envs),
+  // populate WEB/IOS/ANDROID with that value unless already set.
+  const singleAppId = process.env.FIREBASE_APP_ID;
+  const env = { ...process.env };
+  if (singleAppId) {
+    env.FIREBASE_APP_ID_WEB = env.FIREBASE_APP_ID_WEB || singleAppId;
+    env.FIREBASE_APP_ID_IOS = env.FIREBASE_APP_ID_IOS || singleAppId;
+    env.FIREBASE_APP_ID_ANDROID = env.FIREBASE_APP_ID_ANDROID || singleAppId;
+  }
+
   for (const key of REQUIRED_KEYS) {
-    const value = process.env[key];
+    const value = env[key];
     if (value === undefined || value === null || String(value).length === 0) {
       missing.push(key);
     } else {
@@ -31,6 +41,21 @@ function main() {
       const sanitized = String(value).replace(/\r?\n/g, '');
       lines.push(`${key}=${sanitized}`);
     }
+  }
+
+  // Always include the appId variables expected by firebaseConfig.ts
+  if (!env.FIREBASE_APP_ID_WEB && !env.FIREBASE_APP_ID_IOS && !env.FIREBASE_APP_ID_ANDROID) {
+    if (!singleAppId) {
+      missing.push('FIREBASE_APP_ID or FIREBASE_APP_ID_WEB/IOS/ANDROID');
+    }
+  }
+  const appIds = {
+    FIREBASE_APP_ID_WEB: env.FIREBASE_APP_ID_WEB,
+    FIREBASE_APP_ID_IOS: env.FIREBASE_APP_ID_IOS,
+    FIREBASE_APP_ID_ANDROID: env.FIREBASE_APP_ID_ANDROID,
+  };
+  for (const [k, v] of Object.entries(appIds)) {
+    if (v) lines.push(`${k}=${String(v).replace(/\r?\n/g, '')}`);
   }
 
   if (missing.length > 0) {
