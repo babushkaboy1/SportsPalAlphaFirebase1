@@ -307,6 +307,39 @@ const ProfileScreen = () => {
     // navigation.navigate('Chats');
   };
 
+  // History tab search
+  const [historySearchQuery, setHistorySearchQuery] = useState('');
+  // Scheduled (upcoming) tab search
+  const [scheduledSearchQuery, setScheduledSearchQuery] = useState('');
+
+  // Helpers for upcoming vs history (past = start + 2h < now)
+  const toStartDate = (a: any) => {
+    const d = a?.date;
+    if (!d || typeof d !== 'string') return null;
+    let ymd = d.trim();
+    const m1 = ymd.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+    if (m1) {
+      const [, dd, mm, yyyy] = m1;
+      ymd = `${yyyy}-${mm}-${dd}`;
+    }
+    // If not yyyy-mm-dd, try Date parse
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+      const t = new Date(d).getTime();
+      if (isNaN(t)) return null;
+      const dt = new Date(t);
+      ymd = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+    }
+    const time = (a?.time && typeof a.time === 'string' ? a.time.trim() : '00:00') || '00:00';
+    const dt = new Date(`${ymd}T${time}`);
+    return isNaN(dt.getTime()) ? null : dt;
+  };
+  const isHistorical = (a: any) => {
+    const start = toStartDate(a);
+    if (!start) return false;
+    const end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
+    return Date.now() > end.getTime();
+  };
+
   const renderActivity = ({ item }: { item: any }) => {
     const distance = userLocation && item.latitude && item.longitude
       ? calculateDistance(userLocation.latitude, userLocation.longitude, item.latitude, item.longitude).toFixed(2)
@@ -389,60 +422,196 @@ const ProfileScreen = () => {
     );
   };
 
-  // Sort joined activities by soonest upcoming (date+time). Past items go after upcoming.
-  const parseDateTimeMs = (dateStr?: string, timeStr?: string) => {
-    if (!dateStr || typeof dateStr !== 'string') return Number.POSITIVE_INFINITY;
-    const d = dateStr.trim();
-    let ymd = d;
-    // Support dd-mm-yyyy and yyyy-mm-dd
-    const ddmmyyyy = /^(\d{2})-(\d{2})-(\d{4})$/;
-    const yyyymmdd = /^(\d{4})-(\d{2})-(\d{2})$/;
-    if (ddmmyyyy.test(d)) {
-      const [, dd, mm, yyyy] = d.match(ddmmyyyy)!;
-      ymd = `${yyyy}-${mm}-${dd}`;
-    } else if (!yyyymmdd.test(d)) {
-      const t = new Date(d).getTime();
-      return isNaN(t) ? Number.POSITIVE_INFINITY : t;
-    }
-    const time = (timeStr && typeof timeStr === 'string' ? timeStr.trim() : '00:00') || '00:00';
-    const isoLocal = `${ymd}T${time}`;
-    const ts = new Date(isoLocal).getTime();
-    return isNaN(ts) ? Number.POSITIVE_INFINITY : ts;
+  // Split joined activities into upcoming and history, and sort
+  const upcomingActivities = userJoinedActivities.filter(a => !isHistorical(a));
+  const historyActivities = userJoinedActivities.filter(a => isHistorical(a));
+  const getStartMs = (a: any) => {
+    const dt = toStartDate(a);
+    return dt ? dt.getTime() : Number.POSITIVE_INFINITY;
   };
+  upcomingActivities.sort((a, b) => getStartMs(a) - getStartMs(b));
+  historyActivities.sort((a, b) => getStartMs(b) - getStartMs(a));
+  const filteredHistory = historyActivities.filter((a) => {
+    const q = historySearchQuery.trim().toLowerCase();
+    if (!q) return true;
+    const sport = String(a.activity || '').toLowerCase();
+    const host = String(a.creator || '').toLowerCase();
+    const loc = String(a.location || '').toLowerCase();
+    return sport.includes(q) || host.includes(q) || loc.includes(q);
+  });
+  const filteredUpcoming = upcomingActivities.filter((a) => {
+    const q = scheduledSearchQuery.trim().toLowerCase();
+    if (!q) return true;
+    const sport = String(a.activity || '').toLowerCase();
+    const host = String(a.creator || '').toLowerCase();
+    const loc = String(a.location || '').toLowerCase();
+    return sport.includes(q) || host.includes(q) || loc.includes(q);
+  });
 
-  const getEventMs = (a: any) => parseDateTimeMs(a?.date, a?.time);
-  const nowMs = Date.now();
-  const upcoming = userJoinedActivities.filter(a => getEventMs(a) >= nowMs);
-  const past = userJoinedActivities.filter(a => getEventMs(a) < nowMs);
-  upcoming.sort((a, b) => getEventMs(a) - getEventMs(b));
-  past.sort((a, b) => getEventMs(b) - getEventMs(a));
-  const sortedActivities = [...upcoming, ...past];
+  const renderHistoryActivity = ({ item }: { item: any }) => {
+    const distance = userLocation && item.latitude && item.longitude
+      ? calculateDistance(userLocation.latitude, userLocation.longitude, item.latitude, item.longitude).toFixed(2)
+      : null;
+    const simplifyLocation = (location: string) => {
+      const parts = location.split(',').map(part => part.trim());
+      if (parts.length >= 2) {
+        return `${parts[0]}, ${parts[parts.length - 2] || parts[parts.length - 1]}`;
+      }
+      return location;
+    };
+    return (
+      <TouchableOpacity
+        style={styles.card}
+        onPress={() => navigation.navigate('ActivityDetails', { activityId: item.id })}
+      >
+        <View style={styles.cardHeader}>
+          <View style={styles.cardHeaderLeft}>
+            <ActivityIcon activity={item.activity} size={32} />
+            <Text style={styles.cardTitle}>{item.activity}</Text>
+          </View>
+          {distance && (
+            <View style={styles.distanceContainer}>
+              <Ionicons name="navigate" size={14} color="#1ae9ef" />
+              <Text style={styles.distanceNumber}>{distance}</Text>
+              <Text style={styles.distanceUnit}>km away</Text>
+            </View>
+          )}
+        </View>
+        <View style={styles.infoRow}>
+          <Ionicons name="person" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Text style={styles.cardInfoLabel}>Host:</Text>
+          <HostUsername activity={item} />
+        </View>
+        <View style={styles.infoRow}>
+          <Ionicons name="location" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Text style={styles.cardInfoLabel}>Location:</Text>
+          <Text style={styles.cardInfo} numberOfLines={1} ellipsizeMode="tail">
+            {simplifyLocation(item.location)}
+          </Text>
+        </View>
+        <View style={styles.infoRow}>
+          <Ionicons name="calendar" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Text style={styles.cardInfoLabel}>Date:</Text>
+          <Text style={styles.cardInfo}>{item.date}</Text>
+        </View>
+        <View style={styles.infoRow}>
+          <Ionicons name="time" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Text style={styles.cardInfoLabel}>Time:</Text>
+          <Text style={styles.cardInfo}>{item.time}</Text>
+        </View>
+        <View style={styles.infoRow}>
+          <Ionicons name="people" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Text style={styles.cardInfoLabel}>Participants:</Text>
+          <Text style={styles.cardInfo}>
+            {item.joinedUserIds ? item.joinedUserIds.length : item.joinedCount} / {item.maxParticipants}
+          </Text>
+        </View>
+        {/* No action buttons for history */}
+      </TouchableOpacity>
+    );
+  };
 
   const renderContent = () => {
     switch (activeTab) {
       case 'activities':
         return (
-          <FlatList
-            data={sortedActivities}
-            renderItem={renderActivity}
-            keyExtractor={(item) => item.id}
-            contentContainerStyle={styles.listContainer}
-            refreshControl={
-              <RefreshControl
-                refreshing={refreshing || refreshLocked}
-                onRefresh={onRefresh}
-                colors={["#009fa3"]}
-                tintColor="#009fa3"
-                progressBackgroundColor="transparent"
+          <View style={{ flex: 1 }}>
+            <Text style={styles.tabTitleCentered}>Scheduled Activities</Text>
+            <View style={styles.userSearchRow}>
+              <Ionicons name="search" size={16} color="#1ae9ef" style={{ marginRight: 8 }} />
+              <TextInput
+                style={[styles.searchInput, { flex: 1 }]}
+                placeholder="Search activity or host..."
+                placeholderTextColor="#aaa"
+                value={scheduledSearchQuery}
+                onChangeText={setScheduledSearchQuery}
+                returnKeyType="search"
+                autoCapitalize="none"
+                autoCorrect={false}
               />
-            }
-          />
+              {scheduledSearchQuery.trim().length > 0 && (
+                <TouchableOpacity
+                  style={styles.clearButton}
+                  onPress={() => setScheduledSearchQuery('')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear search"
+                >
+                  <Ionicons name="close-circle" size={18} color="#1ae9ef" />
+                </TouchableOpacity>
+              )}
+            </View>
+            {filteredUpcoming.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Ionicons name="calendar-outline" size={48} color="#1ae9ef" />
+                <Text style={styles.emptyStateTitle}>No scheduled activities</Text>
+                <Text style={styles.emptyStateText}>Joined activities you schedule will appear here.</Text>
+              </View>
+            ) : (
+              <FlatList
+                data={filteredUpcoming}
+                renderItem={renderActivity}
+                keyExtractor={(item) => item.id}
+                contentContainerStyle={styles.listContainer}
+                refreshControl={
+                  <RefreshControl
+                    refreshing={refreshing || refreshLocked}
+                    onRefresh={onRefresh}
+                    colors={["#009fa3"]}
+                    tintColor="#009fa3"
+                    progressBackgroundColor="transparent"
+                  />
+                }
+              />
+            )}
+          </View>
         );
       case 'history':
-        return <Text style={styles.tabContent}>Activity History</Text>;
+        return (
+          <View style={{ flex: 1 }}>
+            <Text style={styles.tabTitleCentered}>Activity History</Text>
+            <View style={styles.userSearchRow}>
+              <Ionicons name="search" size={16} color="#1ae9ef" style={{ marginRight: 8 }} />
+              <TextInput
+                style={[styles.searchInput, { flex: 1 }]}
+                placeholder="Search activity or host..."
+                placeholderTextColor="#aaa"
+                value={historySearchQuery}
+                onChangeText={setHistorySearchQuery}
+                returnKeyType="search"
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              {historySearchQuery.trim().length > 0 && (
+                <TouchableOpacity
+                  style={styles.clearButton}
+                  onPress={() => setHistorySearchQuery('')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear search"
+                >
+                  <Ionicons name="close-circle" size={18} color="#1ae9ef" />
+                </TouchableOpacity>
+              )}
+            </View>
+            {filteredHistory.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Ionicons name="time-outline" size={48} color="#1ae9ef" />
+                <Text style={styles.emptyStateTitle}>No past activities</Text>
+                <Text style={styles.emptyStateText}>Your activity history will appear here.</Text>
+              </View>
+            ) : (
+              <FlatList
+                data={filteredHistory}
+                renderItem={renderHistoryActivity}
+                keyExtractor={(item) => item.id}
+                contentContainerStyle={styles.listContainer}
+              />
+            )}
+          </View>
+        );
       case 'friends':
         return (
-          <View style={styles.friendsTab}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.tabTitleCentered}>Connections</Text>
             {/* Search users (on top) */}
             <View style={styles.userSearchRow}>
               <Ionicons name="search" size={16} color="#1ae9ef" style={{ marginRight: 8 }} />
@@ -874,7 +1043,7 @@ const ProfileScreen = () => {
               <Text style={{ color: '#bbb' }}>No favourites yet.</Text>
             ) : (
               <FlatList
-                data={(profile?.sportsPreferences || profile?.selectedSports || []) as string[]}
+                data={[...(((profile?.sportsPreferences || profile?.selectedSports || []) as string[]))].sort((a, b) => a.localeCompare(b))}
                 keyExtractor={(s, i) => s + i}
                 ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
                 renderItem={({ item }) => (
@@ -1246,6 +1415,14 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     marginHorizontal: 20,
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  tabTitleCentered: {
+    color: '#1ae9ef',
+    fontSize: 18,
+    fontWeight: '700',
+    textAlign: 'center',
     marginTop: 4,
     marginBottom: 8,
   },

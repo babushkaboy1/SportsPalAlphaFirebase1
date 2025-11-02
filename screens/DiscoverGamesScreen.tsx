@@ -94,6 +94,17 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
   const DEBOUNCE_MS = 300;
   const ITEM_HEIGHT = 120; // estimated fixed height for ActivityCard (used by getItemLayout)
 
+  // Derive sport filter list: All + (favorite sports A-Z) + (rest A-Z)
+  const orderedSportFilters = useMemo(() => {
+    // base sports excluding 'All'
+    const base = sportFilterOptions.filter(s => s !== 'All');
+    const favs: string[] = (profile?.sportsPreferences || profile?.selectedSports || []) as string[];
+    const favSet = new Set(favs.map(s => String(s).toLowerCase()));
+    const favList = base.filter(s => favSet.has(s.toLowerCase())).sort((a, b) => a.localeCompare(b));
+    const restList = base.filter(s => !favSet.has(s.toLowerCase())).sort((a, b) => a.localeCompare(b));
+    return ['All', ...favList, ...restList];
+  }, [profile?.sportsPreferences, profile?.selectedSports]);
+
   // Load activities from Firestore + fake on mount/refresh
   const loadActivities = useCallback(async () => {
     setRefreshing(true);
@@ -249,6 +260,15 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
       }
       return new Date(y, m - 1, d, hh, mmv);
     };
+
+    // Remove activities that are more than 2 hours in the past
+    const isHistorical = (a: any) => {
+      const start = getStartDate(a);
+      if (!start) return false;
+      const end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
+      return new Date() > end;
+    };
+    list = list.filter(a => !isHistorical(a));
 
     const now = new Date();
     const timeScore = (a: any) => {
@@ -492,7 +512,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
           </View>
 
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterWrapper}>
-            {sportFilterOptions.map(option => (
+            {orderedSportFilters.map(option => (
               <TouchableOpacity
                 key={option}
                 style={[styles.filterChip, selectedFilter === option && styles.filterChipActive]}

@@ -25,7 +25,9 @@ export default ({ config }: { config: any }) => ({
       NSPhotoLibraryAddUsageDescription: "This app needs access to save images to your photo library.",
       NSLocationWhenInUseUsageDescription: "This app uses your location to show nearby sports events and friends.",
       NSCalendarsUsageDescription: "This app needs access to your calendar to add and manage sports events.",
-      NSMicrophoneUsageDescription: "This app uses the microphone for recording audio messages and calls."
+      NSMicrophoneUsageDescription: "This app uses the microphone for recording audio messages and calls.",
+      // Handle push notifications in the background (remote notifications)
+      UIBackgroundModes: ["remote-notification"]
     }
   },
   android: {
@@ -36,10 +38,19 @@ export default ({ config }: { config: any }) => ({
     edgeToEdgeEnabled: true,
     package: "com.sportspal.app",
     permissions: [
+      // Notifications
+      "POST_NOTIFICATIONS",
+      // Location for nearby games
       "ACCESS_FINE_LOCATION",
       "ACCESS_COARSE_LOCATION",
+      // Media capture
       "CAMERA",
-      "RECORD_AUDIO"
+      "RECORD_AUDIO",
+      // Media library (Android 13+ granular permissions for picking/saving)
+      "READ_MEDIA_IMAGES",
+      "READ_MEDIA_VIDEO",
+      // Legacy fallback for Android 12 and below
+      "READ_EXTERNAL_STORAGE"
     ],
     softwareKeyboardLayoutMode: "resize",
     config: {
@@ -60,7 +71,8 @@ export default ({ config }: { config: any }) => ({
   },
   plugins: [
     "expo-font",
-    "expo-audio"
+    "expo-audio",
+    "expo-dev-client"
   ],
   extra: {
     eas: {

@@ -14,9 +14,11 @@ import {
 import Logo from '../components/Logo';
 import { CommonActions } from '@react-navigation/native';
 import { AntDesign, FontAwesome, Ionicons } from '@expo/vector-icons';
-import { signInWithEmailAndPassword, signInWithCredential, GoogleAuthProvider, sendPasswordResetEmail } from 'firebase/auth';
+import { signInWithEmailAndPassword, signInWithCredential, GoogleAuthProvider, sendPasswordResetEmail, fetchSignInMethodsForEmail, FacebookAuthProvider, OAuthProvider, linkWithCredential, AuthCredential } from 'firebase/auth';
 import { auth } from '../firebaseConfig';
 import * as Google from 'expo-auth-session/providers/google';
+import * as Facebook from 'expo-auth-session/providers/facebook';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import Svg, { Path } from 'react-native-svg';
 
 // Google Logo Component (multicolor)
@@ -51,6 +53,19 @@ const LoginScreen = ({ navigation }: any) => {
     iosClientId: '690971568236-qnqatg8h63re13j433l1oj22aiqktvts.apps.googleusercontent.com',
     webClientId: '690971568236-1slb2hq568pk1cqnpo44aioi5549avl7.apps.googleusercontent.com',
   });
+  const [fbRequest, fbResponse, fbPromptAsync] = Facebook.useAuthRequest({
+    clientId: 'FACEBOOK_APP_ID', // TODO: replace with your Facebook App ID
+    scopes: ['public_profile', 'email'],
+  });
+
+  // Track pending linking flow and credential
+  const pendingCredentialRef = useRef<AuthCredential | null>(null);
+  const linkEmailRef = useRef<string | null>(null);
+  const flowRef = useRef<{ mode: 'google' | 'facebook' | 'apple' | null; forLink?: boolean }>({ mode: null, forLink: false });
+
+  // Minimal password prompt for linking when original account uses Password provider
+  const [linkPasswordVisible, setLinkPasswordVisible] = useState(false);
+  const [linkPassword, setLinkPassword] = useState('');
 
   // Fade in on mount
   useEffect(() => {
@@ -75,21 +90,150 @@ const LoginScreen = ({ navigation }: any) => {
     return unsubscribe;
   }, [navigation]);
 
+  // Handle Google auth response
   useEffect(() => {
-    if (response?.type === 'success') {
-      const { id_token } = response.params;
-      const credential = GoogleAuthProvider.credential(id_token);
-      signInWithCredential(auth, credential)
-        .then(() => navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] })))
-        .catch(async (err) => {
-          if (err.code === 'auth/account-exists-with-different-credential') {
-            alert('An account already exists with this email. Please log in with your password first, then link Google in your profile settings.');
-          } else {
-            alert('Google sign-in error: ' + err.message);
+    (async () => {
+      if (response?.type === 'success') {
+        const { id_token } = response.params as any;
+        const googleCred = GoogleAuthProvider.credential(id_token);
+        if (flowRef.current.forLink) {
+          // Sign in with existing method (Google), then link pending
+          try {
+            await signInWithCredential(auth, googleCred);
+            if (pendingCredentialRef.current) {
+              await linkWithCredential(auth.currentUser!, pendingCredentialRef.current);
+              pendingCredentialRef.current = null;
+              linkEmailRef.current = null;
+            }
+            navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
+          } catch (e: any) {
+            Alert.alert('Google link failed', e?.message || 'Could not link accounts.');
+          } finally {
+            flowRef.current = { mode: null, forLink: false };
           }
-        });
-    }
+          return;
+        }
+        // Normal sign-in attempt
+        await handleCredentialSignIn(googleCred);
+        flowRef.current = { mode: null, forLink: false };
+      }
+    })();
   }, [response]);
+
+  // Handle Facebook auth response
+  useEffect(() => {
+    (async () => {
+      if (fbResponse?.type === 'success') {
+        const { access_token } = fbResponse.params as any;
+        const fbCred = FacebookAuthProvider.credential(access_token);
+        if (flowRef.current.forLink) {
+          try {
+            await signInWithCredential(auth, fbCred);
+            if (pendingCredentialRef.current) {
+              await linkWithCredential(auth.currentUser!, pendingCredentialRef.current);
+              pendingCredentialRef.current = null;
+              linkEmailRef.current = null;
+            }
+            navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
+          } catch (e: any) {
+            Alert.alert('Facebook link failed', e?.message || 'Could not link accounts.');
+          } finally {
+            flowRef.current = { mode: null, forLink: false };
+          }
+          return;
+        }
+        await handleCredentialSignIn(fbCred);
+        flowRef.current = { mode: null, forLink: false };
+      }
+    })();
+  }, [fbResponse]);
+
+  // Centralized credential sign-in with automatic linking fallback
+  const handleCredentialSignIn = async (cred: AuthCredential) => {
+    try {
+      await signInWithCredential(auth, cred);
+      navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
+    } catch (err: any) {
+      if (err?.code === 'auth/account-exists-with-different-credential') {
+        const emailForLink = (err as any)?.customData?.email || email || null;
+        if (!emailForLink) {
+          Alert.alert('Link account', 'This email exists with another sign-in method. Please enter your email/password to link.');
+          return;
+        }
+        pendingCredentialRef.current = cred;
+        linkEmailRef.current = emailForLink;
+        try {
+          const methods = await fetchSignInMethodsForEmail(auth, emailForLink);
+          // Prefer existing social providers first, then password
+          if (methods.includes('google.com')) {
+            flowRef.current = { mode: 'google', forLink: true };
+            await promptAsync();
+            return;
+          }
+          if (methods.includes('facebook.com')) {
+            flowRef.current = { mode: 'facebook', forLink: true };
+            await fbPromptAsync();
+            return;
+          }
+          if (methods.includes('apple.com')) {
+            flowRef.current = { mode: 'apple', forLink: true };
+            await handleAppleSignIn(true);
+            return;
+          }
+          if (methods.includes('password')) {
+            setLinkPassword('');
+            setLinkPasswordVisible(true);
+            return;
+          }
+          Alert.alert('Link required', 'Please sign in with your original method to link this provider.');
+        } catch (e: any) {
+          Alert.alert('Link failed', e?.message || 'Could not determine existing sign-in method.');
+        }
+      } else {
+        Alert.alert('Sign-in failed', err?.message || 'Could not sign in.');
+      }
+    }
+  };
+
+  // Apple sign-in (native on iOS via expo-apple-authentication)
+  const handleAppleSignIn = async (forLink = false) => {
+    try {
+      const nonce = Math.random().toString(36).substring(2) + Math.random().toString(36).substring(2);
+      const res = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+        nonce,
+      });
+      if (!res.identityToken) {
+        Alert.alert('Apple Sign-In', 'No identity token returned.');
+        return;
+      }
+      const provider = new OAuthProvider('apple.com');
+      const appleCred = provider.credential({ idToken: res.identityToken, rawNonce: nonce });
+      if (forLink) {
+        try {
+          await signInWithCredential(auth, appleCred);
+          if (pendingCredentialRef.current) {
+            await linkWithCredential(auth.currentUser!, pendingCredentialRef.current);
+            pendingCredentialRef.current = null;
+            linkEmailRef.current = null;
+          }
+          navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
+        } catch (e: any) {
+          Alert.alert('Apple link failed', e?.message || 'Could not link accounts.');
+        } finally {
+          flowRef.current = { mode: null, forLink: false };
+        }
+        return;
+      }
+      await handleCredentialSignIn(appleCred);
+    } catch (e: any) {
+      if (e?.code === 'ERR_CANCELED') return;
+      Alert.alert('Apple Sign-In error', e?.message || 'Could not sign in with Apple.');
+    }
+  };
 
 
   const handleLogin = async () => {
@@ -148,7 +292,31 @@ const LoginScreen = ({ navigation }: any) => {
   };
 
   const handleSocialLogin = (provider: string) => {
-    Alert.alert('Coming soon', `${provider} sign-in isn't available yet. Please use Email or Google.`);
+    if (provider === 'Apple') {
+      flowRef.current = { mode: 'apple', forLink: false };
+      handleAppleSignIn(false);
+    } else if (provider === 'Facebook') {
+      flowRef.current = { mode: 'facebook', forLink: false };
+      fbPromptAsync();
+    }
+  };
+
+  // Link via password flow submit
+  const submitLinkPassword = async () => {
+    const emailToUse = linkEmailRef.current || email;
+    if (!emailToUse) { setLinkPasswordVisible(false); return; }
+    try {
+      await signInWithEmailAndPassword(auth, emailToUse, linkPassword);
+      if (pendingCredentialRef.current) {
+        await linkWithCredential(auth.currentUser!, pendingCredentialRef.current);
+        pendingCredentialRef.current = null;
+        linkEmailRef.current = null;
+      }
+      setLinkPasswordVisible(false);
+      navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
+    } catch (e: any) {
+      Alert.alert('Link with password failed', e?.message || 'Could not link accounts.');
+    }
   };
 
   const handleSignUp = () => {
@@ -235,7 +403,7 @@ const LoginScreen = ({ navigation }: any) => {
           {/* Google Login */}
           <TouchableOpacity
             style={styles.googleButton}
-            onPress={() => promptAsync()}
+            onPress={() => { flowRef.current = { mode: 'google', forLink: false }; promptAsync(); }}
           >
             <View style={styles.socialIcon}>
               <GoogleLogo />
@@ -244,6 +412,28 @@ const LoginScreen = ({ navigation }: any) => {
           </TouchableOpacity>
         </View>
       </ScrollView>
+      {/* Password link modal (bottom sheet style) */}
+      {linkPasswordVisible && (
+        <View style={styles.linkModalContainer}>
+          <Text style={styles.linkModalTitle}>Link with your password</Text>
+          <TextInput
+            placeholder="Enter your password"
+            placeholderTextColor="#aaa"
+            secureTextEntry
+            value={linkPassword}
+            onChangeText={setLinkPassword}
+            style={styles.linkPasswordInput}
+          />
+          <View style={styles.linkActions}>
+            <TouchableOpacity style={[styles.linkBtn, styles.linkCancel]} onPress={() => setLinkPasswordVisible(false)}>
+              <Text style={styles.linkBtnText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.linkBtn, styles.linkSubmit]} onPress={submitLinkPassword}>
+              <Text style={[styles.linkBtnText, { color: '#000' }]}>Link</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
     </Animated.View>
   );
 };
@@ -397,6 +587,14 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     letterSpacing: -0.3,
   },
+  linkModalContainer: { position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: '#1e1e1e', padding: 16, borderTopLeftRadius: 16, borderTopRightRadius: 16, borderWidth: 1, borderColor: '#2a2a2a' },
+  linkModalTitle: { color: '#1ae9ef', fontSize: 16, fontWeight: '700', marginBottom: 8 },
+  linkPasswordInput: { backgroundColor: '#2a2a2a', color: '#fff', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, fontSize: 16 },
+  linkActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 12 },
+  linkBtn: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 8 },
+  linkCancel: { backgroundColor: '#444' },
+  linkSubmit: { backgroundColor: '#1ae9ef' },
+  linkBtnText: { color: '#fff', fontWeight: '700' },
   
 });
 

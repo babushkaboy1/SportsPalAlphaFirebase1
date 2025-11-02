@@ -21,7 +21,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import * as Calendar from 'expo-calendar';
-import MapView, { Marker, PROVIDER_DEFAULT, Polyline, UrlTile } from 'react-native-maps';
+import MapView, { Marker, PROVIDER_DEFAULT, Polyline, UrlTile, Callout } from 'react-native-maps';
 import { useActivityContext } from '../context/ActivityContext';
 import { fetchUsersByIds } from '../utils/firestoreActivities';
 import { getOrCreateChatForActivity } from '../utils/firestoreChats';
@@ -37,8 +37,9 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
   const { allActivities, isActivityJoined, toggleJoinActivity, profile } = useActivityContext();
 
   const activity = allActivities.find(a => a.id === activityId);
-  if (activity) {
-    try { console.log('[ActivityDetails] GPX debug for', activity.id, (activity as any).gpx || '(no gpx)'); } catch {}
+  const gpxSupported = activity ? ['hiking', 'running', 'cycling'].includes(String((activity as any).activity || '').toLowerCase()) : false;
+  if (activity && (gpxSupported && (activity as any).gpx)) {
+    try { console.log('[ActivityDetails] GPX debug for', activity.id, (activity as any).gpx); } catch {}
   }
 
   const [creatorUsername, setCreatorUsername] = useState<string>('');
@@ -107,6 +108,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
   const [gpxLoading, setGpxLoading] = useState(false);
   const [gpxError, setGpxError] = useState<string | null>(null);
   const [gpxCoords, setGpxCoords] = useState<Array<{ latitude: number; longitude: number }>>([]);
+  const [gpxWaypoints, setGpxWaypoints] = useState<Array<{ latitude: number; longitude: number; title?: string }>>([]);
   const gpxMapRef = useRef<MapView | null>(null);
 
   // Invite friends modal state
@@ -545,6 +547,19 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
     }, 1500);
   };
 
+  // Determine if activity is in history: now > start + 2h
+  const isHistorical = (() => {
+    try {
+      const [day, month, year] = normalizeDateFormat(activity.date).split('-').map(Number);
+      const [hours, minutes] = (activity.time || '00:00').split(':').map((n: string) => parseInt(n, 10));
+      const start = new Date(year, month - 1, day, hours || 0, minutes || 0);
+      const end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
+      return Date.now() > end.getTime();
+    } catch {
+      return false;
+    }
+  })();
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
@@ -685,8 +700,8 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                 <Text style={styles.description}>{(activity as any).description}</Text>
               </View>
             )}
-            {/* GPX / Route statistics (if present) */}
-            {(activity as any).gpx && (
+            {/* GPX / Route statistics (if present) only for Hiking/Running/Cycling */}
+            {gpxSupported && (activity as any).gpx && (
               <>
                 <View style={{ marginBottom: 8 }}>
                   <TouchableOpacity
@@ -699,6 +714,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                       setShowGpxModal(true);
                       setGpxError(null);
                       setGpxCoords([]);
+                      setGpxWaypoints([]);
 
                       try {
                         setGpxLoading(true);
@@ -799,9 +815,11 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                         console.log('GPX text length:', typeof text === 'string' ? text.length : '(non-string)');
 
                         const pts: Array<{ latitude: number; longitude: number }> = [];
+                        const wpts: Array<{ latitude: number; longitude: number; title?: string }> = [];
                         const xml = typeof text === 'string' ? text : '';
 
-                        const extractPoints = (tag: 'trkpt' | 'rtept' | 'wpt') => {
+                        // Extract track/route points only (polylines)
+                        const extractPoints = (tag: 'trkpt' | 'rtept') => {
                           const regex = new RegExp(`<${tag}\\b[^>]*>`, 'gi');
                           let count = 0;
                           let m: RegExpExecArray | null;
@@ -813,7 +831,36 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                             if (latMatch && lonMatch) {
                               const lat = parseFloat(latMatch[1].replace(',', '.'));
                               const lon = parseFloat(lonMatch[1].replace(',', '.'));
-                              if (!Number.isNaN(lat) && !Number.isNaN(lon)) pts.push({ latitude: lat, longitude: lon });
+                              if (!Number.isNaN(lat) && !Number.isNaN(lon)) {
+                                pts.push({ latitude: lat, longitude: lon });
+                              }
+                            }
+                          }
+                          return count;
+                        };
+
+                        // Extract waypoints as separate markers with optional name
+                        const extractWpts = () => {
+                          const regex = /<wpt\b([^>]*)>([\s\S]*?)<\/wpt>/gi;
+                          let count = 0;
+                          let m: RegExpExecArray | null;
+                          while ((m = regex.exec(xml)) !== null) {
+                            count++;
+                            const attrs = m[1] || '';
+                            const inner = m[2] || '';
+                            const latMatch = /lat=\"([^\"]+)\"/i.exec(attrs);
+                            const lonMatch = /lon=\"([^\"]+)\"/i.exec(attrs);
+                            if (latMatch && lonMatch) {
+                              const lat = parseFloat(latMatch[1].replace(',', '.'));
+                              const lon = parseFloat(lonMatch[1].replace(',', '.'));
+                              if (!Number.isNaN(lat) && !Number.isNaN(lon)) {
+                                let title: string | undefined = undefined;
+                                const nameMatch = /<name>([\s\S]*?)<\/name>/i.exec(inner);
+                                const descMatch = /<desc>([\s\S]*?)<\/desc>/i.exec(inner) || /<cmt>([\s\S]*?)<\/cmt>/i.exec(inner);
+                                if (nameMatch && nameMatch[1]) title = nameMatch[1].trim();
+                                else if (descMatch && descMatch[1]) title = descMatch[1].trim();
+                                wpts.push({ latitude: lat, longitude: lon, title });
+                              }
                             }
                           }
                           return count;
@@ -822,19 +869,21 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                         const trkCount = extractPoints('trkpt');
                         const rteCountBefore = pts.length;
                         const rteCount = trkCount === 0 ? extractPoints('rtept') : 0;
-                        const wptCountBefore = pts.length;
-                        const wptCount = trkCount === 0 && rteCount === 0 ? extractPoints('wpt') : 0;
+                        // Extract waypoints as separate markers
+                        const wptCount = extractWpts();
 
-                        console.log('GPX point summary -> trkpt:', trkCount, 'rtept:', rteCount === 0 ? 0 : (pts.length - rteCountBefore), 'wpt:', wptCount === 0 ? 0 : (pts.length - wptCountBefore));
+                        console.log('GPX point summary -> trkpt:', trkCount, 'rtept:', rteCount === 0 ? 0 : (pts.length - rteCountBefore), 'wpt:', wptCount);
 
-                        if (pts.length === 0) {
+                        if (pts.length === 0 && wpts.length === 0) {
                           setGpxError('No track/route/waypoint points found in GPX');
                         } else {
                           setGpxCoords(pts);
+                          setGpxWaypoints(wpts);
+                          const fitPts = pts.length > 0 ? pts : wpts;
                           setTimeout(() => {
                             try {
-                              if (gpxMapRef.current && pts.length > 0) {
-                                gpxMapRef.current.fitToCoordinates(pts, { edgePadding: { top: 60, right: 60, bottom: 60, left: 60 }, animated: true });
+                              if (gpxMapRef.current && fitPts.length > 0) {
+                                gpxMapRef.current.fitToCoordinates(fitPts, { edgePadding: { top: 60, right: 60, bottom: 60, left: 60 }, animated: true });
                               }
                             } catch (e) {
                               console.warn('fitToCoordinates failed', e);
@@ -850,7 +899,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                     }}
                   >
                     <Ionicons name="map" size={18} style={[styles.actionIconBold, { marginRight: 8 }]} />
-                    <Text style={styles.actionText}>View Hiking Route (GPX)</Text>
+                    <Text style={styles.actionText}>View {(activity as any).activity} Route (GPX)</Text>
                   </TouchableOpacity>
                 </View>
 
@@ -918,39 +967,43 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
 
             {/* Actions */}
             <View style={styles.actionsContainer}>
-              <TouchableOpacity
-                style={[styles.actionButton, isActivityJoined(activity.id) && styles.actionButtonJoined]}
-                onPress={handleJoinLeave}
-                activeOpacity={0.85}
-              >
-                <Text style={[styles.actionText, isActivityJoined(activity.id) && styles.actionTextJoined]}>
-                  {isActivityJoined(activity.id) ? 'Leave Activity' : 'Join Activity'}
-                </Text>
-              </TouchableOpacity>
+              {!isHistorical && (
+                <>
+                  <TouchableOpacity
+                    style={[styles.actionButton, isActivityJoined(activity.id) && styles.actionButtonJoined]}
+                    onPress={handleJoinLeave}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={[styles.actionText, isActivityJoined(activity.id) && styles.actionTextJoined]}>
+                      {isActivityJoined(activity.id) ? 'Leave Activity' : 'Join Activity'}
+                    </Text>
+                  </TouchableOpacity>
 
-              <TouchableOpacity style={styles.actionButton} onPress={openInviteFriends}>
-                <Ionicons name="person-add" size={20} style={styles.actionIconBold} />
-                <Text style={styles.actionText}>Invite Friends</Text>
-              </TouchableOpacity>
+                  <TouchableOpacity style={styles.actionButton} onPress={openInviteFriends}>
+                    <Ionicons name="person-add" size={20} style={styles.actionIconBold} />
+                    <Text style={styles.actionText}>Invite Friends</Text>
+                  </TouchableOpacity>
 
-              <TouchableOpacity style={styles.actionButton} onPress={handleOpenGroupChat}>
-                <Ionicons name="chatbubbles" size={20} style={styles.actionIconBold} />
-                <Text style={styles.actionText}>Group Chat</Text>
-              </TouchableOpacity>
+                  <TouchableOpacity style={styles.actionButton} onPress={handleOpenGroupChat}>
+                    <Ionicons name="chatbubbles" size={20} style={styles.actionIconBold} />
+                    <Text style={styles.actionText}>Group Chat</Text>
+                  </TouchableOpacity>
 
-              <TouchableOpacity
-                style={[styles.actionButton, isAddedToCalendar && styles.actionButtonAddedToCalendar]}
-                onPress={handleAddToCalendar}
-              >
-                <Ionicons
-                  name={isAddedToCalendar ? 'checkmark-circle' : 'calendar-outline'}
-                  size={20}
-                  style={[styles.actionIconBold, isAddedToCalendar && styles.actionIconAddedToCalendar]}
-                />
-                <Text style={[styles.actionText, isAddedToCalendar && styles.actionTextAddedToCalendar]}>
-                  {isAddedToCalendar ? 'Added to Calendar' : 'Add to Calendar'}
-                </Text>
-              </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.actionButton, isAddedToCalendar && styles.actionButtonAddedToCalendar]}
+                    onPress={handleAddToCalendar}
+                  >
+                    <Ionicons
+                      name={isAddedToCalendar ? 'checkmark-circle' : 'calendar-outline'}
+                      size={20}
+                      style={[styles.actionIconBold, isAddedToCalendar && styles.actionIconAddedToCalendar]}
+                    />
+                    <Text style={[styles.actionText, isAddedToCalendar && styles.actionTextAddedToCalendar]}>
+                      {isAddedToCalendar ? 'Added to Calendar' : 'Add to Calendar'}
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              )}
 
               <TouchableOpacity style={styles.actionButton} onPress={handleGetDirections}>
                 <Ionicons name="navigate" size={24} style={styles.actionIconBold} />
@@ -975,7 +1028,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
         <Pressable style={styles.modalOverlay} onPress={() => setShowGpxModal(false)}>
           <Pressable style={[styles.modalCard, { width: '95%', maxWidth: 920, padding: 12 }]} onPress={() => {}}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 16 }}>Hiking Route</Text>
+              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 16 }}>{(activity as any).activity} Route</Text>
               <TouchableOpacity onPress={() => setShowGpxModal(false)}>
                 <Ionicons name="close" size={22} color="#9aa0a6" />
               </TouchableOpacity>
@@ -989,14 +1042,14 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                 <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 12 }}>
                   <Text style={{ color: '#fff', textAlign: 'center' }}>{gpxError}</Text>
                 </View>
-              ) : gpxCoords && gpxCoords.length > 0 ? (
+              ) : (gpxCoords.length > 0 || gpxWaypoints.length > 0) ? (
                 <MapView
                   ref={(r) => { gpxMapRef.current = r; }}
                   style={{ flex: 1 }}
                   provider={Platform.OS === 'android' ? PROVIDER_DEFAULT : undefined}
                   initialRegion={{
-                    latitude: gpxCoords[0].latitude,
-                    longitude: gpxCoords[0].longitude,
+                    latitude: (gpxCoords[0] || gpxWaypoints[0]).latitude,
+                    longitude: (gpxCoords[0] || gpxWaypoints[0]).longitude,
                     latitudeDelta: 0.05,
                     longitudeDelta: 0.05,
                   }}
@@ -1007,10 +1060,32 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                     maximumZ={19}
                     flipY={false}
                   />
-                  <Polyline coordinates={gpxCoords} strokeWidth={4} strokeColor="#1ae9ef" />
-                  {/* Start and end markers */}
-                  <Marker coordinate={gpxCoords[0]} />
-                  <Marker coordinate={gpxCoords[gpxCoords.length - 1]} />
+                  {/* Render route if available */}
+                  {gpxCoords.length > 0 && (
+                    <>
+                      {/* Outline underlay for better visibility */}
+                      <Polyline coordinates={gpxCoords} strokeWidth={8} strokeColor="#0a2a2b" />
+                      <Polyline coordinates={gpxCoords} strokeWidth={5} strokeColor="#1ae9ef" />
+                      {/* Start and end markers */}
+                      <Marker coordinate={gpxCoords[0]} />
+                      <Marker coordinate={gpxCoords[gpxCoords.length - 1]} />
+                    </>
+                  )}
+                  {/* If no track/route but waypoints exist, optionally connect with dashed line for context */}
+                  {gpxCoords.length === 0 && gpxWaypoints.length > 1 && (
+                    <Polyline coordinates={gpxWaypoints} strokeWidth={3} strokeColor="#1ae9ef99" lineDashPattern={[6,4]} />
+                  )}
+                  {/* Waypoint checkpoints */}
+                  {gpxWaypoints.map((p, idx) => (
+                    <Marker key={`wpt-${idx}`} coordinate={p} pinColor="#f2c200" title={p.title}
+                    >
+                      {p.title ? (
+                        <Callout>
+                          <Text style={{ fontWeight: '700' }}>{p.title}</Text>
+                        </Callout>
+                      ) : null}
+                    </Marker>
+                  ))}
                 </MapView>
               ) : (
                 <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>

@@ -1,19 +1,3 @@
-# Firestore Rules for Friends + Notifications
-
-Paste the updated rules into your Firestore Security Rules editor to enable friend requests and notifications while keeping strong security constraints.
-
-Notes:
-- Notifications are readable only by the recipient (userId == auth.uid).
-- Any authenticated user can create a notification addressed to someone else only when they are the sender (fromUserId == auth.uid) and type is friend_request, friend_accept, or activity_invite.
-- Only the recipient can delete a notification or mark it as read.
-- Profiles remain owner-writable, with narrow, validated exceptions that allow the recipient of a friend request to:
-  - Accept: add themselves to the sender's friends and remove themselves from the sender's requestsSent.
-  - Decline: remove themselves from the sender's requestsSent.
-  - Remove: either party may remove themselves from the other person's friends array (disconnect), ensuring connections are strictly two-way and can be broken by either user.
-
-Replace your existing rules with the following (merge your Activities/Chats blocks if you have custom logic — the blocks below include the ones you shared). This version also enables activity invites (notifications of type activity_invite), and lets the sender retract their own pending activity_invite similar to canceling a friend_request:
-
-```
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -125,17 +109,14 @@ service cloud.firestore {
           (request.auth.uid in request.resource.data.participants) &&
           (request.auth.uid in get(/databases/$(database)/documents/activities/$(request.resource.data.activityId)).data.joinedUserIds)
         ) ||
-        // DM (mutual friends OR allow any signed in users for flexibility)
+        // DM: allow any two signed-in users to open a DM (participants must include the caller)
         (
           ('type' in request.resource.data) && request.resource.data.type == 'dm' &&
           ('participants' in request.resource.data) && request.resource.data.participants is list &&
           request.resource.data.participants.size() == 2 &&
-          (request.auth.uid in request.resource.data.participants) &&
-          (
-            isMutualFriends(request.resource.data.participants[0], request.resource.data.participants[1])
-            // Allow DM between any users (comment above line and uncomment below if you want stricter friend-only DMs)
-            // || true
-          )
+          (request.auth.uid in request.resource.data.participants)
+          // Optional stricter mode:
+          // && isMutualFriends(request.resource.data.participants[0], request.resource.data.participants[1])
         ) ||
         // Custom group (non-activity); creator is included
         (
@@ -163,7 +144,7 @@ service cloud.firestore {
           (request.auth.uid in resource.data.participants) &&
           (
             request.resource.data.diff(resource.data).changedKeys().hasOnly([
-              'lastMessageText','lastMessageType','lastMessageSenderId','lastMessageTimestamp'
+              'lastMessageText','lastMessageType','lastMessageSenderId','lastMessageTimestamp','participantsData'
             ]) ||
             // Allow empty update (for batch writes that only add message subcollection)
             request.resource.data.diff(resource.data).changedKeys().size() == 0
@@ -217,6 +198,12 @@ service cloud.firestore {
             request.resource.data.typing[request.auth.uid] is timestamp ||
             !(request.auth.uid in request.resource.data.typing)
           )
+        )
+
+        // 3b) Allow denormalized participantsData cache updates by participants
+        || (
+          (request.auth.uid in resource.data.participants) &&
+          request.resource.data.diff(resource.data).changedKeys().hasOnly(['participantsData'])
         )
 
         // 4) Edit group title/photo (participants; not for DMs)
@@ -316,10 +303,27 @@ service cloud.firestore {
         && request.resource.data.type in ['friend_request','friend_accept','activity_invite']
         && request.resource.data.userId != request.auth.uid;
 
-      allow update: if isSignedIn()
-        && resource.data.userId == request.auth.uid
-        && request.resource.data.diff(resource.data).changedKeys().hasOnly(['read'])
-        && (resource.data.read == false) && (request.resource.data.read == true);
+      // Recipient can mark as read; sender (for requests/invites) can mark as canceled (optionally also mark read)
+      allow update: if isSignedIn() && (
+        // Recipient marks read
+        (
+          resource.data.userId == request.auth.uid &&
+          request.resource.data.diff(resource.data).changedKeys().hasOnly(['read']) &&
+          (resource.data.read == false) && (request.resource.data.read == true)
+        ) ||
+        // Sender cancels their outgoing request/invite (optionally also set read: true)
+        (
+          resource.data.fromUserId == request.auth.uid &&
+          resource.data.type in ['friend_request','activity_invite'] &&
+          (
+            request.resource.data.diff(resource.data).changedKeys().hasOnly(['canceled']) ||
+            (
+              request.resource.data.diff(resource.data).changedKeys().hasOnly(['read','canceled']) &&
+              (resource.data.read == false) && (request.resource.data.read == true)
+            )
+          )
+        )
+      );
 
       allow delete: if isSignedIn() && (
         resource.data.userId == request.auth.uid ||
@@ -333,7 +337,3 @@ service cloud.firestore {
     }
   }
 }
-
-```
-
-After publishing these rules, try sending a friend request again from another user's profile.

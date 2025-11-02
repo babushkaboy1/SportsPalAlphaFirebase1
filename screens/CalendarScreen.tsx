@@ -402,6 +402,17 @@ const CalendarScreen = ({ navigation, route }: any) => {
                 });
 
                 const isJoined = joinedActivities.includes(item.id);
+                const isHistorical = (() => {
+                  try {
+                    const [dd, mm, yyyy] = normalizeDateFormat(item.date).split('-');
+                    const [hours, minutes] = (item.time || '00:00').split(':').map((n: string) => parseInt(n, 10));
+                    const start = new Date(Number(yyyy), Number(mm) - 1, Number(dd), hours || 0, minutes || 0);
+                    const end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
+                    return Date.now() > end.getTime();
+                  } catch {
+                    return false;
+                  }
+                })();
                 const handleToggleJoin = async () => {
                   const wasJoined = isJoined;
                   await toggleJoinActivity(item);
@@ -464,33 +475,37 @@ const CalendarScreen = ({ navigation, route }: any) => {
                     </View>
 
                     <View style={styles.cardActions}>
-                      <TouchableOpacity
-                        style={[styles.joinButton, isJoined && styles.joinButtonJoined]}
-                        onPress={handleToggleJoin}
-                      >
-                        <Text style={styles.joinButtonText}>{isJoined ? 'Leave' : 'Join'}</Text>
-                      </TouchableOpacity>
+                      {!isHistorical && (
+                        <>
+                          <TouchableOpacity
+                            style={[styles.joinButton, isJoined && styles.joinButtonJoined]}
+                            onPress={handleToggleJoin}
+                          >
+                            <Text style={styles.joinButtonText}>{isJoined ? 'Leave' : 'Join'}</Text>
+                          </TouchableOpacity>
 
-                      <View style={{ flex: 1 }} />
+                          <View style={{ flex: 1 }} />
 
-                      <TouchableOpacity
-                        style={[styles.addToCalendarButton, calendarStatus[item.id] && styles.addToCalendarButtonAdded]}
-                        onPress={() => handleAddToCalendar(item)}
-                      >
-                        <Ionicons
-                          name={calendarStatus[item.id] ? 'checkmark-circle' : 'calendar-outline'}
-                          size={16}
-                          color="#fff"
-                          style={{ marginRight: 6 }}
-                        />
-                        <Text style={styles.addToCalendarText}>
-                          {calendarStatus[item.id] ? 'Added to Calendar' : 'Add to Calendar'}
-                        </Text>
-                      </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[styles.addToCalendarButton, calendarStatus[item.id] && styles.addToCalendarButtonAdded]}
+                            onPress={() => handleAddToCalendar(item)}
+                          >
+                            <Ionicons
+                              name={calendarStatus[item.id] ? 'checkmark-circle' : 'calendar-outline'}
+                              size={16}
+                              color="#fff"
+                              style={{ marginRight: 6 }}
+                            />
+                            <Text style={styles.addToCalendarText}>
+                              {calendarStatus[item.id] ? 'Added to Calendar' : 'Add to Calendar'}
+                            </Text>
+                          </TouchableOpacity>
 
-                      <TouchableOpacity style={styles.shareButton} onPress={() => console.log(`Share event ${item.id}`)}>
-                        <Ionicons name="share-social-outline" size={20} color="#fff" />
-                      </TouchableOpacity>
+                          <TouchableOpacity style={styles.shareButton} onPress={() => console.log(`Share event ${item.id}`)}>
+                            <Ionicons name="share-social-outline" size={20} color="#fff" />
+                          </TouchableOpacity>
+                        </>
+                      )}
                     </View>
                   </TouchableOpacity>
                 );

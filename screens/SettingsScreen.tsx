@@ -12,6 +12,7 @@ import {
   Platform,
 } from 'react-native';
 import { auth } from '../firebaseConfig';
+import { removeSavedTokenAndUnregister } from '../utils/notifications';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../types/navigation';
@@ -46,6 +47,8 @@ const SettingsScreen: React.FC = () => {
 
   const handleSignOut = async () => {
     try {
+      // Best-effort: remove this device's Expo push token from my profile
+      await removeSavedTokenAndUnregister().catch(() => {});
       await auth.signOut();
       navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
     } catch (error) {

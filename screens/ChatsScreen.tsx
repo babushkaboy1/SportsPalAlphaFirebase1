@@ -338,7 +338,11 @@ const ChatsScreen = ({ navigation }: any) => {
               // ---- Unread count: client-side calculation using reads map ----
               let unreadCount = 0;
               const reads = chat.reads || {};
-              const myReadTs = tsMs(reads[me]);
+              const myReadTs = Math.max(
+                tsMs(reads?.[me]),
+                tsMs((chat as any)?.seen?.[me]),
+                tsMs((chat as any)?.lastReadBy?.[me])
+              );
               const lastMsgTs = tsMs(chat.lastMessageTimestamp);
               
               // Simple unread logic: if last message is newer than my read timestamp

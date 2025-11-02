@@ -354,7 +354,20 @@ export async function markChatRead(chatId: string) {
     await updateDoc(doc(db, 'chats', chatId), {
       [`reads.${me}`]: serverTimestamp(),
     } as any);
-  } catch {}
+  } catch (e) {
+    // Fallback to legacy fields permitted by rules
+    try {
+      await updateDoc(doc(db, 'chats', chatId), {
+        [`seen.${me}`]: serverTimestamp(),
+      } as any);
+      return;
+    } catch {}
+    try {
+      await updateDoc(doc(db, 'chats', chatId), {
+        [`lastReadBy.${me}`]: serverTimestamp(),
+      } as any);
+    } catch {}
+  }
 }
 
 /** -----------------------------
@@ -421,6 +434,38 @@ export async function addReaction(chatId: string, messageId: string, emoji: stri
   if (!me) return;
   const ref = doc(db, 'chats', chatId, 'messages', messageId, 'reactions', me);
   await setDoc(ref, { emoji, createdAt: serverTimestamp() });
+  // Update chat preview so list can show "<name> reacted ❤️ to …"
+  try {
+    const msgRef = doc(db, 'chats', chatId, 'messages', messageId);
+    const msgSnap = await getDoc(msgRef);
+    const msg: any = msgSnap.exists() ? msgSnap.data() : null;
+    let targetText = 'a message';
+    if (msg) {
+      if (msg.type === 'text' && typeof msg.text === 'string' && msg.text.length) {
+        const trimmed = msg.text.trim();
+        targetText = `'${trimmed.length > 28 ? trimmed.slice(0, 27) + '…' : trimmed}'`;
+      } else if (msg.type === 'image') {
+        targetText = 'a photo';
+      } else if (msg.type === 'audio') {
+        targetText = 'a voice message';
+      }
+    }
+    let name = 'Someone';
+    try {
+      const meSnap = await getDoc(doc(db, 'profiles', me));
+      if (meSnap.exists()) {
+        const d: any = meSnap.data();
+        name = d.username || 'Someone';
+      }
+    } catch {}
+    const channelRef = doc(db, 'chats', chatId);
+    await updateDoc(channelRef, {
+      lastMessageText: `${name} reacted ${emoji} to ${targetText}`,
+      lastMessageType: 'reaction',
+      lastMessageSenderId: me,
+      lastMessageTimestamp: serverTimestamp(),
+    } as any);
+  } catch {}
 }
 
 export async function removeReaction(chatId: string, messageId: string) {
@@ -511,18 +556,36 @@ export async function ensureDmChat(targetUserId: string): Promise<string> {
   const chatId = getDmChatId(me, targetUserId);
   const chatRef = doc(db, 'chats', chatId);
 
-  await setDoc(
-    chatRef,
-    {
-      type: 'dm',
-      participants: [me, targetUserId],
-      createdAt: serverTimestamp(),
-      lastMessageTimestamp: serverTimestamp(),
-    },
-    { merge: true }
-  );
-
-  return chatId;
+  try {
+    // Try to create or upsert the DM channel
+    await setDoc(
+      chatRef,
+      {
+        type: 'dm',
+        participants: [me, targetUserId],
+        createdAt: serverTimestamp(),
+        lastMessageTimestamp: serverTimestamp(),
+      },
+      { merge: true }
+    );
+    return chatId;
+  } catch (e: any) {
+    // Permission-denied can happen if rules restrict DM creation
+    if (String(e?.code).toLowerCase() === 'permission-denied') {
+      try {
+        const snap = await getDoc(chatRef);
+        if (snap.exists()) {
+          const data: any = snap.data();
+          const parts: string[] = Array.isArray(data?.participants) ? data.participants : [];
+          if (parts.includes(me)) {
+            // DM already exists and is readable; navigate to it
+            return chatId;
+          }
+        }
+      } catch {}
+    }
+    throw e;
+  }
 }
 
 /** -----------------------------

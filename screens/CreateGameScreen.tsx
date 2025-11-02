@@ -133,9 +133,10 @@ const CreateGameScreen = () => {
     return () => clearTimeout(timeout);
   }, []);
 
-  // Clear GPX when switching away from Hiking
+  // Clear GPX when switching away from activities that support GPX (Hiking, Running, Cycling)
   useEffect(() => {
-    if (sport !== 'Hiking') {
+    const supportsGpx = sport === 'Hiking' || sport === 'Running' || sport === 'Cycling';
+    if (!supportsGpx) {
       setGpxFile(null);
       setGpxStats({ distance: '', ascent: '', difficulty: '', descent: '', maxElevation: '', trailRank: '', minElevation: '', routeType: '' });
     }
@@ -672,7 +673,16 @@ const CreateGameScreen = () => {
           >
           <Text style={styles.sectionLabel}>Select Sport</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {sportOptions.map((option) => (
+            {(
+              () => {
+                const all = [...new Set(sportOptions)];
+                const favs: string[] = (profile?.sportsPreferences || profile?.selectedSports || []) as string[];
+                const favSet = new Set(favs.map(s => String(s).toLowerCase()));
+                const favList = all.filter(s => favSet.has(s.toLowerCase())).sort((a, b) => a.localeCompare(b));
+                const restList = all.filter(s => !favSet.has(s.toLowerCase())).sort((a, b) => a.localeCompare(b));
+                return [...favList, ...restList];
+              }
+            )().map((option) => (
               <TouchableOpacity
                 key={option}
                 style={[styles.sportButton, sport === option && styles.activeButton]}
@@ -702,7 +712,7 @@ const CreateGameScreen = () => {
             <Text style={{ color: '#888', fontSize: 13 }}>{description.length}/200</Text>
           </View>
 
-          <Text style={styles.sectionLabel}>{sport === 'Hiking' ? 'Meeting point' : 'Location'}</Text>
+          <Text style={styles.sectionLabel}>{(sport === 'Hiking' || sport === 'Running' || sport === 'Cycling') ? 'Meeting point' : 'Location'}</Text>
           <TouchableOpacity
             activeOpacity={0.7}
             onPress={() =>
@@ -722,7 +732,7 @@ const CreateGameScreen = () => {
           >
             <TextInput
               style={styles.input}
-              placeholder={sport === 'Hiking' ? 'Pick meeting point' : 'Pick a location'}
+              placeholder={(sport === 'Hiking' || sport === 'Running' || sport === 'Cycling') ? 'Pick meeting point' : 'Pick a location'}
               placeholderTextColor="#ccc"
               value={location}
               editable={false}
@@ -752,21 +762,25 @@ const CreateGameScreen = () => {
             >
               <Text style={{ color: '#fff', fontWeight: 'bold' }}>
                 {selectedCoords
-                  ? (sport === 'Hiking' ? 'Change meeting point on map' : 'Change Location on Map')
-                  : (sport === 'Hiking' ? 'Pick meeting point on map' : 'Pick on Map')}
+                  ? ((sport === 'Hiking' || sport === 'Running' || sport === 'Cycling') ? 'Change meeting point on map' : 'Change Location on Map')
+                  : ((sport === 'Hiking' || sport === 'Running' || sport === 'Cycling') ? 'Pick meeting point on map' : 'Pick on Map')}
               </Text>
             </TouchableOpacity>
           </View>
 
-          {sport === 'Hiking' && (
+          {(sport === 'Hiking' || sport === 'Running' || sport === 'Cycling') && (
             <>
-              <Text style={styles.sectionLabel}>GPX Route (optional)</Text>
+              <Text style={styles.sectionLabel}>
+                {sport === 'Hiking' ? 'Hiking Route (optional)'
+                  : sport === 'Running' ? 'Running Route (optional)'
+                  : 'Cycling Route (optional)'}
+              </Text>
               <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
                 <TouchableOpacity style={styles.mapButton} onPress={pickGpxFile} disabled={gpxUploading}>
                   {gpxUploading ? (
                     <ActivityIndicator size="small" color="#fff" />
                   ) : (
-                    <Text style={{ color: '#fff', fontWeight: 'bold' }}>{gpxFile ? 'Replace GPX' : 'Upload GPX (optional)'}</Text>
+                    <Text style={{ color: '#fff', fontWeight: 'bold' }}>{gpxFile ? 'Replace GPX' : 'Upload GPX'}</Text>
                   )}
                 </TouchableOpacity>
                 {gpxFile ? (

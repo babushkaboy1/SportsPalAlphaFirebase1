@@ -14,7 +14,7 @@ function HostUsername({ activity }: { activity: any }) {
   return <Text style={styles.cardInfo}>{username}</Text>;
 }
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, Share, FlatList, Animated, RefreshControl, Alert, Modal, Pressable } from 'react-native';
+import { View, Text, StyleSheet, Image, TouchableOpacity, Share, FlatList, Animated, RefreshControl, Alert, Modal, Pressable, TextInput } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
 import { useRoute, useNavigation } from '@react-navigation/native';
@@ -344,32 +344,109 @@ const UserProfileScreen = () => {
     );
   };
 
-  // Sort joined activities by soonest upcoming (date+time). Past items go after upcoming.
-  const parseDateTimeMs = (dateStr?: string, timeStr?: string) => {
-    if (!dateStr || typeof dateStr !== 'string') return Number.POSITIVE_INFINITY;
-    const d = dateStr.trim();
-    let ymd = d;
-    const ddmmyyyy = /^(\d{2})-(\d{2})-(\d{4})$/;
-    const yyyymmdd = /^(\d{4})-(\d{2})-(\d{2})$/;
-    if (ddmmyyyy.test(d)) {
-      const [, dd, mm, yyyy] = d.match(ddmmyyyy)!;
-      ymd = `${yyyy}-${mm}-${dd}`;
-    } else if (!yyyymmdd.test(d)) {
+  // Split into upcoming vs history using start+2h rule
+  const [historySearchQuery, setHistorySearchQuery] = useState('');
+  const [scheduledSearchQuery, setScheduledSearchQuery] = useState('');
+  const toStartDate = (a: any) => {
+    const d = a?.date;
+    if (!d || typeof d !== 'string') return null;
+    let ymd = d.trim();
+    const m1 = ymd.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+    if (m1) { const [, dd, mm, yyyy] = m1; ymd = `${yyyy}-${mm}-${dd}`; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
       const t = new Date(d).getTime();
-      return isNaN(t) ? Number.POSITIVE_INFINITY : t;
+      if (isNaN(t)) return null;
+      const dt = new Date(t);
+      ymd = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
     }
-    const time = (timeStr && typeof timeStr === 'string' ? timeStr.trim() : '00:00') || '00:00';
-    const isoLocal = `${ymd}T${time}`;
-    const ts = new Date(isoLocal).getTime();
-    return isNaN(ts) ? Number.POSITIVE_INFINITY : ts;
+    const time = (a?.time && typeof a.time === 'string' ? a.time.trim() : '00:00') || '00:00';
+    const dt = new Date(`${ymd}T${time}`);
+    return isNaN(dt.getTime()) ? null : dt;
   };
-  const getEventMs = (a: any) => parseDateTimeMs(a?.date, a?.time);
-  const nowMs = Date.now();
-  const upcoming = userJoinedActivities.filter(a => getEventMs(a) >= nowMs);
-  const past = userJoinedActivities.filter(a => getEventMs(a) < nowMs);
-  upcoming.sort((a, b) => getEventMs(a) - getEventMs(b));
-  past.sort((a, b) => getEventMs(b) - getEventMs(a));
-  const sortedUserJoinedActivities = [...upcoming, ...past];
+  const isHistorical = (a: any) => {
+    const start = toStartDate(a);
+    if (!start) return false;
+    const end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
+    return Date.now() > end.getTime();
+  };
+  const upcomingActivities = userJoinedActivities.filter(a => !isHistorical(a));
+  const historyActivities = userJoinedActivities.filter(a => isHistorical(a));
+  const getStartMs = (a: any) => { const dt = toStartDate(a); return dt ? dt.getTime() : Number.POSITIVE_INFINITY; };
+  upcomingActivities.sort((a, b) => getStartMs(a) - getStartMs(b));
+  historyActivities.sort((a, b) => getStartMs(b) - getStartMs(a));
+  const filteredHistory = historyActivities.filter((a) => {
+    const q = historySearchQuery.trim().toLowerCase();
+    if (!q) return true;
+    const sport = String(a.activity || '').toLowerCase();
+    const host = String(a.creator || '').toLowerCase();
+    const loc = String(a.location || '').toLowerCase();
+    return sport.includes(q) || host.includes(q) || loc.includes(q);
+  });
+  const filteredUpcoming = upcomingActivities.filter((a) => {
+    const q = scheduledSearchQuery.trim().toLowerCase();
+    if (!q) return true;
+    const sport = String(a.activity || '').toLowerCase();
+    const host = String(a.creator || '').toLowerCase();
+    const loc = String(a.location || '').toLowerCase();
+    return sport.includes(q) || host.includes(q) || loc.includes(q);
+  });
+
+  const renderHistoryActivity = ({ item }: { item: any }) => {
+    const distance = userLocation && item.latitude && item.longitude
+      ? calculateDistanceKm(userLocation.latitude, userLocation.longitude, item.latitude, item.longitude).toFixed(2)
+      : null;
+    return (
+      <TouchableOpacity
+        style={styles.activityCard}
+        onPress={() => navigation.navigate('ActivityDetails', { activityId: item.id })}
+        activeOpacity={0.92}
+      >
+        <View style={styles.cardHeaderRow}>
+          <View style={styles.cardHeaderLeft}>
+            <ActivityIcon activity={item.activity} size={32} />
+            <Text style={styles.cardTitle}>{item.activity}</Text>
+          </View>
+          {distance && (
+            <View style={styles.distanceContainer}>
+              <Ionicons name="navigate" size={14} color="#1ae9ef" />
+              <Text style={styles.distanceNumber}>{distance}</Text>
+              <Text style={styles.distanceUnit}>km away</Text>
+            </View>
+          )}
+        </View>
+        <View style={styles.infoRow}>
+          <Ionicons name="person" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Text style={styles.cardInfoLabel}>Host:</Text>
+          <HostUsername activity={item} />
+        </View>
+        <View style={styles.infoRow}>
+          <Ionicons name="location" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Text style={styles.cardInfoLabel}>Location:</Text>
+          <Text style={styles.cardInfo} numberOfLines={1} ellipsizeMode="tail">
+            {simplifyLocation(item.location)}
+          </Text>
+        </View>
+        <View style={styles.infoRow}>
+          <Ionicons name="calendar" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Text style={styles.cardInfoLabel}>Date:</Text>
+          <Text style={styles.cardInfo}>{item.date}</Text>
+        </View>
+        <View style={styles.infoRow}>
+          <Ionicons name="time" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Text style={styles.cardInfoLabel}>Time:</Text>
+          <Text style={styles.cardInfo}>{item.time}</Text>
+        </View>
+        <View style={styles.infoRow}>
+          <Ionicons name="people" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Text style={styles.cardInfoLabel}>Participants:</Text>
+          <Text style={styles.cardInfo}>
+            {item.joinedUserIds ? item.joinedUserIds.length : item.joinedCount} / {item.maxParticipants}
+          </Text>
+        </View>
+        {/* No action buttons for history */}
+      </TouchableOpacity>
+    );
+  };
 
   if (!isReady) {
     return (
@@ -477,13 +554,9 @@ const UserProfileScreen = () => {
             )}
             <TouchableOpacity
               style={styles.profileActionButton}
-              disabled={!(isFriend && theyListMe)}
               onPress={async () => {
                 try {
-                  if (!(isFriend && theyListMe)) {
-                    Alert.alert('Connect first', 'You both need to be connected to send a direct message.');
-                    return;
-                  }
+                  // Open or create a DM regardless of connection status
                   const chatId = await ensureDmChat(userId);
                   navigation.navigate('ChatDetail', { chatId });
                 } catch (e) {
@@ -512,23 +585,86 @@ const UserProfileScreen = () => {
         </View>
         <View style={styles.contentContainer}>
           {activeTab === 'games' ? (
-            <FlatList
-              data={sortedUserJoinedActivities}
-              renderItem={renderActivity}
-              keyExtractor={(item) => item.id}
-              contentContainerStyle={styles.listContainer}
-              refreshControl={
-                <RefreshControl
-                  refreshing={refreshing || refreshLocked}
-                  onRefresh={onRefresh}
-                  colors={["#009fa3"]}
-                  tintColor="#009fa3"
-                  progressBackgroundColor="transparent"
+            <View style={{ flex: 1 }}>
+              <Text style={styles.tabTitleCentered}>Scheduled Activities</Text>
+              <View style={styles.userSearchRow}>
+                <Ionicons name="search" size={16} color="#1ae9ef" style={{ marginRight: 8 }} />
+                <TextInput
+                  style={[styles.searchInput, { flex: 1 }]}
+                  placeholder="Search activity or host..."
+                  placeholderTextColor="#aaa"
+                  value={scheduledSearchQuery}
+                  onChangeText={setScheduledSearchQuery}
+                  returnKeyType="search"
+                  autoCapitalize="none"
+                  autoCorrect={false}
                 />
-              }
-            />
+                {scheduledSearchQuery.trim().length > 0 && (
+                  <TouchableOpacity style={styles.clearButton} onPress={() => setScheduledSearchQuery('')}>
+                    <Ionicons name="close-circle" size={18} color="#1ae9ef" />
+                  </TouchableOpacity>
+                )}
+              </View>
+              {filteredUpcoming.length === 0 ? (
+                <View style={styles.emptyState}>
+                  <Ionicons name="calendar-outline" size={48} color="#1ae9ef" />
+                  <Text style={styles.emptyStateTitle}>No scheduled activities</Text>
+                  <Text style={styles.emptyStateText}>Their upcoming activities will appear here.</Text>
+                </View>
+              ) : (
+                <FlatList
+                  data={filteredUpcoming}
+                  renderItem={renderActivity}
+                  keyExtractor={(item) => item.id}
+                  contentContainerStyle={styles.listContainer}
+                  refreshControl={
+                    <RefreshControl
+                      refreshing={refreshing || refreshLocked}
+                      onRefresh={onRefresh}
+                      colors={["#009fa3"]}
+                      tintColor="#009fa3"
+                      progressBackgroundColor="transparent"
+                    />
+                  }
+                />
+              )}
+            </View>
           ) : (
-            <Text style={styles.tabContent}>Match History</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.tabTitleCentered}>Activity History</Text>
+              <View style={styles.userSearchRow}>
+                <Ionicons name="search" size={16} color="#1ae9ef" style={{ marginRight: 8 }} />
+                <TextInput
+                  style={[styles.searchInput, { flex: 1 }]}
+                  placeholder="Search activity or host..."
+                  placeholderTextColor="#aaa"
+                  value={historySearchQuery}
+                  onChangeText={setHistorySearchQuery}
+                  returnKeyType="search"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                {historySearchQuery.trim().length > 0 && (
+                  <TouchableOpacity style={styles.clearButton} onPress={() => setHistorySearchQuery('')}>
+                    <Ionicons name="close-circle" size={18} color="#1ae9ef" />
+                  </TouchableOpacity>
+                )}
+              </View>
+              {filteredHistory.length === 0 ? (
+                <View style={styles.emptyState}>
+                  <Ionicons name="time-outline" size={48} color="#1ae9ef" />
+                  <Text style={styles.emptyStateTitle}>No past activities</Text>
+                  <Text style={styles.emptyStateText}>Their past activities will appear here.</Text>
+                </View>
+              ) : (
+                <FlatList
+                  data={filteredHistory}
+                  renderItem={renderHistoryActivity}
+                  keyExtractor={(item) => item.id}
+                  contentContainerStyle={styles.listContainer}
+                />
+              )}
+            </View>
           )}
         </View>
       </Animated.View>
@@ -552,7 +688,7 @@ const UserProfileScreen = () => {
               <Text style={{ color: '#bbb' }}>No favourites yet.</Text>
             ) : (
               <FlatList
-                data={(profile?.sportsPreferences || profile?.selectedSports || []) as string[]}
+                data={[...(((profile?.sportsPreferences || profile?.selectedSports || []) as string[]))].sort((a, b) => a.localeCompare(b))}
                 keyExtractor={(s, i) => s + i}
                 ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
                 renderItem={({ item }) => (
@@ -613,6 +749,59 @@ const UserProfileScreen = () => {
 };
 
 const styles = StyleSheet.create({
+  tabTitleCentered: {
+    color: '#1ae9ef',
+    fontSize: 18,
+    fontWeight: '700',
+    textAlign: 'center',
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  userSearchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1e1e1e',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: '#2a2a2a',
+    marginBottom: 10,
+  },
+  searchInput: {
+    backgroundColor: '#1e1e1e',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 5,
+    minHeight: 36,
+    color: '#fff',
+    fontWeight: '500',
+  },
+  clearButton: {
+    marginLeft: 8,
+    height: 24,
+    width: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 30,
+    paddingHorizontal: 20,
+  },
+  emptyStateTitle: {
+    color: '#1ae9ef',
+    fontWeight: 'bold',
+    fontSize: 16,
+    marginTop: 10,
+  },
+  emptyStateText: {
+    color: '#bbb',
+    fontSize: 14,
+    textAlign: 'center',
+    marginTop: 6,
+  },
   cardHeaderLeft: {
     flexDirection: 'row',
     alignItems: 'center',

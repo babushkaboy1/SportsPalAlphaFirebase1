@@ -1,9 +1,8 @@
-# Node modules and package manager files
-node_modules
-npm-debug.log
-yarn-error.log
-package-lock.json
-yarn.lock
+# Node modules and logs (lockfiles should be included for reproducible builds)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # Git and version control
 .git
@@ -19,18 +18,21 @@ dist
 build
 web-build
 
+# Expo caches
+.expo/
+.expo-shared/
+
 # Test, docs, and local config
 __tests__
 test
 tests
 docs
-coverage
+coverage/
 .env
 .env.*
 
 # Miscellaneous
 *.log
-*.md
 .DS_Store
 Thumbs.db
 
@@ -38,6 +40,9 @@ Thumbs.db
 assets/raw/
 assets/large/
 
-# React Native
+# React Native native projects (managed workflow typically doesn’t include these)
 android/
 ios/
+
+# Firebase Cloud Functions (not needed for client app builds)
+functions/

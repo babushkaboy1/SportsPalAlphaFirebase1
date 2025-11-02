@@ -13,6 +13,7 @@ import { auth } from './firebaseConfig';
 import * as NavigationBar from 'expo-navigation-bar';
 import * as SystemUI from 'expo-system-ui';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { registerPushNotificationsForCurrentUser, subscribeNotificationResponses, getLastNotificationResponseData } from './utils/notifications';
 
 // Import your screens
 import DiscoverGamesScreen from './screens/DiscoverGamesScreen';
@@ -212,6 +213,47 @@ export default function App() {
       const timeout = setTimeout(preloadScreens, 1500);
       return () => clearTimeout(timeout);
     }
+  }, [user]);
+
+  // Register push notifications and handle taps to navigate
+  useEffect(() => {
+    let unsubscribeResponses: (() => void) | undefined;
+    if (user) {
+      // Best-effort registration (no blocking)
+      registerPushNotificationsForCurrentUser().catch(() => {});
+      // Handle cold-start from a tapped notification
+      getLastNotificationResponseData()
+        .then((data) => {
+          if (!data || !navRef.isReady()) return;
+          if (data.type === 'chat' && data.chatId) {
+            try { (navRef as any).navigate('ChatDetail', { chatId: data.chatId }); } catch {}
+            return;
+          }
+          if (data.type === 'activity_invite' && data.activityId) {
+            try { (navRef as any).navigate('ActivityDetails', { activityId: data.activityId }); } catch {}
+            return;
+          }
+          try { (navRef as any).navigate('MainTabs', { screen: 'Inbox' }); } catch {}
+        })
+        .catch(() => {});
+      unsubscribeResponses = subscribeNotificationResponses((data) => {
+        if (!navRef.isReady() || !data) return;
+        if (data.type === 'chat' && data.chatId) {
+          // Open specific chat thread
+          try { (navRef as any).navigate('ChatDetail', { chatId: data.chatId }); } catch {}
+          return;
+        }
+        if (data.type === 'activity_invite' && data.activityId) {
+          try { (navRef as any).navigate('ActivityDetails', { activityId: data.activityId }); } catch {}
+          return;
+        }
+        // For friend requests/accepts or anything else, bring user to Inbox
+        try { (navRef as any).navigate('MainTabs', { screen: 'Inbox' }); } catch {}
+      });
+    }
+    return () => {
+      if (unsubscribeResponses) unsubscribeResponses();
+    };
   }, [user]);
 
   useEffect(() => {
