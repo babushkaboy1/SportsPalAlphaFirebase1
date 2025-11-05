@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Helper component for host username
 
 function HostUsername({ activity }: { activity: any }) {
   const [username, setUsername] = useState('');
+  const { theme } = useTheme();
   useEffect(() => {
     let mounted = true;
     const fetchUsername = async () => {
@@ -13,7 +15,7 @@ function HostUsername({ activity }: { activity: any }) {
     fetchUsername();
     return () => { mounted = false; };
   }, [activity.creatorId, activity.creator]);
-  return <Text style={styles.cardInfo}>{username}</Text>;
+  return <Text style={{ fontSize: 14, color: theme.muted, fontWeight: '500' }}>{username}</Text>;
 }
 import {
   View,
@@ -32,6 +34,7 @@ import {
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useTheme } from '../context/ThemeContext';
 import * as Location from 'expo-location';
 import DateTimePickerModal from 'react-native-modal-datetime-picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -44,6 +47,34 @@ import { getDisplayCreatorUsername } from '../utils/getDisplayCreatorUsername';
 
 // Default discovery radius ≈45-min drive at 80–100 km/h
 const DEFAULT_RADIUS_KM = 70;
+
+// Slight darken helper for hex colors (fallbacks to original color on parse failure)
+function darkenHex(color: string, amount = 0.12): string {
+  try {
+    if (!color || typeof color !== 'string') return color;
+    const hex = color.trim();
+    const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex);
+    if (!match) return color; // non-hex -> keep as-is
+    let r = 0, g = 0, b = 0;
+    if (match[1].length === 3) {
+      r = parseInt(match[1][0] + match[1][0], 16);
+      g = parseInt(match[1][1] + match[1][1], 16);
+      b = parseInt(match[1][2] + match[1][2], 16);
+    } else {
+      r = parseInt(match[1].slice(0, 2), 16);
+      g = parseInt(match[1].slice(2, 4), 16);
+      b = parseInt(match[1].slice(4, 6), 16);
+    }
+    const factor = Math.max(0, Math.min(1, 1 - amount));
+    const dr = Math.round(r * factor);
+    const dg = Math.round(g * factor);
+    const db = Math.round(b * factor);
+    const toHex = (n: number) => n.toString(16).padStart(2, '0');
+    return `#${toHex(dr)}${toHex(dg)}${toHex(db)}`;
+  } catch {
+    return color;
+  }
+}
 
 const sportFilterOptions = [
   'All',
@@ -74,7 +105,12 @@ type RootStackParamList = {
 type DiscoverNav = NavigationProp<RootStackParamList, 'ActivityDetails'>;
 
 const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation }) => {
+  const { theme } = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
   const { allActivities, isActivityJoined, toggleJoinActivity, profile } = useActivityContext();
+
+  // Discovery range from settings (default 70 km)
+  const [discoveryRange, setDiscoveryRange] = useState(DEFAULT_RADIUS_KM);
 
   // rawSearch holds immediate input, debouncedSearch is used for filtering (debounced)
   const [rawSearchQuery, setRawSearchQuery] = useState('');
@@ -88,6 +124,21 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
   const [tempDate, setTempDate] = useState<Date | null>(null);
   const [isSortingByDistance, setIsSortingByDistance] = useState(false);
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+
+  // Load discovery range from AsyncStorage
+  useEffect(() => {
+    const loadDiscoveryRange = async () => {
+      try {
+        const saved = await AsyncStorage.getItem('discoveryRange');
+        if (saved) {
+          setDiscoveryRange(parseInt(saved, 10));
+        }
+      } catch (error) {
+        console.error('Failed to load discovery range:', error);
+      }
+    };
+    loadDiscoveryRange();
+  }, []);
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const searchDebounceRef = useRef<number | null>(null);
@@ -220,10 +271,10 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
       list = list.filter(a => normalizeActivityDate(a.date) === formattedSelected);
     }
 
-    // Always use 70 km radius from user location when available
+    // Filter by distance (use saved discovery range from settings)
     if (userLocation) {
       list = list.filter(a =>
-        calculateDistance(userLocation.latitude, userLocation.longitude, a.latitude, a.longitude) <= DEFAULT_RADIUS_KM
+        calculateDistance(userLocation.latitude, userLocation.longitude, a.latitude, a.longitude) <= discoveryRange
       );
     }
 
@@ -327,6 +378,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
     selectedDate,
     isSortingByDistance,
     userLocation,
+    discoveryRange,
     calculateDistance,
     profile?.sportsPreferences,
   ]);
@@ -376,12 +428,12 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
       >
         <View style={styles.cardHeader}>
           <View style={styles.cardHeaderLeft}>
-            <ActivityIcon activity={item.activity} size={32} />
+            <ActivityIcon activity={item.activity} size={32} color={theme.primary} />
             <Text style={styles.cardTitle}>{item.activity}</Text>
           </View>
           {distance && (
             <View style={styles.distanceContainer}>
-              <Ionicons name="navigate" size={14} color="#1ae9ef" />
+              <Ionicons name="navigate" size={14} color={theme.primary} />
               <Text style={styles.distanceNumber}>{distance}</Text>
               <Text style={styles.distanceUnit}>km away</Text>
             </View>
@@ -389,7 +441,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
         </View>
 
         <View style={styles.infoRow}>
-          <Ionicons name="person" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Ionicons name="person" size={16} color={theme.primary} style={styles.infoIcon} />
           <Text style={styles.cardInfoLabel}>Host:</Text>
           <HostUsername activity={item} />
         </View>
@@ -398,7 +450,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
 
 
         <View style={styles.infoRow}>
-          <Ionicons name="location" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Ionicons name="location" size={16} color={theme.primary} style={styles.infoIcon} />
           <Text style={styles.cardInfoLabel}>Location:</Text>
           <Text style={styles.cardInfo} numberOfLines={1} ellipsizeMode="tail">
             {simplifyLocation(item.location)}
@@ -406,19 +458,19 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
         </View>
 
         <View style={styles.infoRow}>
-          <Ionicons name="calendar" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Ionicons name="calendar" size={16} color={theme.primary} style={styles.infoIcon} />
           <Text style={styles.cardInfoLabel}>Date:</Text>
           <Text style={styles.cardInfo}>{item.date}</Text>
         </View>
 
         <View style={styles.infoRow}>
-          <Ionicons name="time" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Ionicons name="time" size={16} color={theme.primary} style={styles.infoIcon} />
           <Text style={styles.cardInfoLabel}>Time:</Text>
           <Text style={styles.cardInfo}>{item.time}</Text>
         </View>
 
         <View style={styles.infoRow}>
-          <Ionicons name="people" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Ionicons name="people" size={16} color={theme.primary} style={styles.infoIcon} />
           <Text style={styles.cardInfoLabel}>Participants:</Text>
           <Text style={styles.cardInfo}>
             {item.joinedUserIds ? item.joinedUserIds.length : item.joinedCount} / {item.maxParticipants}
@@ -427,7 +479,15 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
 
         <View style={styles.cardActions}>
           <TouchableOpacity
-            style={[styles.joinButton, isActivityJoined(item.id) && styles.joinButtonJoined]}
+            style={[
+              styles.joinButton,
+              isActivityJoined(item.id) && {
+                // Discover-specific: Leave color mapping per request
+                // - Dark theme: use the dark turquoise from light theme (#007E84)
+                // - Light theme: slightly darken the current turquoise
+                backgroundColor: theme.isDark ? '#007E84' : darkenHex(theme.primary, 0.12),
+              },
+            ]}
             onPress={handleToggleJoin}
           >
             <Text style={styles.joinButtonText}>
@@ -442,7 +502,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
               })
             }
           >
-            <Ionicons name="share-social-outline" size={20} color="#fff" />
+            <Ionicons name="share-social-outline" size={20} color={theme.text} />
           </TouchableOpacity>
         </View>
       </TouchableOpacity>
@@ -456,18 +516,18 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
-      <Animated.View style={{ flex: 1, opacity: fadeAnim, backgroundColor: '#121212' }}>
+      <Animated.View style={{ flex: 1, opacity: fadeAnim, backgroundColor: theme.background }}>
         <View style={styles.headerContainer}>
           <Text style={styles.headerTitle}>Discover Activities</Text>
         </View>
 
         <View style={styles.topSection}>
           <View style={styles.searchContainer}>
-            <Ionicons name="search" size={18} color="#ccc" />
+            <Ionicons name="search" size={18} color={theme.muted} />
             <TextInput
               style={styles.searchInput}
               placeholder="Search by activity or host..."
-              placeholderTextColor="#bbb"
+              placeholderTextColor={theme.muted}
               value={rawSearchQuery}
               onChangeText={setRawSearchQuery}
               returnKeyType="search"
@@ -479,7 +539,10 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
               style={[styles.sortButton, isSortingByDistance && styles.activeButton]}
               onPress={toggleSortByDistance}
             >
-              <Text style={styles.sortButtonText}>Sort by Distance</Text>
+              <Text style={[
+                styles.sortButtonText,
+                isSortingByDistance && { color: '#fff' },
+              ]}>Sort by Distance</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -518,7 +581,10 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
                 style={[styles.filterChip, selectedFilter === option && styles.filterChipActive]}
                 onPress={() => setSelectedFilter(option)}
               >
-                <Text style={styles.filterChipText}>{option}</Text>
+                <Text style={[
+                  styles.filterChipText,
+                  selectedFilter === option && { color: '#fff' },
+                ]}>{option}</Text>
               </TouchableOpacity>
             ))}
           </ScrollView>
@@ -526,11 +592,11 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
 
         {filteredActivities.length === 0 && (
           <View style={{ alignItems: 'center', marginTop: 32, marginBottom: 12, paddingHorizontal: 24 }}>
-            <Ionicons name="search-outline" size={48} color="#1ae9ef" style={{ marginBottom: 10 }} />
-            <Text style={{ color: '#fff', fontSize: 20, fontWeight: 'bold', textAlign: 'center', marginBottom: 8 }}>
+            <Ionicons name="search-outline" size={48} color={theme.primary} style={{ marginBottom: 10 }} />
+            <Text style={{ color: theme.text, fontSize: 20, fontWeight: 'bold', textAlign: 'center', marginBottom: 8 }}>
               No activities found
             </Text>
-            <Text style={{ color: '#bbb', fontSize: 16, textAlign: 'center', marginBottom: 18 }}>
+            <Text style={{ color: theme.muted, fontSize: 16, textAlign: 'center', marginBottom: 18 }}>
               Be the first to create an event in your area!
               Others will be able to discover and join your activity from this page!
             </Text>
@@ -540,15 +606,15 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
                 paddingVertical: 14,
                 paddingHorizontal: 36,
                 borderRadius: 24,
-                backgroundColor: '#1ae9ef',
-                shadowColor: '#1ae9ef',
+                backgroundColor: theme.primary,
+                shadowColor: theme.primary,
                 shadowOpacity: 0.4,
                 shadowRadius: 8,
                 elevation: 4,
               }}
               activeOpacity={0.85}
             >
-              <Text style={{ color: '#121212', fontWeight: 'bold', fontSize: 17, letterSpacing: 0.5 }}>
+              <Text style={{ color: theme.isDark ? '#111' : '#fff', fontWeight: 'bold', fontSize: 17, letterSpacing: 0.5 }}>
                 Create an Event
               </Text>
             </TouchableOpacity>
@@ -564,13 +630,13 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
             <RefreshControl
               refreshing={refreshing || refreshLocked}
               onRefresh={loadActivities}
-              colors={['#009fa3']}
-              tintColor="#009fa3"
+              colors={[theme.isDark ? theme.primary : theme.primaryStrong] as any}
+              tintColor={theme.isDark ? theme.primary : theme.primaryStrong}
               progressBackgroundColor="transparent"
             />
           }
           contentContainerStyle={styles.listContainer}
-          style={{ backgroundColor: '#121212' }}
+          style={{ backgroundColor: theme.background }}
           // ✅ Perf-friendly knobs (no UI change)
           initialNumToRender={8}
           windowSize={7}
@@ -609,7 +675,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
                   value={tempDate ?? new Date()}
                   mode="date"
                   display="spinner"
-                  themeVariant="dark"
+                  themeVariant={theme.isDark ? 'dark' : 'light'}
                   onChange={(event, d) => d && setTempDate(d)}
                   style={styles.rollerPicker}
                 />
@@ -624,8 +690,8 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
 
 export default DiscoverGamesScreen;
 
-const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#121212' },
+const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.create({
+  safeArea: { flex: 1, backgroundColor: t.background },
 
   headerContainer: {
     flexDirection: 'row',
@@ -638,7 +704,7 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 28,
-    color: '#1ae9ef',
+    color: t.primary,
     fontWeight: 'bold',
     textAlign: 'center',
   },
@@ -649,7 +715,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   rollerContainer: {
-    backgroundColor: Platform.OS === 'ios' ? '#222' : '#fff',
+    backgroundColor: Platform.OS === 'ios' ? (t.isDark ? '#222' : '#fff') : t.card,
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     paddingBottom: Platform.OS === 'ios' ? 32 : 0,
@@ -663,80 +729,80 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingBottom: 8,
   },
-  rollerCancel: { color: '#ff5a5f', fontWeight: 'bold', fontSize: 18, paddingVertical: 8 },
-  rollerDone: { color: '#1ae9ef', fontWeight: 'bold', fontSize: 18, paddingVertical: 8 },
+  rollerCancel: { color: t.danger, fontWeight: 'bold', fontSize: 18, paddingVertical: 8 },
+  rollerDone: { color: t.primary, fontWeight: 'bold', fontSize: 18, paddingVertical: 8 },
   rollerPicker: { width: '100%', backgroundColor: 'transparent' },
 
   topSection: { paddingHorizontal: 15 },
-  searchContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1e1e1e', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8, marginBottom: 10 },
+  searchContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: t.card, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8, marginBottom: 10 },
   searchInput: {
     flex: 1,
     marginLeft: 8,
     backgroundColor: 'transparent',
     borderRadius: 8,
     paddingVertical: 0,
-    color: '#fff',
+    color: t.text,
     fontSize: 16,
   },
   sortButtons: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
   sortButton: {
     paddingVertical: 8,
     paddingHorizontal: 15,
-    backgroundColor: '#333',
+    backgroundColor: t.card,
     borderRadius: 5,
     marginRight: 8,
   },
-  activeButton: { backgroundColor: '#1ae9ef' },
-  sortButtonText: { color: '#fff', fontSize: 14, fontWeight: '500' },
+  activeButton: { backgroundColor: t.primary },
+  sortButtonText: { color: t.text, fontSize: 14, fontWeight: '500' },
   clearButton: {
-    backgroundColor: '#e74c3c',
+    backgroundColor: t.danger,
     paddingVertical: 5,
     paddingHorizontal: 10,
     borderRadius: 5,
     marginLeft: 5,
   },
-  clearButtonText: { color: '#fff', fontSize: 14, fontWeight: '500' },
+  clearButtonText: { color: t.text, fontSize: 14, fontWeight: '500' },
 
   filterWrapper: { flexDirection: 'row', marginVertical: 10 },
   filterChip: {
     paddingVertical: 8,
     paddingHorizontal: 15,
-    backgroundColor: '#333',
+    backgroundColor: t.card,
     borderRadius: 20,
     marginRight: 8,
   },
-  filterChipActive: { backgroundColor: '#1ae9ef' },
-  filterChipText: { color: '#fff', fontSize: 14, fontWeight: '500' },
+  filterChipActive: { backgroundColor: t.primary },
+  filterChipText: { color: t.text, fontSize: 14, fontWeight: '500' },
 
   listContainer: { padding: 15 },
 
   card: {
-    backgroundColor: '#1e1e1e',
+    backgroundColor: t.card,
     borderRadius: 10,
     padding: 15,
     marginBottom: 15,
   },
   cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 },
   cardHeaderLeft: { flexDirection: 'row', alignItems: 'center' },
-  cardTitle: { fontSize: 18, color: '#1ae9ef', fontWeight: 'bold', marginLeft: 10 },
+  cardTitle: { fontSize: 18, color: t.primary, fontWeight: 'bold', marginLeft: 10 },
 
   distanceContainer: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  distanceNumber: { fontSize: 14, color: '#1ae9ef', fontWeight: '600' },
-  distanceUnit: { fontSize: 14, color: '#888', fontWeight: '500' },
+  distanceNumber: { fontSize: 14, color: t.primary, fontWeight: '600' },
+  distanceUnit: { fontSize: 14, color: t.muted, fontWeight: '500' },
 
   infoRow: { flexDirection: 'row', alignItems: 'center', marginVertical: 3 },
   infoIcon: { marginRight: 8 },
-  cardInfoLabel: { fontSize: 14, color: '#1ae9ef', fontWeight: '600', marginRight: 6 },
-  cardInfo: { fontSize: 14, color: '#ccc', fontWeight: '500' },
+  cardInfoLabel: { fontSize: 14, color: t.primary, fontWeight: '600', marginRight: 6 },
+  cardInfo: { fontSize: 14, color: t.muted, fontWeight: '500' },
 
   cardActions: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 },
   joinButton: {
     paddingVertical: 8,
     paddingHorizontal: 15,
-    backgroundColor: '#1ae9ef',
+    backgroundColor: t.primary,
     borderRadius: 5,
   },
-  joinButtonJoined: { backgroundColor: '#007b7b' },
+  joinButtonJoined: { backgroundColor: t.primaryStrong },
   joinButtonText: { color: '#fff', fontWeight: 'bold' },
-  shareButton: { padding: 8, backgroundColor: '#1e1e1e', borderRadius: 5 },
+  shareButton: { padding: 8, backgroundColor: t.card, borderRadius: 5 },
 });

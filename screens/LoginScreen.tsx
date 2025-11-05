@@ -12,6 +12,7 @@ import {
   Alert,
 } from 'react-native';
 import Logo from '../components/Logo';
+import { useTheme } from '../context/ThemeContext';
 import { CommonActions } from '@react-navigation/native';
 import { AntDesign, FontAwesome, Ionicons } from '@expo/vector-icons';
 import { signInWithEmailAndPassword, signInWithCredential, GoogleAuthProvider, sendPasswordResetEmail, fetchSignInMethodsForEmail, FacebookAuthProvider, OAuthProvider, linkWithCredential, AuthCredential } from 'firebase/auth';
@@ -19,7 +20,9 @@ import { auth } from '../firebaseConfig';
 import * as Google from 'expo-auth-session/providers/google';
 import * as Facebook from 'expo-auth-session/providers/facebook';
 import * as AppleAuthentication from 'expo-apple-authentication';
+import * as Crypto from 'expo-crypto';
 import Svg, { Path } from 'react-native-svg';
+import { GOOGLE_ANDROID_CLIENT_ID, GOOGLE_IOS_CLIENT_ID, GOOGLE_WEB_CLIENT_ID } from '@env';
 
 // Google Logo Component (multicolor)
 const GoogleLogo = () => (
@@ -44,14 +47,16 @@ const GoogleLogo = () => (
 );
 
 const LoginScreen = ({ navigation }: any) => {
+  const { theme } = useTheme();
+  const styles = React.useMemo(() => createStyles(theme), [theme]);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [request, response, promptAsync] = Google.useAuthRequest({
-    androidClientId: '690971568236-d4ijqaml0rt2dv98eve2bckmvtf13l1c.apps.googleusercontent.com',
-    iosClientId: '690971568236-qnqatg8h63re13j433l1oj22aiqktvts.apps.googleusercontent.com',
-    webClientId: '690971568236-1slb2hq568pk1cqnpo44aioi5549avl7.apps.googleusercontent.com',
+    androidClientId: GOOGLE_ANDROID_CLIENT_ID || '690971568236-d4ijqaml0rt2dv98eve2bckmvtf13l1c.apps.googleusercontent.com',
+    iosClientId: GOOGLE_IOS_CLIENT_ID || '690971568236-qnqatg8h63re13j433l1oj22aiqktvts.apps.googleusercontent.com',
+    webClientId: GOOGLE_WEB_CLIENT_ID || '690971568236-1slb2hq568pk1cqnpo44aioi5549avl7.apps.googleusercontent.com',
   });
   const [fbRequest, fbResponse, fbPromptAsync] = Facebook.useAuthRequest({
     clientId: 'FACEBOOK_APP_ID', // TODO: replace with your Facebook App ID
@@ -198,20 +203,24 @@ const LoginScreen = ({ navigation }: any) => {
   // Apple sign-in (native on iOS via expo-apple-authentication)
   const handleAppleSignIn = async (forLink = false) => {
     try {
-      const nonce = Math.random().toString(36).substring(2) + Math.random().toString(36).substring(2);
+      // Generate a cryptographically random nonce and hash it for the Apple request
+      const rawNonce = Math.random().toString(36).substring(2) + Math.random().toString(36).substring(2);
+      const hashedNonce = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, rawNonce);
       const res = await AppleAuthentication.signInAsync({
         requestedScopes: [
           AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
           AppleAuthentication.AppleAuthenticationScope.EMAIL,
         ],
-        nonce,
+        // Apple expects the SHA256 of the raw nonce in the request
+        nonce: hashedNonce,
       });
       if (!res.identityToken) {
         Alert.alert('Apple Sign-In', 'No identity token returned.');
         return;
       }
       const provider = new OAuthProvider('apple.com');
-      const appleCred = provider.credential({ idToken: res.identityToken, rawNonce: nonce });
+      // Firebase expects the original raw nonce; it will hash and compare to the token's nonce claim
+      const appleCred = provider.credential({ idToken: res.identityToken, rawNonce });
       if (forLink) {
         try {
           await signInWithCredential(auth, appleCred);
@@ -324,7 +333,7 @@ const LoginScreen = ({ navigation }: any) => {
   };
 
   return (
-    <Animated.View style={{ flex: 1, opacity: fadeAnim, backgroundColor: '#121212' }}>
+    <Animated.View style={{ flex: 1, opacity: fadeAnim, backgroundColor: theme.background }}>
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.container}
@@ -342,7 +351,7 @@ const LoginScreen = ({ navigation }: any) => {
         <TextInput
           style={styles.input}
           placeholder="Email"
-          placeholderTextColor="#ccc"
+          placeholderTextColor={theme.muted}
           autoCapitalize="none"
           keyboardType="email-address"
           value={email}
@@ -352,7 +361,7 @@ const LoginScreen = ({ navigation }: any) => {
         <TextInput
           style={styles.input}
           placeholder="Password"
-          placeholderTextColor="#ccc"
+          placeholderTextColor={theme.muted}
           secureTextEntry
           value={password}
           onChangeText={setPassword}
@@ -378,7 +387,7 @@ const LoginScreen = ({ navigation }: any) => {
         </TouchableOpacity>
 
         {/* Divider */}
-        <Text style={styles.dividerText}>or</Text>
+  <Text style={styles.dividerText}>or</Text>
 
         {/* Social Login Buttons */}
         <View style={styles.socialContainer}>
@@ -418,7 +427,7 @@ const LoginScreen = ({ navigation }: any) => {
           <Text style={styles.linkModalTitle}>Link with your password</Text>
           <TextInput
             placeholder="Enter your password"
-            placeholderTextColor="#aaa"
+            placeholderTextColor={theme.muted}
             secureTextEntry
             value={linkPassword}
             onChangeText={setLinkPassword}
@@ -426,10 +435,10 @@ const LoginScreen = ({ navigation }: any) => {
           />
           <View style={styles.linkActions}>
             <TouchableOpacity style={[styles.linkBtn, styles.linkCancel]} onPress={() => setLinkPasswordVisible(false)}>
-              <Text style={styles.linkBtnText}>Cancel</Text>
+              <Text style={[styles.linkBtnText, { color: theme.text }]}>Cancel</Text>
             </TouchableOpacity>
             <TouchableOpacity style={[styles.linkBtn, styles.linkSubmit]} onPress={submitLinkPassword}>
-              <Text style={[styles.linkBtnText, { color: '#000' }]}>Link</Text>
+              <Text style={[styles.linkBtnText, { color: '#fff' }]}>Link</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -437,35 +446,36 @@ const LoginScreen = ({ navigation }: any) => {
     </Animated.View>
   );
 };
-
-const styles = StyleSheet.create({
+const createStyles = (t: any) => StyleSheet.create({
   scrollView: {
     flex: 1,
-    backgroundColor: '#121212',
+    backgroundColor: t.background,
   },
   container: {
     flexGrow: 1,
     padding: 20,
-    backgroundColor: '#121212',
+    backgroundColor: t.background,
     alignItems: 'center',
     justifyContent: 'center',
     paddingTop: 0,
   },
   title: {
     fontSize: 28,
-    color: '#1ae9ef',
+    color: t.primary,
     fontWeight: 'bold',
     marginVertical: 20,
     textAlign: 'center',
   },
   input: {
     width: '100%',
-    backgroundColor: '#1e1e1e',
+    backgroundColor: t.card,
     borderRadius: 8,
     padding: 12,
     marginVertical: 10,
     fontSize: 16,
-    color: '#fff',
+    color: t.text,
+    borderWidth: 1,
+    borderColor: t.border,
   },
   forgotPasswordBtn: {
     alignSelf: 'flex-end',
@@ -474,14 +484,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 2,
   },
   forgotPasswordText: {
-    color: '#1ae9ef',
+    color: t.primary,
     fontSize: 15,
     textDecorationLine: 'underline',
     fontWeight: '600',
   },
   button: {
     width: '100%',
-    backgroundColor: '#1ae9ef',
+    backgroundColor: t.primary,
     paddingVertical: 15,
     borderRadius: 8,
     alignItems: 'center',
@@ -493,14 +503,14 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   signUpText: {
-    color: '#1ae9ef',
+    color: t.primary,
     textDecorationLine: 'underline',
     marginTop: 10,
     fontSize: 16,
     textAlign: 'center',
   },
   dividerText: {
-    color: '#ccc',
+    color: t.muted,
     fontSize: 14,
     marginTop: 20,
     marginBottom: 10,
@@ -514,8 +524,7 @@ const styles = StyleSheet.create({
   socialIcon: {
     marginRight: 12,
   },
-
-  // Apple Sign In Button (Light Mode - following Apple HIG)
+  // Apple Sign In Button (Light Mode look)
   appleButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -539,8 +548,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     letterSpacing: -0.3,
   },
-
-  // Facebook Button (Official Facebook Blue)
+  // Facebook Button (brand color)
   facebookButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -562,8 +570,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     letterSpacing: -0.3,
   },
-
-  // Google Button (Following Google Brand Guidelines)
+  // Google Button
   googleButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -587,15 +594,14 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     letterSpacing: -0.3,
   },
-  linkModalContainer: { position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: '#1e1e1e', padding: 16, borderTopLeftRadius: 16, borderTopRightRadius: 16, borderWidth: 1, borderColor: '#2a2a2a' },
-  linkModalTitle: { color: '#1ae9ef', fontSize: 16, fontWeight: '700', marginBottom: 8 },
-  linkPasswordInput: { backgroundColor: '#2a2a2a', color: '#fff', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, fontSize: 16 },
+  linkModalContainer: { position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: t.card, padding: 16, borderTopLeftRadius: 16, borderTopRightRadius: 16, borderWidth: 1, borderColor: t.border },
+  linkModalTitle: { color: t.primary, fontSize: 16, fontWeight: '700', marginBottom: 8 },
+  linkPasswordInput: { backgroundColor: t.card, borderWidth: 1, borderColor: t.border, color: t.text, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, fontSize: 16 },
   linkActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 12 },
   linkBtn: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 8 },
-  linkCancel: { backgroundColor: '#444' },
-  linkSubmit: { backgroundColor: '#1ae9ef' },
+  linkCancel: { backgroundColor: t.card, borderWidth: 1, borderColor: t.border },
+  linkSubmit: { backgroundColor: t.primary },
   linkBtnText: { color: '#fff', fontWeight: '700' },
-  
 });
 
 export default LoginScreen;

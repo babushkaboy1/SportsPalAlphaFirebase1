@@ -5,6 +5,7 @@ import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 
 function HostUsername({ activity }: { activity: any }) {
   const [username, setUsername] = useState('');
+  const { theme } = useTheme();
   useEffect(() => {
     let mounted = true;
     const fetchUsername = async () => {
@@ -24,7 +25,7 @@ function HostUsername({ activity }: { activity: any }) {
     fetchUsername();
     return () => { mounted = false; };
   }, [activity.creatorId, activity.creator]);
-  return <Text style={styles.cardInfo}>{username}</Text>;
+  return <Text style={{ fontSize: 14, color: theme.muted, fontWeight: '500' }}>{username}</Text>;
 }
 // screens/CalendarScreen.tsx
 import { getDisplayCreatorUsername } from '../utils/getDisplayCreatorUsername';
@@ -51,8 +52,37 @@ import * as ExpoCalendar from 'expo-calendar';
 import { doc, getDoc, updateDoc, arrayUnion } from 'firebase/firestore';
 import { db, auth } from '../firebaseConfig';
 import { useFocusEffect, useRoute, useNavigation } from '@react-navigation/native';
+import { useTheme } from '../context/ThemeContext';
 
 /* ---------- Helpers (module-level) ---------- */
+
+// Slight darken helper for hex colors (fallback to original on parse failure)
+function darkenHex(color: string, amount = 0.12): string {
+  try {
+    if (!color || typeof color !== 'string') return color;
+    const hex = color.trim();
+    const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex);
+    if (!match) return color;
+    let r = 0, g = 0, b = 0;
+    if (match[1].length === 3) {
+      r = parseInt(match[1][0] + match[1][0], 16);
+      g = parseInt(match[1][1] + match[1][1], 16);
+      b = parseInt(match[1][2] + match[1][2], 16);
+    } else {
+      r = parseInt(match[1].slice(0, 2), 16);
+      g = parseInt(match[1].slice(2, 4), 16);
+      b = parseInt(match[1].slice(4, 6), 16);
+    }
+    const factor = Math.max(0, Math.min(1, 1 - amount));
+    const dr = Math.round(r * factor);
+    const dg = Math.round(g * factor);
+    const db = Math.round(b * factor);
+    const toHex = (n: number) => n.toString(16).padStart(2, '0');
+    return `#${toHex(dr)}${toHex(dg)}${toHex(db)}`;
+  } catch {
+    return color;
+  }
+}
 
 const simplifyLocation = (location: string) => {
   const parts = location.split(',').map(p => p.trim());
@@ -95,6 +125,8 @@ const getSportEmoji = (sport: string): string => {
 /* ---------- Component ---------- */
 
 const CalendarScreen = ({ navigation, route }: any) => {
+  const { theme } = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
   const { joinedActivities, allActivities, reloadAllActivities, toggleJoinActivity } = useActivityContext();
 
   // User location
@@ -184,10 +216,10 @@ const CalendarScreen = ({ navigation, route }: any) => {
         const [dd, mm, yyyy] = activity.date.split('-');
         const calendarDate = `${yyyy}-${mm}-${dd}`;
         if (!marks[calendarDate]) {
-          marks[calendarDate] = { marked: true, dots: [{ key: 'activity', color: '#1ae9ef' }] };
+          marks[calendarDate] = { marked: true, dots: [{ key: 'activity', color: theme.primary }] };
         } else {
           marks[calendarDate].marked = true;
-          marks[calendarDate].dots = [{ key: 'activity', color: '#1ae9ef' }];
+          marks[calendarDate].dots = [{ key: 'activity', color: theme.primary }];
         }
       }
     });
@@ -200,7 +232,7 @@ const CalendarScreen = ({ navigation, route }: any) => {
         ...(marks[selectedCalendarDate] || {}),
         selected: true,
         customStyles: {
-          container: { backgroundColor: '#1ae9ef', borderRadius: 50 },
+          container: { backgroundColor: theme.primary, borderRadius: 50 },
           text: { color: '#fff' },
         },
       };
@@ -211,7 +243,7 @@ const CalendarScreen = ({ navigation, route }: any) => {
     }
 
     return marks;
-  }, [allActivities, joinedActivities, currentDate]);
+  }, [allActivities, joinedActivities, currentDate, theme.primary]);
 
   // Date press handler (Calendar sends yyyy-mm-dd)
   const handleDayPress = (day: any) => setCurrentDate(normalizeDateFormat(day.dateString));
@@ -323,20 +355,20 @@ const CalendarScreen = ({ navigation, route }: any) => {
   if (!allActivities || allActivities.length === 0) {
     // No activities exist in the system
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }} edges={['top']}>
-        <Ionicons name="calendar-outline" size={48} color="#1ae9ef" style={{ marginBottom: 10 }} />
-        <Text style={{ color: '#fff', fontSize: 20, fontWeight: 'bold', textAlign: 'center', marginBottom: 8 }}>
+      <SafeAreaView style={{ flex: 1, backgroundColor: theme.background, justifyContent: 'center', alignItems: 'center' }} edges={['top']}>
+        <Ionicons name="calendar-outline" size={48} color={theme.primary} style={{ marginBottom: 10 }} />
+        <Text style={{ color: theme.text, fontSize: 20, fontWeight: 'bold', textAlign: 'center', marginBottom: 8 }}>
           No activities found
         </Text>
-        <Text style={{ color: '#bbb', fontSize: 16, textAlign: 'center', marginBottom: 18 }}>
+        <Text style={{ color: theme.muted, fontSize: 16, textAlign: 'center', marginBottom: 18 }}>
           Be the first to create an event!
         </Text>
         <TouchableOpacity
           onPress={() => navigation.navigate('CreateGame')}
-          style={{ paddingVertical: 14, paddingHorizontal: 36, borderRadius: 24, backgroundColor: '#1ae9ef', marginTop: 10 }}
+          style={{ paddingVertical: 14, paddingHorizontal: 36, borderRadius: 24, backgroundColor: theme.primary, marginTop: 10 }}
           activeOpacity={0.85}
         >
-          <Text style={{ color: '#121212', fontWeight: 'bold', fontSize: 16 }}>Create Activity</Text>
+          <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 16 }}>Create Activity</Text>
         </TouchableOpacity>
       </SafeAreaView>
     );
@@ -360,8 +392,8 @@ const CalendarScreen = ({ navigation, route }: any) => {
             <RefreshControl
               refreshing={refreshing || refreshLocked}
               onRefresh={onRefresh}
-              colors={['#009fa3']}
-              tintColor="#009fa3"
+              colors={[theme.primary] as any}
+              tintColor={theme.primary}
               progressBackgroundColor="transparent"
             />
           }
@@ -377,16 +409,19 @@ const CalendarScreen = ({ navigation, route }: any) => {
               }
               return currentDate;
             })()}
+            style={{ backgroundColor: 'transparent' }}
             theme={{
-              backgroundColor: '#121212',
-              calendarBackground: '#121212',
-              textSectionTitleColor: '#1ae9ef',
-              selectedDayBackgroundColor: '#1ae9ef',
+              backgroundColor: 'transparent',
+              calendarBackground: 'transparent',
+              // Ensure weekday titles and month text are visible on light theme
+              textSectionTitleColor: theme.text,
+              monthTextColor: theme.text,
+              // Core day styles
+              selectedDayBackgroundColor: theme.primary,
               selectedDayTextColor: '#fff',
-              dayTextColor: '#fff',
-              todayTextColor: '#1ae9ef',
-              arrowColor: '#1ae9ef',
-              monthTextColor: '#fff',
+              dayTextColor: theme.text,
+              todayTextColor: theme.primary,
+              arrowColor: theme.primary,
             }}
             markedDates={markedDates}
             markingType={'multi-dot'}
@@ -428,12 +463,12 @@ const CalendarScreen = ({ navigation, route }: any) => {
                   >
                     <View style={styles.cardHeader}>
                       <View style={styles.cardHeaderLeft}>
-                        <ActivityIcon activity={item.activity} size={32} />
+                        <ActivityIcon activity={item.activity} size={32} color={theme.primary} />
                         <Text style={styles.cardTitle}>{item.activity}</Text>
                       </View>
                       {distance && (
                         <View style={styles.distanceContainer}>
-                          <Ionicons name="navigate" size={14} color="#1ae9ef" />
+                          <Ionicons name="navigate" size={14} color={theme.primary} />
                           <Text style={styles.distanceNumber}>{distance}</Text>
                           <Text style={styles.distanceUnit}>km away</Text>
                         </View>
@@ -441,13 +476,13 @@ const CalendarScreen = ({ navigation, route }: any) => {
                     </View>
 
                     <View style={styles.infoRow}>
-                      <Ionicons name="person" size={16} color="#1ae9ef" style={styles.infoIcon} />
+                      <Ionicons name="person" size={16} color={theme.primary} style={styles.infoIcon} />
                       <Text style={styles.cardInfoLabel}>Host:</Text>
                       <HostUsername activity={item} />
                     </View>
 
                     <View style={styles.infoRow}>
-                      <Ionicons name="location" size={16} color="#1ae9ef" style={styles.infoIcon} />
+                      <Ionicons name="location" size={16} color={theme.primary} style={styles.infoIcon} />
                       <Text style={styles.cardInfoLabel}>Location:</Text>
                       <Text style={styles.cardInfo} numberOfLines={1} ellipsizeMode="tail">
                         {simplifyLocation(item.location)}
@@ -455,19 +490,19 @@ const CalendarScreen = ({ navigation, route }: any) => {
                     </View>
 
                     <View style={styles.infoRow}>
-                      <Ionicons name="calendar" size={16} color="#1ae9ef" style={styles.infoIcon} />
+                      <Ionicons name="calendar" size={16} color={theme.primary} style={styles.infoIcon} />
                       <Text style={styles.cardInfoLabel}>Date:</Text>
                       <Text style={styles.cardInfo}>{item.date}</Text>
                     </View>
 
                     <View style={styles.infoRow}>
-                      <Ionicons name="time" size={16} color="#1ae9ef" style={styles.infoIcon} />
+                      <Ionicons name="time" size={16} color={theme.primary} style={styles.infoIcon} />
                       <Text style={styles.cardInfoLabel}>Time:</Text>
                       <Text style={styles.cardInfo}>{item.time}</Text>
                     </View>
 
                     <View style={styles.infoRow}>
-                      <Ionicons name="people" size={16} color="#1ae9ef" style={styles.infoIcon} />
+                      <Ionicons name="people" size={16} color={theme.primary} style={styles.infoIcon} />
                       <Text style={styles.cardInfoLabel}>Participants:</Text>
                       <Text style={styles.cardInfo}>
                         {item.joinedUserIds ? item.joinedUserIds.length : item.joinedCount} / {item.maxParticipants}
@@ -519,10 +554,9 @@ const CalendarScreen = ({ navigation, route }: any) => {
     </SafeAreaView>
   );
 };
-
-const styles = StyleSheet.create({
+const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.create({
   selectedDateHeader: {
-    color: '#1ae9ef',
+    color: t.primary,
     fontSize: 18,
     fontWeight: 'bold',
     marginTop: 4,
@@ -531,14 +565,15 @@ const styles = StyleSheet.create({
   },
   joinButton: {
     paddingHorizontal: 15,
-    backgroundColor: '#1ae9ef',
+    backgroundColor: t.primary,
     borderRadius: 5,
     height: 36,
     justifyContent: 'center',
     alignItems: 'center',
   },
   joinButtonJoined: {
-    backgroundColor: '#007b7b',
+    // Discover-aligned Leave color mapping for activity cards
+    backgroundColor: t.isDark ? '#007E84' : darkenHex(t.primary, 0.12),
   },
   joinButtonText: {
     color: '#fff',
@@ -546,11 +581,11 @@ const styles = StyleSheet.create({
   },
   safeArea: {
     flex: 1,
-    backgroundColor: '#121212',
+    backgroundColor: t.background,
   },
   headerTitle: {
     fontSize: 28,
-    color: '#1ae9ef',
+    color: t.primary,
     fontWeight: 'bold',
     textAlign: 'center',
     marginTop: 10,
@@ -560,7 +595,7 @@ const styles = StyleSheet.create({
     marginTop: 20,
   },
   card: {
-    backgroundColor: '#1e1e1e',
+    backgroundColor: t.card,
     borderRadius: 10,
     padding: 15,
     marginBottom: 15,
@@ -577,7 +612,7 @@ const styles = StyleSheet.create({
   },
   cardTitle: {
     fontSize: 18,
-    color: '#1ae9ef',
+    color: t.primary,
     fontWeight: 'bold',
     marginLeft: 10,
   },
@@ -588,12 +623,12 @@ const styles = StyleSheet.create({
   },
   distanceNumber: {
     fontSize: 14,
-    color: '#1ae9ef',
+    color: t.primary,
     fontWeight: '600',
   },
   distanceUnit: {
     fontSize: 14,
-    color: '#888',
+    color: t.muted,
     fontWeight: '500',
   },
   infoRow: {
@@ -606,20 +641,20 @@ const styles = StyleSheet.create({
   },
   cardInfoLabel: {
     fontSize: 14,
-    color: '#1ae9ef',
+    color: t.primary,
     fontWeight: '600',
     marginRight: 6,
   },
   cardInfo: {
     fontSize: 14,
-    color: '#ccc',
+    color: t.muted,
     fontWeight: '500',
   },
   addToCalendarButton: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 12,
-    backgroundColor: '#1ae9ef',
+    backgroundColor: t.primary,
     borderRadius: 5,
     height: 36,
     justifyContent: 'center',
@@ -627,7 +662,7 @@ const styles = StyleSheet.create({
     marginBottom: 0,
   },
   addToCalendarButtonAdded: {
-    backgroundColor: '#007b7b',
+    backgroundColor: t.primaryStrong,
   },
   addToCalendarText: {
     color: '#fff',
@@ -642,11 +677,11 @@ const styles = StyleSheet.create({
   },
   shareButton: {
     padding: 8,
-    backgroundColor: '#1e1e1e',
+    backgroundColor: t.card,
     borderRadius: 5,
   },
   noActivitiesText: {
-    color: '#888',
+    color: t.muted,
     fontSize: 16,
     textAlign: 'center',
     marginTop: 20,

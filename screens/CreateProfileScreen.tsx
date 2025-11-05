@@ -13,6 +13,7 @@ import {
   Animated,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useTheme } from '../context/ThemeContext';
 import * as ImagePicker from 'expo-image-picker';
 import { MediaType } from 'expo-image-picker';
 import Logo from '../components/Logo';
@@ -47,6 +48,8 @@ const sportsOptions = [
 ];
 
 const CreateProfileScreen = ({ navigation, route }: any) => {
+  const { theme } = useTheme();
+  const styles = React.useMemo(() => createStyles(theme), [theme]);
   const isEdit = route?.params?.mode === 'edit';
   const profileData = route?.params?.profileData;
 
@@ -142,7 +145,6 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
   useEffect(() => {
     setNewPasswordStrength(computeStrength(newPassword));
   }, [newPassword]);
-
   const handleVerifyCurrentPassword = async () => {
     try {
       setIsVerifying(true);
@@ -150,7 +152,6 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
       const user = auth.currentUser;
       if (!user || !user.email) {
         Alert.alert('Error', 'No logged in user.');
-        setIsVerifying(false);
         return;
       }
       const credential = EmailAuthProvider.credential(user.email, currentPassword);
@@ -158,9 +159,8 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
       setIsPasswordVerified(true);
       Alert.alert('Verified', 'Current password confirmed.');
     } catch (e: any) {
-      console.warn('Reauth failed', e);
-      setChangePwError('Incorrect current password.');
-      Alert.alert('Incorrect Password', 'Please check your current password and try again.');
+    console.warn('Reauth failed', e);
+    setChangePwError('Incorrect current password.');
     } finally {
       setIsVerifying(false);
     }
@@ -655,7 +655,7 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
         onPress={() => navigation.goBack()}
         accessibilityLabel="Go Back"
       >
-        <Ionicons name="arrow-back" size={28} color="#1ae9ef" />
+  <Ionicons name="arrow-back" size={28} color={theme.primary} />
       </TouchableOpacity>
 
       {/* Centered, smaller logo */}
@@ -676,7 +676,7 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
           </>
         ) : (
           <View style={styles.photoPlaceholder}>
-            <Ionicons name="camera" size={40} color="#1ae9ef" />
+            <Ionicons name="camera" size={40} color={theme.primary} />
             <Text style={styles.photoButtonText}>Add Photo</Text>
           </View>
         )}
@@ -970,15 +970,15 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (t: any) => StyleSheet.create({
   scrollView: {
     flex: 1,
-    backgroundColor: '#121212',
+    backgroundColor: t.background,
   },
   container: {
     flexGrow: 1,
     padding: 20,
-    backgroundColor: '#121212',
+    backgroundColor: t.background,
     alignItems: 'center',
     justifyContent: 'flex-start',
     // Remove marginTop here if present
@@ -1003,7 +1003,7 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: 28,
-    color: '#1ae9ef',
+    color: t.primary,
     fontWeight: '700',
     marginBottom: 20,
     textAlign: 'center',
@@ -1013,13 +1013,13 @@ const styles = StyleSheet.create({
     width: 120,
     height: 120,
     borderRadius: 60,
-    borderColor: '#1ae9ef',
+    borderColor: t.primary,
     borderWidth: 2,
-    backgroundColor: '#1e1e1e',
+    backgroundColor: t.card,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 20,
-    shadowColor: '#1ae9ef',
+    shadowColor: t.primary,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 4,
@@ -1031,7 +1031,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   photoButtonText: {
-    color: '#1ae9ef',
+    color: t.primary,
     fontSize: 14,
     fontWeight: 'bold',
     marginTop: 8,
@@ -1048,11 +1048,11 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#1ae9ef',
+    backgroundColor: t.primary,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 2,
-    borderColor: '#121212',
+    borderColor: t.background,
   },
   formContainer: {
     width: '100%',
@@ -1060,11 +1060,13 @@ const styles = StyleSheet.create({
   },
   input: {
     width: '100%',
-    backgroundColor: '#1e1e1e',
+    backgroundColor: t.card,
     borderRadius: 10,
+    borderWidth: 1,
+    borderColor: t.border,
     padding: 14,
     fontSize: 16,
-    color: '#fff',
+    color: t.text,
     marginVertical: 8,
   },
   inputDisabled: {
@@ -1072,7 +1074,7 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     fontSize: 18,
-    color: '#ccc',
+    color: t.muted,
     marginVertical: 15,
     textAlign: 'center',
   },
@@ -1090,31 +1092,31 @@ const styles = StyleSheet.create({
     paddingHorizontal: 5,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#1ae9ef',
-    backgroundColor: '#1e1e1e',
+    borderColor: t.primary,
+    backgroundColor: t.card,
     alignItems: 'center',
   },
   sportButtonSelected: {
-    backgroundColor: '#1ae9ef',
+    backgroundColor: t.primary,
   },
   sportButtonText: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#1ae9ef',
+    color: t.primary,
     textAlign: 'center',
   },
   sportButtonTextSelected: {
     color: '#fff',
   },
   continueButton: {
-    backgroundColor: '#1ae9ef',
+    backgroundColor: t.primary,
     paddingVertical: 16,
     paddingHorizontal: 40,
     borderRadius: 30,
     alignItems: 'center',
     width: '100%',
     marginBottom: 20,
-    shadowColor: '#1ae9ef',
+    shadowColor: t.primary,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.4,
     shadowRadius: 4,
@@ -1126,7 +1128,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   changePasswordButton: {
-    backgroundColor: '#1ae9ef',
+    backgroundColor: t.primary,
     paddingVertical: 14,
     paddingHorizontal: 24,
     borderRadius: 24,
@@ -1134,14 +1136,14 @@ const styles = StyleSheet.create({
     width: '100%',
     marginTop: 4,
     marginBottom: 10,
-    shadowColor: '#1ae9ef',
+    shadowColor: t.primary,
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.35,
     shadowRadius: 4,
     elevation: 4,
   },
   verifyButton: {
-    backgroundColor: '#1ae9ef',
+    backgroundColor: t.primary,
     paddingVertical: 14,
     paddingHorizontal: 24,
     borderRadius: 24,
@@ -1149,7 +1151,7 @@ const styles = StyleSheet.create({
     width: '100%',
     marginTop: 8,
     marginBottom: 12,
-    shadowColor: '#1ae9ef',
+    shadowColor: t.primary,
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.35,
     shadowRadius: 4,
@@ -1180,7 +1182,7 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 8,
     borderRadius: 8,
-    backgroundColor: '#2a2a2a',
+    backgroundColor: t.border,
     overflow: 'hidden',
   },
   strengthBarFill: {
@@ -1191,23 +1193,24 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontSize: 12,
     fontWeight: '600',
+    color: t.text,
   },
   requirementsBox: {
     width: '100%',
-    backgroundColor: '#1a1a1a',
+    backgroundColor: t.card,
     borderRadius: 8,
     padding: 10,
     borderWidth: 1,
-    borderColor: '#2a2a2a',
+    borderColor: t.border,
     marginBottom: 6,
   },
   requirementsTitle: {
-    color: '#ddd',
+    color: t.text,
     fontWeight: '700',
     marginBottom: 6,
   },
   requirementItem: {
-    color: '#bbb',
+    color: t.muted,
     fontSize: 13,
     marginVertical: 2,
   },
@@ -1239,21 +1242,21 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   verifyActionButton: {
-    backgroundColor: '#1ae9ef',
+    backgroundColor: t.primary,
     paddingVertical: 10,
     paddingHorizontal: 12,
     borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
     marginLeft: 10,
-    shadowColor: '#1ae9ef',
+    shadowColor: t.primary,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 3,
     elevation: 3,
   },
   verifyActionButtonDisabled: {
-    backgroundColor: '#007b7b', // match Discover's dark turquoise
+    backgroundColor: t.primaryStrong,
     shadowOpacity: 0.15,
   },
   verifyActionText: {

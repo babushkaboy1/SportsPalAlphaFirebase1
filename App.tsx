@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { NavigationContainer, DarkTheme, createNavigationContainerRef } from '@react-navigation/native';
+import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { StyleSheet, TouchableOpacity, Alert, Platform } from 'react-native';
+import { StyleSheet, TouchableOpacity, Alert, Platform, ActivityIndicator, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import { enableScreens } from 'react-native-screens';
@@ -38,14 +38,7 @@ import ProfileStack from './navigation/ProfileStack';
 import { decode as atob } from 'base-64';
 
 enableScreens(true);
-
-const MyTheme = {
-  ...DarkTheme,
-  colors: {
-    ...DarkTheme.colors,
-    background: '#121212',
-  },
-};
+import { ThemeProvider, useTheme } from './context/ThemeContext';
 
 const Stack = createStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<TabParamList>();
@@ -53,23 +46,23 @@ const navRef = createNavigationContainerRef();
 
 const styles = StyleSheet.create({
   tabBarStyle: {
-    backgroundColor: '#121212',
     borderTopWidth: 0,
   }
 });
 
 const MainTabs = () => {
+  const { theme, navTheme } = useTheme();
   const { totalUnread } = useInboxBadge();
   return (
   <Tab.Navigator
     detachInactiveScreens={false}
-    screenOptions={({ route }) => ({
+    screenOptions={({ route }: { route: any }) => ({
       headerShown: false,
-      tabBarActiveTintColor: '#1ae9ef',
-      tabBarInactiveTintColor: '#ccc',
-      tabBarStyle: styles.tabBarStyle,
+      tabBarActiveTintColor: theme.tabIconActive,
+      tabBarInactiveTintColor: theme.tabIconInactive,
+      tabBarStyle: [styles.tabBarStyle, { backgroundColor: theme.tabBarBg }],
       tabBarPressColor: 'transparent',
-      tabBarButton: (props) => {
+      tabBarButton: (props: any) => {
         const cleanedProps = Object.fromEntries(
           Object.entries(props).filter(([_, v]) => v !== null)
         );
@@ -80,7 +73,7 @@ const MainTabs = () => {
           />
         );
       },
-      tabBarIcon: ({ color, size, focused }) => {
+      tabBarIcon: ({ color, size, focused }: { color: string; size: number; focused: boolean }) => {
         let iconName = 'alert-circle-outline';
         switch (route.name) {
           case 'Discover':
@@ -106,8 +99,8 @@ const MainTabs = () => {
     <Tab.Screen
       name="Discover"
       component={DiscoverStack}
-      listeners={({ navigation, route }) => ({
-        tabPress: e => {
+      listeners={({ navigation, route }: { navigation: any; route: any }) => ({
+        tabPress: (e: any) => {
           const state = navigation.getState();
           // Find the currently focused tab
           const focusedTab = state.index !== undefined ? state.routes[state.index] : null;
@@ -116,7 +109,7 @@ const MainTabs = () => {
             focusedTab &&
             focusedTab.name === 'Discover'
           ) {
-            const tab = state.routes.find(r => r.name === 'Discover');
+            const tab = state.routes.find((r: any) => r.name === 'Discover');
             const stackState = tab?.state;
             if (stackState && typeof stackState.index === 'number' && stackState.index > 0) {
               e.preventDefault();
@@ -133,8 +126,8 @@ const MainTabs = () => {
     <Tab.Screen
       name="Calendar"
       component={CalendarStack}
-      listeners={({ navigation, route }) => ({
-        tabPress: e => {
+      listeners={({ navigation, route }: { navigation: any; route: any }) => ({
+        tabPress: (e: any) => {
           const state = navigation.getState();
           // Find the currently focused tab
           const focusedTab = state.index !== undefined ? state.routes[state.index] : null;
@@ -143,7 +136,7 @@ const MainTabs = () => {
             focusedTab &&
             focusedTab.name === 'Calendar'
           ) {
-            const tab = state.routes.find(r => r.name === 'Calendar');
+            const tab = state.routes.find((r: any) => r.name === 'Calendar');
             const stackState = tab?.state;
             if (stackState && typeof stackState.index === 'number' && stackState.index > 0) {
               e.preventDefault();
@@ -170,15 +163,15 @@ const MainTabs = () => {
       name="Profile"
       component={ProfileStack} // Ensure ProfileStack is passed correctly
       options={{ headerShown: false }}
-      listeners={({ navigation, route }) => ({
-        tabPress: e => {
+      listeners={({ navigation, route }: { navigation: any; route: any }) => ({
+        tabPress: (e: any) => {
           const state = navigation.getState();
           const focusedTab = state.index !== undefined ? state.routes[state.index] : null;
           if (
             focusedTab &&
             focusedTab.name === 'Profile'
           ) {
-            const tab = state.routes.find(r => r.name === 'Profile');
+            const tab = state.routes.find((r: any) => r.name === 'Profile');
             const stackState = tab?.state;
             if (stackState && typeof stackState.index === 'number' && stackState.index > 0) {
               e.preventDefault();
@@ -195,11 +188,17 @@ const MainTabs = () => {
 );
 }
 
-export default function App() {
+function AppInner() {
   const [user, setUser] = useState<User | null>(null);
+  const [initializing, setInitializing] = useState(true);
+  const { theme, navTheme } = useTheme();
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, setUser);
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      // Mark initialization complete after first auth state resolution
+      setInitializing(false);
+    });
     return unsubscribe;
   }, []);
 
@@ -271,15 +270,22 @@ export default function App() {
       <SafeAreaProvider>
         <ActivityProvider>
           <InboxBadgeProvider>
-          <NavigationContainer ref={navRef} theme={MyTheme}>
-          <StatusBar style="light" backgroundColor="#121212" />
+          <NavigationContainer ref={navRef} theme={navTheme}>
+          <StatusBar style={theme.isDark ? 'light' : 'dark'} backgroundColor={theme.background} />
+          {initializing ? (
+            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#121212' }}>
+              <ActivityIndicator size="large" color={theme.primary} />
+            </View>
+          ) : (
           <Stack.Navigator
+          // Key forces navigator to remount when auth state changes, ensuring correct initial route
+          key={user ? 'app' : 'auth'}
           initialRouteName={user ? "MainTabs" : "Login"}
           screenOptions={{
             headerShown: false,
             animation: 'slide_from_right',
             animationTypeForReplace: 'push',
-            cardStyle: { backgroundColor: '#121212' },
+            cardStyle: { backgroundColor: theme.background },
           }}
         >
           <Stack.Screen name="Login" component={LoginScreen} />
@@ -290,6 +296,7 @@ export default function App() {
           <Stack.Screen name="PickLocation" component={PickLocationScreen} />
           <Stack.Screen name="UserProfile" component={UserProfileScreen} options={{ headerShown: false }} />
           </Stack.Navigator>
+          )}
           </NavigationContainer>
           </InboxBadgeProvider>
         </ActivityProvider>
@@ -319,7 +326,7 @@ if (Platform.OS === 'android') {
   const apiLevel = typeof Platform.Version === 'number' ? Platform.Version : parseInt(String(Platform.Version), 10) || 0;
   if (apiLevel < 29) {
     // Older devices: safe to set the nav + system background
-    SystemUI.setBackgroundColorAsync('#121212').catch(() => {});
+  SystemUI.setBackgroundColorAsync('#121212').catch(() => {});
   // NavigationBar.setBackgroundColorAsync('#121212').catch(() => {});
   } else {
     // For Android 10+ we skip setting the background color to avoid the warning.
@@ -328,4 +335,12 @@ if (Platform.OS === 'android') {
   // Make buttons light for contrast and keep bars visible; these calls are safe
   // NavigationBar.setButtonStyleAsync('light').catch(() => {});
   NavigationBar.setVisibilityAsync('visible').catch(() => {});
+}
+
+export default function App() {
+  return (
+    <ThemeProvider>
+      <AppInner />
+    </ThemeProvider>
+  );
 }

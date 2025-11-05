@@ -17,6 +17,14 @@ const REQUIRED_KEYS = [
   'GOOGLE_MAPS_API_KEY',
 ];
 
+// Optional keys: include if present. For Google OAuth, these should be set
+// for production builds to avoid audience mismatch.
+const OPTIONAL_KEYS = [
+  'GOOGLE_ANDROID_CLIENT_ID',
+  'GOOGLE_IOS_CLIENT_ID',
+  'GOOGLE_WEB_CLIENT_ID',
+];
+
 function main() {
   const missing = [];
   const lines = [];
@@ -38,6 +46,15 @@ function main() {
       missing.push(key);
     } else {
       // Escape any newlines and ensure no quotes issues
+      const sanitized = String(value).replace(/\r?\n/g, '');
+      lines.push(`${key}=${sanitized}`);
+    }
+  }
+
+  // Include optional keys if present
+  for (const key of OPTIONAL_KEYS) {
+    const value = env[key];
+    if (value !== undefined && value !== null && String(value).length > 0) {
       const sanitized = String(value).replace(/\r?\n/g, '');
       lines.push(`${key}=${sanitized}`);
     }

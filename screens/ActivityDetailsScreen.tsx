@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { getDisplayCreatorUsername } from '../utils/getDisplayCreatorUsername';
 import {
   View,
@@ -31,9 +31,40 @@ import { doc, getDoc, updateDoc, arrayUnion, onSnapshot } from 'firebase/firesto
 import { normalizeDateFormat } from '../utils/storage';
 import { ActivityIcon } from '../components/ActivityIcons';
 import { sendActivityInvites } from '../utils/firestoreInvites';
+import { useTheme } from '../context/ThemeContext';
+
+// Slight darken helper for hex colors (fallback to original on parse failure)
+function darkenHex(color: string, amount = 0.12): string {
+  try {
+    if (!color || typeof color !== 'string') return color;
+    const hex = color.trim();
+    const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex);
+    if (!match) return color;
+    let r = 0, g = 0, b = 0;
+    if (match[1].length === 3) {
+      r = parseInt(match[1][0] + match[1][0], 16);
+      g = parseInt(match[1][1] + match[1][1], 16);
+      b = parseInt(match[1][2] + match[1][2], 16);
+    } else {
+      r = parseInt(match[1].slice(0, 2), 16);
+      g = parseInt(match[1].slice(2, 4), 16);
+      b = parseInt(match[1].slice(4, 6), 16);
+    }
+    const factor = Math.max(0, Math.min(1, 1 - amount));
+    const dr = Math.round(r * factor);
+    const dg = Math.round(g * factor);
+    const db = Math.round(b * factor);
+    const toHex = (n: number) => n.toString(16).padStart(2, '0');
+    return `#${toHex(dr)}${toHex(dg)}${toHex(db)}`;
+  } catch {
+    return color;
+  }
+}
 
 const ActivityDetailsScreen = ({ route, navigation }: any) => {
   const { activityId } = route.params;
+  const { theme } = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
   const { allActivities, isActivityJoined, toggleJoinActivity, profile } = useActivityContext();
 
   const activity = allActivities.find(a => a.id === activityId);
@@ -78,25 +109,25 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
             onPress={() => navigation.goBack()}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
-            <Ionicons name="arrow-back" size={28} color="#1ae9ef" />
+            <Ionicons name="arrow-back" size={28} color={theme.primary} />
           </TouchableOpacity>
           <View style={styles.headerTitleContainer}>
             <Text style={styles.headerTitle}>Activity Not Found</Text>
           </View>
         </View>
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 }}>
-          <Text style={{ color: '#fff', fontSize: 20, fontWeight: 'bold', marginBottom: 12, textAlign: 'center' }}>
+          <Text style={{ color: theme.text, fontSize: 20, fontWeight: 'bold', marginBottom: 12, textAlign: 'center' }}>
             Activity not found.
           </Text>
-          <Text style={{ color: '#bbb', fontSize: 16, textAlign: 'center', marginBottom: 18 }}>
+          <Text style={{ color: theme.muted, fontSize: 16, textAlign: 'center', marginBottom: 18 }}>
             This activity may have been deleted or is no longer available.
           </Text>
           <TouchableOpacity
             onPress={() => navigation.goBack()}
-            style={{ paddingVertical: 14, paddingHorizontal: 36, borderRadius: 24, backgroundColor: '#1ae9ef', marginTop: 10 }}
+            style={{ paddingVertical: 14, paddingHorizontal: 36, borderRadius: 24, backgroundColor: theme.primary, marginTop: 10 }}
             activeOpacity={0.85}
           >
-            <Text style={{ color: '#121212', fontWeight: 'bold', fontSize: 16 }}>Go Back</Text>
+            <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 16 }}>Go Back</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -572,14 +603,14 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                 onPress={() => navigation.goBack()}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               >
-                <Ionicons name="arrow-back" size={28} color="#1ae9ef" />
+                <Ionicons name="arrow-back" size={28} color={theme.primary} />
               </TouchableOpacity>
               <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 44 }}>
-                <ActivityIcon activity={activity.activity} size={28} />
-                <Text style={{ fontSize: 28, color: '#1ae9ef', fontWeight: 'bold', marginLeft: 0 }}>American Football</Text>
+                <ActivityIcon activity={activity.activity} size={28} color={theme.primary} />
+                <Text style={{ fontSize: 28, color: theme.primary, fontWeight: 'bold', marginLeft: 0 }}>American Football</Text>
               </View>
             </View>
-            <Text style={{ fontSize: 28, color: '#1ae9ef', fontWeight: 'bold', textAlign: 'center', marginTop: 2 }}>Details</Text>
+            <Text style={{ fontSize: 28, color: theme.primary, fontWeight: 'bold', textAlign: 'center', marginTop: 2 }}>Details</Text>
           </View>
         ) : (
           <View style={styles.header}>
@@ -588,10 +619,10 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
               onPress={() => navigation.goBack()}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             >
-              <Ionicons name="arrow-back" size={28} color="#1ae9ef" />
+              <Ionicons name="arrow-back" size={28} color={theme.primary} />
             </TouchableOpacity>
             <View style={styles.headerTitleContainer}>
-              <ActivityIcon activity={activity.activity} size={28} />
+              <ActivityIcon activity={activity.activity} size={28} color={theme.primary} />
               <Text style={styles.headerTitle}>{activity.activity} Details</Text>
             </View>
           </View>
@@ -603,8 +634,8 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
             <RefreshControl
               refreshing={refreshing || refreshLocked}
               onRefresh={onRefresh}
-              colors={['#009fa3']}
-              tintColor="#009fa3"
+              colors={[theme.primaryStrong]}
+              tintColor={theme.primaryStrong}
               progressBackgroundColor="transparent"
             />
           }
@@ -644,7 +675,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                   }}
                   activeOpacity={0.7}
                 >
-                  <Ionicons name="locate" size={28} color="#1ae9ef" />
+                  <Ionicons name="locate" size={28} color={theme.primary} />
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.activityLocationButton, { position: 'absolute', bottom: 70, right: 16 }]}
@@ -658,7 +689,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                   }}
                   activeOpacity={0.7}
                 >
-                  <ActivityIcon activity={activity.activity} size={28} color="#1ae9ef" />
+                  <ActivityIcon activity={activity.activity} size={28} color={theme.primary} />
                 </TouchableOpacity>
               </>
             )}
@@ -668,28 +699,28 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
           <View style={styles.infoContainer}>
             {userLocation && (
               <View style={styles.infoRow}>
-                <Ionicons name="navigate" size={16} color="#1ae9ef" style={styles.infoIcon} />
+                <Ionicons name="navigate" size={16} color={theme.primary} style={styles.infoIcon} />
                 <Text style={styles.infoLabel}>Distance:</Text>
                 <Text style={styles.infoValue}>{getDistance()} km away</Text>
               </View>
             )}
             <View style={styles.infoRow}>
-              <Ionicons name="person" size={16} color="#1ae9ef" style={styles.infoIcon} />
+              <Ionicons name="person" size={16} color={theme.primary} style={styles.infoIcon} />
               <Text style={styles.infoLabel}>Host:</Text>
               <Text style={styles.infoValue}>{creatorUsername}</Text>
             </View>
             <View style={styles.infoRow}>
-              <Ionicons name="location" size={16} color="#1ae9ef" style={styles.infoIcon} />
+              <Ionicons name="location" size={16} color={theme.primary} style={styles.infoIcon} />
               <Text style={styles.infoLabel}>Location:</Text>
               <Text style={styles.infoValue}>{simplifyLocation(activity.location)}</Text>
             </View>
             <View style={styles.infoRow}>
-              <Ionicons name="calendar" size={16} color="#1ae9ef" style={styles.infoIcon} />
+              <Ionicons name="calendar" size={16} color={theme.primary} style={styles.infoIcon} />
               <Text style={styles.infoLabel}>Date:</Text>
               <Text style={styles.infoValue}>{normalizeDateFormat(activity.date)}</Text>
             </View>
             <View style={styles.infoRow}>
-              <Ionicons name="time" size={16} color="#1ae9ef" style={styles.infoIcon} />
+              <Ionicons name="time" size={16} color={theme.primary} style={styles.infoIcon} />
               <Text style={styles.infoLabel}>Time:</Text>
               <Text style={styles.infoValue}>{activity.time}</Text>
             </View>
@@ -705,7 +736,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
               <>
                 <View style={{ marginBottom: 8 }}>
                   <TouchableOpacity
-                    style={[styles.actionButton, { alignSelf: 'stretch', justifyContent: 'center' }]}
+                    style={[styles.actionButton, { alignSelf: 'center', justifyContent: 'center' }]}
                     onPress={async () => {
                       // Diagnostic logs to help identify why "No GPX URL available" appears
                       console.log('Opening GPX viewer for activity id:', activity.id);
@@ -903,8 +934,8 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                   </TouchableOpacity>
                 </View>
 
-                <View style={{ marginVertical: 10, backgroundColor: '#141414', padding: 12, borderRadius: 8 }}>
-                  <Text style={{ color: '#1ae9ef', fontWeight: '700', marginBottom: 8 }}>Route Statistics</Text>
+                <View style={{ marginVertical: 10, backgroundColor: theme.card, padding: 12, borderRadius: 8 }}>
+                  <Text style={{ color: theme.primary, fontWeight: '700', marginBottom: 8 }}>Route Statistics</Text>
                   {(() => {
                     const s: any = (activity as any).gpx.stats || {};
                     const rows = [
@@ -919,15 +950,15 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                     ];
                     return rows.map(([label, val]) => (
                       <View key={label as string} style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                        <Text style={{ color: '#9aa0a6' }}>{label}:</Text>
-                        <Text style={{ color: '#ccc' }}>{val}</Text>
+                        <Text style={{ color: theme.muted }}>{label}:</Text>
+                        <Text style={{ color: theme.text }}>{val}</Text>
                       </View>
                     ));
                   })()}
 
                   {(activity as any).gpx.downloadUrl && (
                     <TouchableOpacity style={{ marginTop: 8 }} onPress={() => { try { Linking.openURL((activity as any).gpx.downloadUrl); } catch {} }}>
-                      <Text style={{ color: '#1ae9ef', fontWeight: '700' }}>Open GPX</Text>
+                      <Text style={{ color: theme.primary, fontWeight: '700' }}>Open GPX</Text>
                     </TouchableOpacity>
                   )}
                 </View>
@@ -936,7 +967,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
 
             {/* Participants */}
             <View style={{ marginVertical: 10 }}>
-              <Text style={{ color: '#1ae9ef', fontWeight: 'bold', fontSize: 16, marginBottom: 8 }}>
+              <Text style={{ color: theme.primary, fontWeight: 'bold', fontSize: 16, marginBottom: 8 }}>
                 Participants
               </Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
@@ -951,9 +982,9 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                   >
                     <Image
                       source={{ uri: user.photo || user.photoURL || 'https://ui-avatars.com/api/?name=' + (user.username || 'User') }}
-                      style={{ width: 54, height: 54, borderRadius: 27, borderWidth: 2, borderColor: '#1ae9ef' }}
+                      style={{ width: 54, height: 54, borderRadius: 27, borderWidth: 2, borderColor: theme.primary }}
                     />
-                    <Text style={{ color: '#fff', marginTop: 6, fontWeight: 'bold' }}>{user.username}</Text>
+                    <Text style={{ color: theme.text, marginTop: 6, fontWeight: 'bold' }}>{user.username}</Text>
                   </TouchableOpacity>
                 ))}
               </ScrollView>
@@ -970,11 +1001,19 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
               {!isHistorical && (
                 <>
                   <TouchableOpacity
-                    style={[styles.actionButton, isActivityJoined(activity.id) && styles.actionButtonJoined]}
+                    style={[
+                      styles.actionButton,
+                      isActivityJoined(activity.id) && styles.actionButtonJoined,
+                    ]}
                     onPress={handleJoinLeave}
                     activeOpacity={0.85}
                   >
-                    <Text style={[styles.actionText, isActivityJoined(activity.id) && styles.actionTextJoined]}>
+                    <Ionicons
+                      name={isActivityJoined(activity.id) ? 'log-out-outline' : 'checkmark-circle'}
+                      size={20}
+                      style={styles.actionIconBold}
+                    />
+                    <Text style={[styles.actionText]}>
                       {isActivityJoined(activity.id) ? 'Leave Activity' : 'Join Activity'}
                     </Text>
                   </TouchableOpacity>
@@ -1012,9 +1051,6 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
             </View>
           </View>
 
-          <TouchableOpacity onPress={() => navigation.navigate('MainTabs', { screen: 'Discover' })}>
-            <Text>Go to Discover</Text>
-          </TouchableOpacity>
         </ScrollView>
       </Animated.View>
 
@@ -1028,19 +1064,19 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
         <Pressable style={styles.modalOverlay} onPress={() => setShowGpxModal(false)}>
           <Pressable style={[styles.modalCard, { width: '95%', maxWidth: 920, padding: 12 }]} onPress={() => {}}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 16 }}>{(activity as any).activity} Route</Text>
+              <Text style={{ color: theme.text, fontWeight: '700', fontSize: 16 }}>{(activity as any).activity} Route</Text>
               <TouchableOpacity onPress={() => setShowGpxModal(false)}>
-                <Ionicons name="close" size={22} color="#9aa0a6" />
+                <Ionicons name="close" size={22} color={theme.muted} />
               </TouchableOpacity>
             </View>
             <View style={{ height: 420, marginTop: 12, borderRadius: 8, overflow: 'hidden' }}>
               {gpxLoading ? (
                 <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                  <ActivityIndicator size="large" color="#1ae9ef" />
+                  <ActivityIndicator size="large" color={theme.primary} />
                 </View>
               ) : gpxError ? (
                 <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 12 }}>
-                  <Text style={{ color: '#fff', textAlign: 'center' }}>{gpxError}</Text>
+                  <Text style={{ color: theme.text, textAlign: 'center' }}>{gpxError}</Text>
                 </View>
               ) : (gpxCoords.length > 0 || gpxWaypoints.length > 0) ? (
                 <MapView
@@ -1065,7 +1101,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                     <>
                       {/* Outline underlay for better visibility */}
                       <Polyline coordinates={gpxCoords} strokeWidth={8} strokeColor="#0a2a2b" />
-                      <Polyline coordinates={gpxCoords} strokeWidth={5} strokeColor="#1ae9ef" />
+                      <Polyline coordinates={gpxCoords} strokeWidth={5} strokeColor={theme.primary} />
                       {/* Start and end markers */}
                       <Marker coordinate={gpxCoords[0]} />
                       <Marker coordinate={gpxCoords[gpxCoords.length - 1]} />
@@ -1073,7 +1109,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                   )}
                   {/* If no track/route but waypoints exist, optionally connect with dashed line for context */}
                   {gpxCoords.length === 0 && gpxWaypoints.length > 1 && (
-                    <Polyline coordinates={gpxWaypoints} strokeWidth={3} strokeColor="#1ae9ef99" lineDashPattern={[6,4]} />
+                    <Polyline coordinates={gpxWaypoints} strokeWidth={3} strokeColor={`${theme.primary}99`} lineDashPattern={[6,4]} />
                   )}
                   {/* Waypoint checkpoints */}
                   {gpxWaypoints.map((p, idx) => (
@@ -1109,13 +1145,13 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Invite Friends</Text>
               <TouchableOpacity onPress={() => setInviteFriendsVisible(false)}>
-                <Ionicons name="close" size={22} color="#9aa0a6" />
+                <Ionicons name="close" size={22} color={theme.muted} />
               </TouchableOpacity>
             </View>
             <Text style={styles.modalSubtitle}>Select friends to invite to this activity</Text>
             <ScrollView style={{ maxHeight: 360 }}>
               {friendProfiles.length === 0 && (
-                <Text style={{ color: '#9aa0a6', textAlign: 'center', marginVertical: 20 }}>No friends yet.</Text>
+                <Text style={{ color: theme.muted, textAlign: 'center', marginVertical: 20 }}>No friends yet.</Text>
               )}
               {friendProfiles.map((f) => {
                 const alreadyJoined = joinedUserIds.includes(f.uid);
@@ -1140,7 +1176,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                     </View>
                     {!alreadyJoined && (
                       <View style={[styles.checkbox, selected && styles.checkboxSelected]}>
-                        {selected && <Ionicons name="checkmark" size={16} color="#121212" />}
+                        {selected && <Ionicons name="checkmark" size={16} color={'#fff'} />}
                       </View>
                     )}
                   </TouchableOpacity>
@@ -1152,7 +1188,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                 <Text style={styles.modalCancelText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.modalConfirm} onPress={confirmInviteFriends}>
-                <Ionicons name="send" size={18} color="#121212" />
+                <Ionicons name="send" size={18} color={'#fff'} />
                 <Text style={styles.modalConfirmText}>Send Invites</Text>
               </TouchableOpacity>
             </View>
@@ -1170,52 +1206,51 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
 
 export default ActivityDetailsScreen;
 
-// styles unchanged from your file
-const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#121212' },
+const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.create({
+  safeArea: { flex: 1, backgroundColor: t.background },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center', padding: 20 },
-  modalCard: { width: '100%', maxWidth: 520, backgroundColor: '#1c1c1e', borderRadius: 16, padding: 16, borderWidth: 1, borderColor: '#2a2a2c' },
+  modalCard: { width: '100%', maxWidth: 520, backgroundColor: t.card, borderRadius: 16, padding: 16, borderWidth: 1, borderColor: t.border },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
-  modalTitle: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
-  modalSubtitle: { color: '#9aa0a6', marginBottom: 12 },
-  friendRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: '#2a2a2c' },
+  modalTitle: { color: t.text, fontSize: 18, fontWeight: 'bold' },
+  modalSubtitle: { color: t.muted, marginBottom: 12 },
+  friendRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: t.border },
   friendLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  friendAvatar: { width: 40, height: 40, borderRadius: 20, marginRight: 10, borderWidth: 1, borderColor: '#1ae9ef' },
-  friendName: { color: '#fff', fontWeight: '600' },
-  friendMeta: { color: '#9aa0a6', fontSize: 12 },
-  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: '#1ae9ef', alignItems: 'center', justifyContent: 'center' },
-  checkboxSelected: { backgroundColor: '#1ae9ef' },
+  friendAvatar: { width: 40, height: 40, borderRadius: 20, marginRight: 10, borderWidth: 1, borderColor: t.primary },
+  friendName: { color: t.text, fontWeight: '600' },
+  friendMeta: { color: t.muted, fontSize: 12 },
+  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: t.primary, alignItems: 'center', justifyContent: 'center' },
+  checkboxSelected: { backgroundColor: t.primary },
   modalActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 12 },
-  modalCancel: { paddingVertical: 12, paddingHorizontal: 16, backgroundColor: '#2b0f12', borderRadius: 10, borderWidth: 1, borderColor: '#5a1a1f' },
-  modalCancelText: { color: '#ff4d4f', fontWeight: '700' },
-  modalConfirm: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#1ae9ef', paddingVertical: 12, paddingHorizontal: 16, borderRadius: 10 },
-  modalConfirmText: { color: '#121212', fontWeight: '700' },
+  modalCancel: { paddingVertical: 12, paddingHorizontal: 16, backgroundColor: t.card, borderRadius: 10, borderWidth: 1, borderColor: t.danger },
+  modalCancelText: { color: t.danger, fontWeight: '700' },
+  modalConfirm: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: t.primary, paddingVertical: 12, paddingHorizontal: 16, borderRadius: 10 },
+  modalConfirmText: { color: t.isDark ? '#111' : '#fff', fontWeight: '700' },
   bottomToast: { position: 'absolute', left: 0, right: 0, bottom: 22, alignItems: 'center' },
-  bottomToastText: { backgroundColor: 'rgba(26, 233, 239, 0.18)', color: '#cdeff0', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 14, overflow: 'hidden', fontWeight: '600' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#121212', position: 'relative', marginTop: 10, marginBottom: 18 },
+  bottomToastText: { backgroundColor: 'rgba(26, 233, 239, 0.18)', color: t.text, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 14, overflow: 'hidden', fontWeight: '600' },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: t.background, position: 'relative', marginTop: 10, marginBottom: 18 },
   backButton: { padding: 4 },
   headerTitleContainer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-  headerTitle: { fontSize: 28, color: '#1ae9ef', fontWeight: 'bold', textAlign: 'center' },
+  headerTitle: { fontSize: 28, color: t.primary, fontWeight: 'bold', textAlign: 'center' },
   mapContainer: { height: 250, width: '100%', marginVertical: 10, borderRadius: 10, overflow: 'hidden' },
   infoContainer: { paddingHorizontal: 15, paddingVertical: 15 },
   infoRow: { flexDirection: 'row', alignItems: 'center', marginVertical: 3 },
   infoIcon: { marginRight: 8 },
-  infoLabel: { fontSize: 14, color: '#1ae9ef', fontWeight: '600', marginRight: 6 },
-  infoValue: { fontSize: 14, color: '#ccc', fontWeight: '500' },
-  joinContainer: { marginVertical: 10, padding: 10, borderRadius: 8, backgroundColor: '#1e1e1e', alignItems: 'center' },
-  joinText: { color: '#1ae9ef', fontSize: 16, fontWeight: 'bold' },
+  infoLabel: { fontSize: 14, color: t.primary, fontWeight: '600', marginRight: 6 },
+  infoValue: { fontSize: 14, color: t.text, fontWeight: '500' },
+  joinContainer: { marginVertical: 10, padding: 10, borderRadius: 8, backgroundColor: t.card, alignItems: 'center' },
+  joinText: { color: t.primary, fontSize: 16, fontWeight: 'bold' },
   descriptionSection: { marginTop: 15, marginBottom: 10 },
-  descriptionTitle: { color: '#1ae9ef', fontSize: 16, fontWeight: 'bold', marginBottom: 8 },
-  description: { color: '#ccc', fontSize: 14, lineHeight: 20 },
+  descriptionTitle: { color: t.primary, fontSize: 16, fontWeight: 'bold', marginBottom: 8 },
+  description: { color: t.text, fontSize: 14, lineHeight: 20 },
   actionsContainer: { marginTop: 20, alignItems: 'center' },
-  actionButton: { flexDirection: 'row', backgroundColor: '#1ae9ef', padding: 15, borderRadius: 8, marginVertical: 5, alignItems: 'center', justifyContent: 'center', width: '90%' },
-  actionButtonJoined: { backgroundColor: '#007b7b' },
-  actionButtonAddedToCalendar: { backgroundColor: '#007b7b' },
-  actionText: { color: '#121212', fontSize: 16, fontWeight: 'bold', letterSpacing: 1.1 },
+  actionButton: { flexDirection: 'row', backgroundColor: t.primary, padding: 15, borderRadius: 8, marginVertical: 5, alignItems: 'center', justifyContent: 'center', width: '90%' },
+  actionButtonJoined: { backgroundColor: t.isDark ? '#007E84' : darkenHex(t.primary, 0.12) },
+  actionButtonAddedToCalendar: { backgroundColor: t.isDark ? '#007E84' : darkenHex(t.primary, 0.12) },
+  actionText: { color: '#fff', fontSize: 16, fontWeight: 'bold', letterSpacing: 1.1 },
   actionTextJoined: { color: '#fff' },
   actionTextAddedToCalendar: { color: '#fff' },
-  actionIconBold: { color: '#121212', fontWeight: 'bold', marginRight: 6 },
+  actionIconBold: { color: '#fff', fontWeight: 'bold', marginRight: 6 },
   actionIconAddedToCalendar: { color: '#fff' },
-  myLocationButton: { position: 'absolute', bottom: 16, right: 16, backgroundColor: '#1e1e1e', borderRadius: 24, padding: 8, elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 2, zIndex: 10 },
-  activityLocationButton: { backgroundColor: '#1e1e1e', borderRadius: 24, padding: 8, elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 2, marginBottom: 10, zIndex: 10 },
+  myLocationButton: { position: 'absolute', bottom: 16, right: 16, backgroundColor: t.card, borderRadius: 24, padding: 8, elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 2, zIndex: 10 },
+  activityLocationButton: { backgroundColor: t.card, borderRadius: 24, padding: 8, elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 2, marginBottom: 10, zIndex: 10 },
 });

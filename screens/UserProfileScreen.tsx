@@ -1,7 +1,9 @@
 import { getDisplayCreatorUsername } from '../utils/getDisplayCreatorUsername';
+import { useTheme } from '../context/ThemeContext';
 
 function HostUsername({ activity }: { activity: any }) {
   const [username, setUsername] = useState('');
+  const { theme } = useTheme();
   useEffect(() => {
     let mounted = true;
     const fetchUsername = async () => {
@@ -11,7 +13,7 @@ function HostUsername({ activity }: { activity: any }) {
     fetchUsername();
     return () => { mounted = false; };
   }, [activity.creatorId, activity.creator]);
-  return <Text style={styles.cardInfo}>{username}</Text>;
+  return <Text style={{ fontSize: 14, color: theme.muted, fontWeight: '500' }}>{username}</Text>;
 }
 import React, { useEffect, useState, useRef } from 'react';
 import { View, Text, StyleSheet, Image, TouchableOpacity, Share, FlatList, Animated, RefreshControl, Alert, Modal, Pressable, TextInput } from 'react-native';
@@ -29,10 +31,40 @@ import { RootStackParamList } from '../types/navigation';
 import { sendFriendRequest, cancelFriendRequest, removeFriend, acceptIncomingRequestFromProfile, declineIncomingRequestFromProfile } from '../utils/firestoreFriends';
 import { ensureDmChat } from '../utils/firestoreChats';
 
+// Slight darken helper for hex colors (fallback to original on parse failure)
+function darkenHex(color: string, amount = 0.12): string {
+  try {
+    if (!color || typeof color !== 'string') return color;
+    const hex = color.trim();
+    const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex);
+    if (!match) return color;
+    let r = 0, g = 0, b = 0;
+    if (match[1].length === 3) {
+      r = parseInt(match[1][0] + match[1][0], 16);
+      g = parseInt(match[1][1] + match[1][1], 16);
+      b = parseInt(match[1][2] + match[1][2], 16);
+    } else {
+      r = parseInt(match[1].slice(0, 2), 16);
+      g = parseInt(match[1].slice(2, 4), 16);
+      b = parseInt(match[1].slice(4, 6), 16);
+    }
+    const factor = Math.max(0, Math.min(1, 1 - amount));
+    const dr = Math.round(r * factor);
+    const dg = Math.round(g * factor);
+    const db = Math.round(b * factor);
+    const toHex = (n: number) => n.toString(16).padStart(2, '0');
+    return `#${toHex(dr)}${toHex(dg)}${toHex(db)}`;
+  } catch {
+    return color;
+  }
+}
+
 const UserProfileScreen = () => {
   const route = useRoute();
   const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
   const insets = useSafeAreaInsets();
+  const { theme } = useTheme();
+  const styles = React.useMemo(() => createStyles(theme), [theme]);
   const { userId } = route.params as { userId: string };
   const [profile, setProfile] = useState<any>(null);
   const { allActivities, reloadAllActivities, isActivityJoined, toggleJoinActivity } = useActivityContext();
@@ -282,12 +314,12 @@ const UserProfileScreen = () => {
       {/* Card Header: Icon, Title, Distance */}
       <View style={styles.cardHeaderRow}>
         <View style={styles.cardHeaderLeft}>
-          <ActivityIcon activity={item.activity} size={32} />
+          <ActivityIcon activity={item.activity} size={32} color={theme.primary} />
           <Text style={styles.cardTitle}>{item.activity}</Text>
         </View>
         {distance && (
         <View style={styles.distanceContainer}>
-          <Ionicons name="navigate" size={14} color="#1ae9ef" />
+          <Ionicons name="navigate" size={14} color={theme.primary} />
           <Text style={styles.distanceNumber}>{distance}</Text>
           <Text style={styles.distanceUnit}>km away</Text>
         </View>
@@ -295,13 +327,13 @@ const UserProfileScreen = () => {
       </View>
       {/* Host */}
       <View style={styles.infoRow}>
-        <Ionicons name="person" size={16} color="#1ae9ef" style={styles.infoIcon} />
+        <Ionicons name="person" size={16} color={theme.primary} style={styles.infoIcon} />
         <Text style={styles.cardInfoLabel}>Host:</Text>
   <HostUsername activity={item} />
       </View>
       {/* Location */}
       <View style={styles.infoRow}>
-        <Ionicons name="location" size={16} color="#1ae9ef" style={styles.infoIcon} />
+        <Ionicons name="location" size={16} color={theme.primary} style={styles.infoIcon} />
         <Text style={styles.cardInfoLabel}>Location:</Text>
         <Text style={styles.cardInfo} numberOfLines={1} ellipsizeMode="tail">
           {simplifyLocation(item.location)}
@@ -309,19 +341,19 @@ const UserProfileScreen = () => {
       </View>
       {/* Date */}
       <View style={styles.infoRow}>
-        <Ionicons name="calendar" size={16} color="#1ae9ef" style={styles.infoIcon} />
+        <Ionicons name="calendar" size={16} color={theme.primary} style={styles.infoIcon} />
         <Text style={styles.cardInfoLabel}>Date:</Text>
         <Text style={styles.cardInfo}>{item.date}</Text>
       </View>
       {/* Time */}
       <View style={styles.infoRow}>
-        <Ionicons name="time" size={16} color="#1ae9ef" style={styles.infoIcon} />
+        <Ionicons name="time" size={16} color={theme.primary} style={styles.infoIcon} />
         <Text style={styles.cardInfoLabel}>Time:</Text>
         <Text style={styles.cardInfo}>{item.time}</Text>
       </View>
       {/* Participants */}
       <View style={styles.infoRow}>
-        <Ionicons name="people" size={16} color="#1ae9ef" style={styles.infoIcon} />
+        <Ionicons name="people" size={16} color={theme.primary} style={styles.infoIcon} />
         <Text style={styles.cardInfoLabel}>Participants:</Text>
         <Text style={styles.cardInfo}>
           {item.joinedUserIds ? item.joinedUserIds.length : item.joinedCount} / {item.maxParticipants}
@@ -403,41 +435,41 @@ const UserProfileScreen = () => {
       >
         <View style={styles.cardHeaderRow}>
           <View style={styles.cardHeaderLeft}>
-            <ActivityIcon activity={item.activity} size={32} />
+            <ActivityIcon activity={item.activity} size={32} color={theme.primary} />
             <Text style={styles.cardTitle}>{item.activity}</Text>
           </View>
           {distance && (
             <View style={styles.distanceContainer}>
-              <Ionicons name="navigate" size={14} color="#1ae9ef" />
+              <Ionicons name="navigate" size={14} color={theme.primary} />
               <Text style={styles.distanceNumber}>{distance}</Text>
               <Text style={styles.distanceUnit}>km away</Text>
             </View>
           )}
         </View>
         <View style={styles.infoRow}>
-          <Ionicons name="person" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Ionicons name="person" size={16} color={theme.primary} style={styles.infoIcon} />
           <Text style={styles.cardInfoLabel}>Host:</Text>
           <HostUsername activity={item} />
         </View>
         <View style={styles.infoRow}>
-          <Ionicons name="location" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Ionicons name="location" size={16} color={theme.primary} style={styles.infoIcon} />
           <Text style={styles.cardInfoLabel}>Location:</Text>
           <Text style={styles.cardInfo} numberOfLines={1} ellipsizeMode="tail">
             {simplifyLocation(item.location)}
           </Text>
         </View>
         <View style={styles.infoRow}>
-          <Ionicons name="calendar" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Ionicons name="calendar" size={16} color={theme.primary} style={styles.infoIcon} />
           <Text style={styles.cardInfoLabel}>Date:</Text>
           <Text style={styles.cardInfo}>{item.date}</Text>
         </View>
         <View style={styles.infoRow}>
-          <Ionicons name="time" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Ionicons name="time" size={16} color={theme.primary} style={styles.infoIcon} />
           <Text style={styles.cardInfoLabel}>Time:</Text>
           <Text style={styles.cardInfo}>{item.time}</Text>
         </View>
         <View style={styles.infoRow}>
-          <Ionicons name="people" size={16} color="#1ae9ef" style={styles.infoIcon} />
+          <Ionicons name="people" size={16} color={theme.primary} style={styles.infoIcon} />
           <Text style={styles.cardInfoLabel}>Participants:</Text>
           <Text style={styles.cardInfo}>
             {item.joinedUserIds ? item.joinedUserIds.length : item.joinedCount} / {item.maxParticipants}
@@ -450,7 +482,7 @@ const UserProfileScreen = () => {
 
   if (!isReady) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: '#121212' }} edges={['top']} />
+    <SafeAreaView style={{ flex: 1, backgroundColor: theme.background }} edges={['top']} />
     );
   }
 
@@ -460,14 +492,14 @@ const UserProfileScreen = () => {
         <View style={styles.headerRow}>
           <View style={styles.headerLeft}>
             <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-              <Ionicons name="arrow-back" size={28} color="#1ae9ef" />
+              <Ionicons name="arrow-back" size={28} color={theme.primary} />
             </TouchableOpacity>
             <Text style={styles.profileNameHeader} numberOfLines={1}>
               {profile?.username || 'Username'}
             </Text>
           </View>
           <TouchableOpacity style={styles.settingsButton} onPress={handleShareProfile}>
-            <Ionicons name="share-social-outline" size={28} color="#1ae9ef" />
+            <Ionicons name="share-social-outline" size={28} color={theme.text} />
           </TouchableOpacity>
         </View>
         {/* Profile hero area: match Profile page spacing and size */}
@@ -513,7 +545,7 @@ const UserProfileScreen = () => {
                   }}
                   activeOpacity={0.85}
                 >
-                  <Ionicons name="checkmark-done-outline" size={18} color={'#000'} style={{ marginRight: 6 }} />
+                  <Ionicons name="checkmark-done-outline" size={18} color={'#fff'} style={{ marginRight: 6 }} />
                   <Text style={[styles.profileActionText, styles.profileActionTextInverted]}>Accept</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
@@ -527,7 +559,7 @@ const UserProfileScreen = () => {
                   }}
                   activeOpacity={0.85}
                 >
-                  <Ionicons name="close-outline" size={18} color={'#1ae9ef'} style={{ marginRight: 4 }} />
+                  <Ionicons name="close-outline" size={18} color={theme.primary} style={{ marginRight: 4 }} />
                   <Text style={styles.profileActionText}>Delete</Text>
                 </TouchableOpacity>
               </>
@@ -544,7 +576,7 @@ const UserProfileScreen = () => {
                 <Ionicons
                   name={isFriend ? 'checkmark-done-outline' : 'person-add-outline'}
                   size={18}
-                  color={(requestSent || isFriend) ? '#000' : '#1ae9ef'}
+                  color={(requestSent || isFriend) ? '#fff' : theme.primary}
                   style={{ marginRight: 4 }}
                 />
                 <Text style={[styles.profileActionText, (requestSent || isFriend) && styles.profileActionTextInverted]}>
@@ -564,7 +596,7 @@ const UserProfileScreen = () => {
                 }
               }}
             >
-              <Ionicons name="chatbubble-ellipses-outline" size={18} color="#1ae9ef" style={{ marginRight: 4 }} />
+              <Ionicons name="chatbubble-ellipses-outline" size={18} color={theme.primary} style={{ marginRight: 4 }} />
               <Text style={styles.profileActionText}>Message</Text>
             </TouchableOpacity>
           </View>
@@ -574,13 +606,13 @@ const UserProfileScreen = () => {
             style={[styles.tab, activeTab === 'games' && styles.activeTab]}
             onPress={() => setActiveTab('games')}
           >
-            <Ionicons name="list" size={28} color={activeTab === 'games' ? '#1ae9ef' : '#fff'} />
+            <Ionicons name="list" size={28} color={activeTab === 'games' ? theme.primary : theme.text} />
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.tab, activeTab === 'history' && styles.activeTab]}
             onPress={() => setActiveTab('history')}
           >
-            <Ionicons name="time" size={28} color={activeTab === 'history' ? '#1ae9ef' : '#fff'} />
+            <Ionicons name="time" size={28} color={activeTab === 'history' ? theme.primary : theme.text} />
           </TouchableOpacity>
         </View>
         <View style={styles.contentContainer}>
@@ -588,11 +620,11 @@ const UserProfileScreen = () => {
             <View style={{ flex: 1 }}>
               <Text style={styles.tabTitleCentered}>Scheduled Activities</Text>
               <View style={styles.userSearchRow}>
-                <Ionicons name="search" size={16} color="#1ae9ef" style={{ marginRight: 8 }} />
+                <Ionicons name="search" size={16} color={theme.primary} style={{ marginRight: 8 }} />
                 <TextInput
                   style={[styles.searchInput, { flex: 1 }]}
                   placeholder="Search activity or host..."
-                  placeholderTextColor="#aaa"
+                  placeholderTextColor={theme.muted}
                   value={scheduledSearchQuery}
                   onChangeText={setScheduledSearchQuery}
                   returnKeyType="search"
@@ -601,14 +633,14 @@ const UserProfileScreen = () => {
                 />
                 {scheduledSearchQuery.trim().length > 0 && (
                   <TouchableOpacity style={styles.clearButton} onPress={() => setScheduledSearchQuery('')}>
-                    <Ionicons name="close-circle" size={18} color="#1ae9ef" />
+                    <Ionicons name="close-circle" size={18} color={theme.primary} />
                   </TouchableOpacity>
                 )}
               </View>
               {filteredUpcoming.length === 0 ? (
                 <View style={styles.emptyState}>
-                  <Ionicons name="calendar-outline" size={48} color="#1ae9ef" />
-                  <Text style={styles.emptyStateTitle}>No scheduled activities</Text>
+                  <Ionicons name="calendar-outline" size={48} color={theme.primary} />
+                  <Text style={styles.tabTitleCentered}>No scheduled activities</Text>
                   <Text style={styles.emptyStateText}>Their upcoming activities will appear here.</Text>
                 </View>
               ) : (
@@ -621,8 +653,8 @@ const UserProfileScreen = () => {
                     <RefreshControl
                       refreshing={refreshing || refreshLocked}
                       onRefresh={onRefresh}
-                      colors={["#009fa3"]}
-                      tintColor="#009fa3"
+                      colors={[theme.primary] as any}
+                      tintColor={theme.primary}
                       progressBackgroundColor="transparent"
                     />
                   }
@@ -633,11 +665,11 @@ const UserProfileScreen = () => {
             <View style={{ flex: 1 }}>
               <Text style={styles.tabTitleCentered}>Activity History</Text>
               <View style={styles.userSearchRow}>
-                <Ionicons name="search" size={16} color="#1ae9ef" style={{ marginRight: 8 }} />
+                <Ionicons name="search" size={16} color={theme.primary} style={{ marginRight: 8 }} />
                 <TextInput
                   style={[styles.searchInput, { flex: 1 }]}
                   placeholder="Search activity or host..."
-                  placeholderTextColor="#aaa"
+                  placeholderTextColor={theme.muted}
                   value={historySearchQuery}
                   onChangeText={setHistorySearchQuery}
                   returnKeyType="search"
@@ -646,14 +678,14 @@ const UserProfileScreen = () => {
                 />
                 {historySearchQuery.trim().length > 0 && (
                   <TouchableOpacity style={styles.clearButton} onPress={() => setHistorySearchQuery('')}>
-                    <Ionicons name="close-circle" size={18} color="#1ae9ef" />
+                    <Ionicons name="close-circle" size={18} color={theme.primary} />
                   </TouchableOpacity>
                 )}
               </View>
               {filteredHistory.length === 0 ? (
                 <View style={styles.emptyState}>
-                  <Ionicons name="time-outline" size={48} color="#1ae9ef" />
-                  <Text style={styles.emptyStateTitle}>No past activities</Text>
+                  <Ionicons name="time-outline" size={48} color={theme.primary} />
+                  <Text style={styles.tabTitleCentered}>No past activities</Text>
                   <Text style={styles.emptyStateText}>Their past activities will appear here.</Text>
                 </View>
               ) : (
@@ -678,14 +710,14 @@ const UserProfileScreen = () => {
         <Pressable style={styles.modalOverlay} onPress={() => setFavModalVisible(false)}>
           <Pressable style={styles.modalCard} onPress={() => {}}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={{ color: '#1ae9ef', fontWeight: 'bold', fontSize: 18 }}>Favourite Sports</Text>
-              <TouchableOpacity onPress={() => setFavModalVisible(false)} style={{ backgroundColor: '#8e2323', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 }}>
+              <Text style={{ color: theme.primary, fontWeight: 'bold', fontSize: 18 }}>Favourite Sports</Text>
+              <TouchableOpacity onPress={() => setFavModalVisible(false)} style={{ backgroundColor: theme.danger, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 }}>
                 <Text style={{ color: '#fff', fontWeight: '700' }}>Close</Text>
               </TouchableOpacity>
             </View>
             <View style={{ height: 10 }} />
             {((profile?.sportsPreferences || profile?.selectedSports || []) as string[]).length === 0 ? (
-              <Text style={{ color: '#bbb' }}>No favourites yet.</Text>
+              <Text style={{ color: theme.muted }}>No favourites yet.</Text>
             ) : (
               <FlatList
                 data={[...(((profile?.sportsPreferences || profile?.selectedSports || []) as string[]))].sort((a, b) => a.localeCompare(b))}
@@ -693,8 +725,8 @@ const UserProfileScreen = () => {
                 ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
                 renderItem={({ item }) => (
                   <View style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }}>
-                    <ActivityIcon activity={item} size={22} />
-                    <Text style={{ color: '#fff', marginLeft: 10, fontWeight: '600' }}>{item}</Text>
+                    <ActivityIcon activity={item} size={22} color={theme.primary} />
+                    <Text style={{ color: theme.text, marginLeft: 10, fontWeight: '600' }}>{item}</Text>
                   </View>
                 )}
               />
@@ -713,8 +745,8 @@ const UserProfileScreen = () => {
         <Pressable style={styles.modalOverlay} onPress={() => setConnectionsModalVisible(false)}>
           <Pressable style={styles.modalCard} onPress={() => {}}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={{ color: '#1ae9ef', fontWeight: 'bold', fontSize: 18 }}>Connections</Text>
-              <TouchableOpacity onPress={() => setConnectionsModalVisible(false)} style={{ backgroundColor: '#8e2323', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 }}>
+              <Text style={{ color: theme.primary, fontWeight: 'bold', fontSize: 18 }}>Connections</Text>
+              <TouchableOpacity onPress={() => setConnectionsModalVisible(false)} style={{ backgroundColor: theme.danger, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 }}>
                 <Text style={{ color: '#fff', fontWeight: '700' }}>Close</Text>
               </TouchableOpacity>
             </View>
@@ -733,13 +765,13 @@ const UserProfileScreen = () => {
                       navigation.navigate('UserProfile' as any, { userId: item.uid });
                     }}
                   >
-                    <Image source={{ uri: item.photo || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(item.username) }} style={{ width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: '#1ae9ef' }} />
-                    <Text style={{ color: '#fff', marginLeft: 10, fontWeight: '600' }}>{item.username}</Text>
+                    <Image source={{ uri: item.photo || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(item.username) }} style={{ width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: theme.primary }} />
+                    <Text style={{ color: theme.text, marginLeft: 10, fontWeight: '600' }}>{item.username}</Text>
                   </TouchableOpacity>
                 )}
               />
             ) : (
-              <Text style={{ color: '#bbb' }}>No connections yet.</Text>
+              <Text style={{ color: theme.muted }}>No connections yet.</Text>
             )}
           </Pressable>
         </Pressable>
@@ -748,9 +780,9 @@ const UserProfileScreen = () => {
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (t: any) => StyleSheet.create({
   tabTitleCentered: {
-    color: '#1ae9ef',
+    color: t.primary,
     fontSize: 18,
     fontWeight: '700',
     textAlign: 'center',
@@ -760,21 +792,21 @@ const styles = StyleSheet.create({
   userSearchRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#1e1e1e',
+    backgroundColor: t.card,
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderWidth: 1,
-    borderColor: '#2a2a2a',
+    borderColor: t.border,
     marginBottom: 10,
   },
   searchInput: {
-    backgroundColor: '#1e1e1e',
+    backgroundColor: t.card,
     paddingVertical: 8,
     paddingHorizontal: 10,
     borderRadius: 5,
     minHeight: 36,
-    color: '#fff',
+    color: t.text,
     fontWeight: '500',
   },
   clearButton: {
@@ -790,14 +822,8 @@ const styles = StyleSheet.create({
     paddingVertical: 30,
     paddingHorizontal: 20,
   },
-  emptyStateTitle: {
-    color: '#1ae9ef',
-    fontWeight: 'bold',
-    fontSize: 16,
-    marginTop: 10,
-  },
   emptyStateText: {
-    color: '#bbb',
+    color: t.muted,
     fontSize: 14,
     textAlign: 'center',
     marginTop: 6,
@@ -813,12 +839,12 @@ const styles = StyleSheet.create({
   },
   distanceNumber: {
     fontSize: 14,
-    color: '#1ae9ef',
+    color: t.primary,
     fontWeight: '600',
   },
   distanceUnit: {
     fontSize: 14,
-    color: '#888',
+    color: t.muted,
     fontWeight: '500',
   },
   infoRow: {
@@ -831,13 +857,13 @@ const styles = StyleSheet.create({
   },
   cardInfoLabel: {
     fontSize: 14,
-    color: '#1ae9ef',
+    color: t.primary,
     fontWeight: '600',
     marginRight: 6,
   },
   cardInfo: {
     fontSize: 14,
-    color: '#ccc',
+    color: t.muted,
     fontWeight: '500',
   },
   cardActions: {
@@ -845,7 +871,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginTop: 10,
   },
-  container: { flex: 1, backgroundColor: '#121212' },
+  container: { flex: 1, backgroundColor: t.background },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -862,7 +888,7 @@ const styles = StyleSheet.create({
   backButton: { padding: 5 },
   profileNameHeader: {
     fontSize: 24,
-    color: '#1ae9ef',
+    color: t.primary,
     fontWeight: 'bold',
     textAlign: 'left',
   },
@@ -898,14 +924,14 @@ const styles = StyleSheet.create({
     minWidth: 84,
   },
   statNumber: {
-    color: '#1ae9ef',
+    color: t.primary,
     fontWeight: '800',
     fontSize: 22,
     textAlign: 'center',
     lineHeight: 26,
   },
   statLabel: {
-    color: '#aaa',
+    color: t.muted,
     fontWeight: '700',
     fontSize: 12,
     textAlign: 'center',
@@ -921,7 +947,7 @@ const styles = StyleSheet.create({
     height: 100,
     borderRadius: 50,
     borderWidth: 2,
-    borderColor: '#1ae9ef',
+    borderColor: t.primary,
   },
   profileActionsRow: {
     flexDirection: 'row',
@@ -952,13 +978,13 @@ const styles = StyleSheet.create({
   profileActionButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#1e1e1e',
+    backgroundColor: t.card,
     borderRadius: 8,
     paddingVertical: 8,
     paddingHorizontal: 18,
     marginHorizontal: 2,
     borderWidth: 1,
-    borderColor: '#1ae9ef',
+    borderColor: t.primary,
     flexShrink: 1,
   },
   profileActionButtonSm: {
@@ -966,11 +992,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   profileActionButtonInverted: {
-    backgroundColor: '#1ae9ef',
-    borderColor: '#1ae9ef',
+    backgroundColor: t.primary,
+    borderColor: t.primary,
   },
   profileActionText: {
-    color: '#1ae9ef',
+    color: t.primary,
     fontWeight: 'bold',
     fontSize: 16,
   },
@@ -978,7 +1004,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   profileActionTextInverted: {
-    color: '#000',
+    color: '#fff',
   },
   // Modal styles reused for stats popovers
   modalOverlay: {
@@ -995,17 +1021,17 @@ const styles = StyleSheet.create({
   modalCard: {
     width: '100%',
     maxWidth: 520,
-    backgroundColor: '#18191a',
+    backgroundColor: t.card,
     borderRadius: 12,
     padding: 14,
     borderWidth: 1,
-    borderColor: '#2a2a2a',
+    borderColor: t.border,
   },
   tabBar: {
     flexDirection: 'row',
     justifyContent: 'space-around',
     paddingVertical: 10,
-    backgroundColor: '#121212',
+    backgroundColor: 'transparent',
     marginBottom: 0,
   },
   tab: {
@@ -1016,7 +1042,7 @@ const styles = StyleSheet.create({
   },
   activeTab: {
     borderBottomWidth: 2,
-    borderBottomColor: '#1ae9ef',
+    borderBottomColor: t.primary,
   },
   contentContainer: {
     paddingHorizontal: 20,
@@ -1024,11 +1050,11 @@ const styles = StyleSheet.create({
   },
   tabContent: {
     fontSize: 18,
-    color: '#fff',
+    color: t.text,
     fontWeight: '500',
   },
   activityCard: {
-    backgroundColor: '#1e1e1e',
+    backgroundColor: t.card,
     borderRadius: 12,
     padding: 16,
     marginBottom: 14,
@@ -1046,7 +1072,7 @@ const styles = StyleSheet.create({
   cardTitle: {
     fontSize: 20,
     fontWeight: 'bold',
-    color: '#1ae9ef',
+    color: t.primary,
     marginLeft: 8,
   },
   cardDistanceRow: {
@@ -1055,7 +1081,7 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   cardDistanceText: {
-    color: '#1ae9ef',
+    color: t.primary,
     fontWeight: 'bold',
     fontSize: 15,
   },
@@ -1063,11 +1089,12 @@ const styles = StyleSheet.create({
   joinButton: {
     paddingVertical: 8,
     paddingHorizontal: 15,
-    backgroundColor: '#1ae9ef',  // Turquoise for Join
+    backgroundColor: t.primary,  // Join
     borderRadius: 5,
   },
   joinButtonJoined: {
-    backgroundColor: '#007b7b',  // Darker Turquoise for Leave
+    // Discover-aligned Leave color mapping for activity cards
+    backgroundColor: t.isDark ? '#007E84' : darkenHex(t.primary, 0.12),
     borderRadius: 5,
   },
   joinButtonText: {
@@ -1076,7 +1103,7 @@ const styles = StyleSheet.create({
   },
   shareButton: {
     padding: 8,
-    backgroundColor: '#1e1e1e',
+    backgroundColor: t.card,
     borderRadius: 5,
   },
   listContainer: {

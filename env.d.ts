@@ -9,4 +9,7 @@ declare module '@env' {
   export const FIREBASE_APP_ID_ANDROID: string;
   export const FIREBASE_MEASUREMENT_ID: string;
   export const GOOGLE_MAPS_API_KEY: string;
+  export const GOOGLE_ANDROID_CLIENT_ID: string;
+  export const GOOGLE_IOS_CLIENT_ID: string;
+  export const GOOGLE_WEB_CLIENT_ID: string;
 }

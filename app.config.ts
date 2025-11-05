@@ -72,6 +72,7 @@ export default ({ config }: { config: any }) => ({
   plugins: [
     "expo-font",
     "expo-audio",
+    "expo-asset",
     "expo-dev-client"
   ],
   extra: {

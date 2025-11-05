@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -33,6 +33,7 @@ import { createActivity, joinActivity, fetchAllActivities } from '../utils/fires
 import { normalizeDateFormat, uploadGpxFile } from '../utils/storage';
 import { auth } from '../firebaseConfig'; // Add this import
 import * as Haptics from 'expo-haptics';
+import { useTheme } from '../context/ThemeContext';
 
 const THEME_COLOR = '#1ae9ef';
 
@@ -67,6 +68,8 @@ const darkMapStyle = [
 
 const CreateGameScreen = () => {
   const navigation = useNavigation<NavigationProp>();
+  const { theme } = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [createdActivityId, setCreatedActivityId] = useState<string | null>(null);
   const [friendProfiles, setFriendProfiles] = useState<any[]>([]);
@@ -441,8 +444,8 @@ const CreateGameScreen = () => {
 
   if (!isReady) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }} edges={['top']}>
-        <ActivityIndicator size="large" color="#1ae9ef" />
+      <SafeAreaView style={{ flex: 1, backgroundColor: theme.background, justifyContent: 'center', alignItems: 'center' }} edges={['top']}>
+        <ActivityIndicator size="large" color={theme.primary} />
       </SafeAreaView>
     );
   }
@@ -475,7 +478,7 @@ const CreateGameScreen = () => {
           ]}
         >
           <View style={styles.clearBadge}>
-            <Ionicons name="close" size={18} color="#fff" />
+            <Ionicons name="close" size={18} color={theme.text} />
           </View>
           <Animated.Text
             style={[styles.pullClearText,
@@ -552,7 +555,7 @@ const CreateGameScreen = () => {
                             </View>
                           </View>
                           <View style={[styles.checkbox, (selected || invited) && styles.checkboxSelected]}>
-                            {(selected || invited) && <Ionicons name="checkmark" size={16} color="#121212" />}
+                            {(selected || invited) && <Ionicons name="checkmark" size={16} color={theme.isDark ? '#111' : '#fff'} />}
                           </View>
                         </TouchableOpacity>
                       );
@@ -563,10 +566,8 @@ const CreateGameScreen = () => {
                       style={[styles.modalConfirm,
                         // Button color logic
                         Object.keys(selectedFriendIds).some(id => selectedFriendIds[id] && !invitedFriendIds.includes(id))
-                          ? { backgroundColor: '#1ae9ef' } // turquoise
-                          : invitedState
-                            ? { backgroundColor: '#009fa3' } // dark turquoise after invite
-                            : { backgroundColor: '#009fa3' } // dark turquoise when nothing selected
+                          ? { backgroundColor: theme.primary }
+                          : { backgroundColor: theme.primaryStrong }
                       ]}
                       onPress={async () => {
                         // Invite logic
@@ -613,10 +614,8 @@ const CreateGameScreen = () => {
                       <Text
                         style={[styles.modalConfirmText,
                           Object.keys(selectedFriendIds).some(id => selectedFriendIds[id] && !invitedFriendIds.includes(id))
-                            ? { color: '#121212' } // black text when selectable
-                            : invitedState
-                              ? { color: '#fff' } // white text after invite
-                              : { color: '#fff' } // white text when nothing selected
+                            ? { color: theme.isDark ? '#111' : '#fff' }
+                            : { color: '#fff' }
                         ]}
                       >
                         {Object.keys(selectedFriendIds).some(id => selectedFriendIds[id] && !invitedFriendIds.includes(id))
@@ -691,9 +690,9 @@ const CreateGameScreen = () => {
                 <ActivityIcon
                   activity={option}
                   size={32}
-                  color={sport === option ? '#fff' : THEME_COLOR}
+                  color={sport === option ? '#fff' : theme.primary}
                 />
-                <Text style={styles.sportText}>{option}</Text>
+                <Text style={[styles.sportText, sport === option && { color: '#fff' }]}>{option}</Text>
               </TouchableOpacity>
             ))}
           </ScrollView>
@@ -702,14 +701,14 @@ const CreateGameScreen = () => {
           <TextInput
             style={[styles.input, { height: 80 }]} // 3-4 lines
             placeholder="Describe your activity (optional)"
-            placeholderTextColor="#ccc"
+            placeholderTextColor={theme.muted}
             value={description}
             onChangeText={t => setDescription(t.slice(0, 200))}
             multiline
             maxLength={200}
           />
           <View style={{ flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 4 }}>
-            <Text style={{ color: '#888', fontSize: 13 }}>{description.length}/200</Text>
+            <Text style={{ color: theme.muted, fontSize: 13 }}>{description.length}/200</Text>
           </View>
 
           <Text style={styles.sectionLabel}>{(sport === 'Hiking' || sport === 'Running' || sport === 'Cycling') ? 'Meeting point' : 'Location'}</Text>
@@ -733,7 +732,7 @@ const CreateGameScreen = () => {
             <TextInput
               style={styles.input}
               placeholder={(sport === 'Hiking' || sport === 'Running' || sport === 'Cycling') ? 'Pick meeting point' : 'Pick a location'}
-              placeholderTextColor="#ccc"
+              placeholderTextColor={theme.muted}
               value={location}
               editable={false}
               pointerEvents="none"
@@ -743,7 +742,7 @@ const CreateGameScreen = () => {
             <TouchableOpacity
               style={[
                 styles.mapButton,
-                selectedCoords ? { backgroundColor: '#009fa3' } : null,
+                selectedCoords ? { backgroundColor: theme.isDark ? '#009fa3' : '#1ae9ef' } : null,
               ]}
               onPress={() =>
                 navigation.navigate('PickLocation', {
@@ -776,32 +775,39 @@ const CreateGameScreen = () => {
                   : 'Cycling Route (optional)'}
               </Text>
               <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-                <TouchableOpacity style={styles.mapButton} onPress={pickGpxFile} disabled={gpxUploading}>
+                <TouchableOpacity
+                  style={[
+                    styles.mapButton,
+                    gpxFile ? { backgroundColor: theme.isDark ? '#009fa3' : '#1ae9ef' } : null,
+                  ]}
+                  onPress={pickGpxFile}
+                  disabled={gpxUploading}
+                >
                   {gpxUploading ? (
-                    <ActivityIndicator size="small" color="#fff" />
+                    <ActivityIndicator size="small" color={'#fff'} />
                   ) : (
                     <Text style={{ color: '#fff', fontWeight: 'bold' }}>{gpxFile ? 'Replace GPX' : 'Upload GPX'}</Text>
                   )}
                 </TouchableOpacity>
                 {gpxFile ? (
                   <View style={{ marginLeft: 12, flex: 1, alignItems: 'center' }}>
-                    <Text style={{ color: '#fff', fontWeight: '600' }} numberOfLines={1}>{gpxFile.name || gpxFile.filename}</Text>
+                    <Text style={{ color: theme.text, fontWeight: '600' }} numberOfLines={1}>{gpxFile.name || gpxFile.filename}</Text>
                     <TouchableOpacity onPress={() => { setGpxFile(null); setGpxStats({ distance: '', ascent: '', difficulty: '', descent: '', maxElevation: '', trailRank: '', minElevation: '', routeType: '' }); }} style={{ marginTop: 6 }}>
-                      <Text style={{ color: '#ff5a5f', fontWeight: '700' }}>Remove</Text>
+                      <Text style={{ color: theme.danger, fontWeight: '700' }}>Remove</Text>
                     </TouchableOpacity>
                   </View>
                 ) : null}
               </View>
 
-              <View style={{ backgroundColor: '#141414', padding: 10, borderRadius: 8, marginBottom: 10 }}>
-                <Text style={{ color: THEME_COLOR, fontWeight: '700', marginBottom: 8 }}>Route Statistics (optional)</Text>
+              <View style={{ backgroundColor: theme.card, padding: 10, borderRadius: 8, marginBottom: 10 }}>
+                <Text style={{ color: theme.primary, fontWeight: '700', marginBottom: 8 }}>Route Statistics (optional)</Text>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <Text style={{ color: '#9aa0a6' }}>Distance</Text>
+                  <Text style={{ color: theme.muted }}>Distance</Text>
                   <TextInput
                     ref={distanceRef}
                     style={[styles.input, { flex: 1, marginLeft: 12, paddingVertical: 6 }]}
                     placeholder="e.g. 20.86 km"
-                    placeholderTextColor="#666"
+                    placeholderTextColor={theme.muted}
                     value={gpxStats.distance}
                     onChangeText={(t) => setGpxStats((s: any) => ({ ...s, distance: t }))}
                     returnKeyType="next"
@@ -810,12 +816,12 @@ const CreateGameScreen = () => {
                   />
                 </View>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <Text style={{ color: '#9aa0a6' }}>Ascent</Text>
+                  <Text style={{ color: theme.muted }}>Ascent</Text>
                   <TextInput
                     ref={ascentRef}
                     style={[styles.input, { flex: 1, marginLeft: 12, paddingVertical: 6 }]}
                     placeholder="e.g. 345 m"
-                    placeholderTextColor="#666"
+                    placeholderTextColor={theme.muted}
                     value={gpxStats.ascent}
                     onChangeText={(t) => setGpxStats((s: any) => ({ ...s, ascent: t }))}
                     returnKeyType="next"
@@ -824,12 +830,12 @@ const CreateGameScreen = () => {
                   />
                 </View>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <Text style={{ color: '#9aa0a6' }}>Difficulty</Text>
+                  <Text style={{ color: theme.muted }}>Difficulty</Text>
                   <TextInput
                     ref={difficultyRef}
                     style={[styles.input, { flex: 1, marginLeft: 12, paddingVertical: 6 }]}
                     placeholder="e.g. Moderate"
-                    placeholderTextColor="#666"
+                    placeholderTextColor={theme.muted}
                     value={gpxStats.difficulty}
                     onChangeText={(t) => setGpxStats((s: any) => ({ ...s, difficulty: t }))}
                     returnKeyType="next"
@@ -838,12 +844,12 @@ const CreateGameScreen = () => {
                   />
                 </View>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <Text style={{ color: '#9aa0a6' }}>Descent</Text>
+                  <Text style={{ color: theme.muted }}>Descent</Text>
                   <TextInput
                     ref={descentRef}
                     style={[styles.input, { flex: 1, marginLeft: 12, paddingVertical: 6 }]}
                     placeholder="e.g. 1,135 m"
-                    placeholderTextColor="#666"
+                    placeholderTextColor={theme.muted}
                     value={gpxStats.descent}
                     onChangeText={(t) => setGpxStats((s: any) => ({ ...s, descent: t }))}
                     returnKeyType="next"
@@ -852,12 +858,12 @@ const CreateGameScreen = () => {
                   />
                 </View>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <Text style={{ color: '#9aa0a6' }}>Max Elevation</Text>
+                  <Text style={{ color: theme.muted }}>Max Elevation</Text>
                   <TextInput
                     ref={maxElevationRef}
                     style={[styles.input, { flex: 1, marginLeft: 12, paddingVertical: 6 }]}
                     placeholder="e.g. 1,059 m"
-                    placeholderTextColor="#666"
+                    placeholderTextColor={theme.muted}
                     value={gpxStats.maxElevation}
                     onChangeText={(t) => setGpxStats((s: any) => ({ ...s, maxElevation: t }))}
                     returnKeyType="next"
@@ -866,12 +872,12 @@ const CreateGameScreen = () => {
                   />
                 </View>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <Text style={{ color: '#9aa0a6' }}>TrailRank</Text>
+                  <Text style={{ color: theme.muted }}>TrailRank</Text>
                   <TextInput
                     ref={trailRankRef}
                     style={[styles.input, { flex: 1, marginLeft: 12, paddingVertical: 6 }]}
                     placeholder="e.g. 10"
-                    placeholderTextColor="#666"
+                    placeholderTextColor={theme.muted}
                     value={gpxStats.trailRank}
                     onChangeText={(t) => setGpxStats((s: any) => ({ ...s, trailRank: t }))}
                     returnKeyType="next"
@@ -880,12 +886,12 @@ const CreateGameScreen = () => {
                   />
                 </View>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                  <Text style={{ color: '#9aa0a6' }}>Route Type</Text>
+                  <Text style={{ color: theme.muted }}>Route Type</Text>
                   <TextInput
                     ref={routeTypeRef}
                     style={[styles.input, { flex: 1, marginLeft: 12, paddingVertical: 6 }]}
                     placeholder="e.g. One-way"
-                    placeholderTextColor="#666"
+                    placeholderTextColor={theme.muted}
                     value={gpxStats.routeType}
                     onChangeText={(t) => setGpxStats((s: any) => ({ ...s, routeType: t }))}
                     returnKeyType="done"
@@ -901,7 +907,7 @@ const CreateGameScreen = () => {
             <TextInput
               style={styles.input}
               placeholder="DD-MM-YYYY"
-              placeholderTextColor="#ccc"
+              placeholderTextColor={theme.muted}
               value={normalizeDateFormat(date)}
               editable={false}
               pointerEvents="none"
@@ -927,7 +933,7 @@ const CreateGameScreen = () => {
                     value={date ? new Date(date.split('-').reverse().join('-')) : new Date()}
                     mode="date"
                     display="spinner"
-                    themeVariant="dark"
+                    themeVariant={theme.isDark ? 'dark' : 'light'}
                     onChange={(event, selectedDate) => {
                       if (event.type === 'set' && selectedDate) {
                         setDate(normalizeDateFormat(selectedDate.toISOString().split('T')[0]));
@@ -958,7 +964,7 @@ const CreateGameScreen = () => {
             <TextInput
               style={styles.input}
               placeholder="HH:MM"
-              placeholderTextColor="#ccc"
+              placeholderTextColor={theme.muted}
               value={time}
               editable={false}
               pointerEvents="none"
@@ -984,7 +990,7 @@ const CreateGameScreen = () => {
                     value={time ? new Date(`1970-01-01T${time}:00`) : new Date()}
                     mode="time"
                     display="spinner"
-                    themeVariant="dark"
+                    themeVariant={theme.isDark ? 'dark' : 'light'}
                     onChange={(event, selectedTime) => {
                       if (event.type === 'set' && selectedTime) {
                         const hours = selectedTime.getHours().toString().padStart(2, '0');
@@ -1020,7 +1026,7 @@ const CreateGameScreen = () => {
             onPress={() => setShowParticipantsPicker(true)}
             activeOpacity={0.7}
           >
-            <Text style={{ color: '#fff', fontWeight: 'bold' }}>
+            <Text style={{ color: theme.isDark ? '#fff' : theme.text, fontWeight: 'bold' }}>
               {maxParticipants}
             </Text>
           </TouchableOpacity>
@@ -1040,8 +1046,8 @@ const CreateGameScreen = () => {
                   <Picker
                     selectedValue={maxParticipants}
                     onValueChange={setMaxParticipants}
-                    style={{ width: '100%', color: '#fff' }}
-                    itemStyle={{ color: '#fff', fontSize: 22 }}
+                    style={{ width: '100%', color: theme.text }}
+                    itemStyle={{ color: theme.text, fontSize: 22 }}
                   >
                     {[...Array(29)].map((_, i) => (
                       <Picker.Item key={i + 2} label={`${i + 2}`} value={i + 2} />
@@ -1074,11 +1080,11 @@ const CreateGameScreen = () => {
           )}
 
           <TouchableOpacity
-            style={[styles.createButton, creating ? { backgroundColor: '#009fa3' } : null]}
+            style={[styles.createButton, creating ? { backgroundColor: theme.primaryStrong } : null]}
             onPress={creating ? undefined : handleCreateGame}
             disabled={creating}
           >
-            {creating && <ActivityIndicator size="small" color="#fff" />}
+            {creating && <ActivityIndicator size="small" color={theme.isDark ? '#111' : '#fff'} />}
             <Text style={styles.createButtonText}>{creating ? 'Creating Activity' : 'Create Activity'}</Text>
           </TouchableOpacity>
           </ScrollView>
@@ -1089,10 +1095,10 @@ const CreateGameScreen = () => {
 
 export default CreateGameScreen;
 
-const styles = StyleSheet.create({
+const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#121212',
+    backgroundColor: t.background,
     paddingHorizontal: 10,
   },
   header: {
@@ -1102,7 +1108,7 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 28,
-    color: THEME_COLOR,
+    color: t.primary,
     fontWeight: 'bold',
     textAlign: 'center',
   },
@@ -1121,26 +1127,26 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: '#009fa3',
+    backgroundColor: t.primaryStrong,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 6,
   },
   pullClearText: {
-    color: '#9aa0a6',
+    color: t.muted,
     fontSize: 12,
   },
   sectionLabel: {
-    color: THEME_COLOR,
+    color: t.primary,
     fontSize: 18,
     marginVertical: 8,
     fontWeight: 'bold',
   },
   input: {
-    backgroundColor: '#1e1e1e',
+    backgroundColor: t.card,
     padding: 12,
     borderRadius: 8,
-    color: '#fff',
+    color: t.text,
     marginBottom: 10,
     fontWeight: '500',
   },
@@ -1150,18 +1156,18 @@ const styles = StyleSheet.create({
     marginHorizontal: 5,
     padding: 10,
     borderRadius: 8,
-    backgroundColor: '#1e1e1e',
+    backgroundColor: t.card,
   },
   activeButton: {
-    backgroundColor: THEME_COLOR,
+    backgroundColor: t.primary,
   },
   sportText: {
-    color: '#fff',
+    color: t.text,
     marginTop: 5,
     fontWeight: '500',
   },
   mapButton: {
-    backgroundColor: THEME_COLOR,
+    backgroundColor: t.primary,
     paddingVertical: 8,
     paddingHorizontal: 16,
     borderRadius: 8,
@@ -1175,25 +1181,25 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   participantButton: {
-    backgroundColor: '#1e1e1e',
+    backgroundColor: t.card,
     borderRadius: 8,
     paddingVertical: 10,
     paddingHorizontal: 16,
     marginHorizontal: 4,
     borderWidth: 1,
-    borderColor: THEME_COLOR,
+    borderColor: t.primary,
   },
   createButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: THEME_COLOR,
+    backgroundColor: t.primary,
     padding: 15,
     borderRadius: 8,
     marginTop: 20,
   },
   createButtonText: {
-    color: '#fff',
+    color: t.isDark ? '#111' : '#fff',
     fontSize: 18,
     marginLeft: 8,
     fontWeight: 'bold',
@@ -1204,7 +1210,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   rollerContainer: {
-    backgroundColor: Platform.OS === 'ios' ? '#222' : '#fff',
+    backgroundColor: Platform.OS === 'ios' ? (t.isDark ? '#222' : '#fff') : t.card,
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     paddingBottom: Platform.OS === 'ios' ? 32 : 0,
@@ -1219,13 +1225,13 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   rollerCancel: {
-    color: '#ff5a5f',
+    color: t.danger,
     fontWeight: 'bold',
     fontSize: 18,
     paddingVertical: 8,
   },
   rollerDone: {
-    color: THEME_COLOR,
+    color: t.primary,
     fontWeight: 'bold',
     fontSize: 18,
     paddingVertical: 8,
@@ -1244,22 +1250,22 @@ const styles = StyleSheet.create({
   },
   // Modal styles copied from ActivityDetailsScreen
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center', padding: 20 },
-  modalCard: { width: '100%', maxWidth: 520, backgroundColor: '#1c1c1e', borderRadius: 16, padding: 16, borderWidth: 1, borderColor: '#2a2a2c' },
+  modalCard: { width: '100%', maxWidth: 520, backgroundColor: t.card, borderRadius: 16, padding: 16, borderWidth: 1, borderColor: t.border },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
-  modalTitle: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
-  modalSubtitle: { color: '#9aa0a6', marginBottom: 12 },
-  friendRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: '#2a2a2c' },
+  modalTitle: { color: t.text, fontSize: 18, fontWeight: 'bold' },
+  modalSubtitle: { color: t.muted, marginBottom: 12 },
+  friendRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: t.border },
   friendLeft: { flexDirection: 'row', alignItems: 'center' },
-  friendAvatar: { width: 40, height: 40, borderRadius: 20, marginRight: 10, borderWidth: 1, borderColor: '#1ae9ef' },
-  friendName: { color: '#fff', fontWeight: '600' },
-  friendMeta: { color: '#9aa0a6', fontSize: 12 },
-  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: '#1ae9ef', alignItems: 'center', justifyContent: 'center' },
-  checkboxSelected: { backgroundColor: '#1ae9ef' },
+  friendAvatar: { width: 40, height: 40, borderRadius: 20, marginRight: 10, borderWidth: 1, borderColor: t.primary },
+  friendName: { color: t.text, fontWeight: '600' },
+  friendMeta: { color: t.muted, fontSize: 12 },
+  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: t.primary, alignItems: 'center', justifyContent: 'center' },
+  checkboxSelected: { backgroundColor: t.primary },
   modalActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 12, flexWrap: 'wrap' },
-  modalCancel: { paddingVertical: 12, paddingHorizontal: 16, backgroundColor: '#2b0f12', borderRadius: 10, borderWidth: 1, borderColor: '#5a1a1f' },
-  modalCancelText: { color: '#ff4d4f', fontWeight: '700' },
-  modalConfirm: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1ae9ef', paddingVertical: 12, paddingHorizontal: 16, borderRadius: 10 },
-  modalConfirmText: { color: '#121212', fontWeight: '700' },
+  modalCancel: { paddingVertical: 12, paddingHorizontal: 16, backgroundColor: t.card, borderRadius: 10, borderWidth: 1, borderColor: t.danger },
+  modalCancelText: { color: t.danger, fontWeight: '700' },
+  modalConfirm: { flexDirection: 'row', alignItems: 'center', backgroundColor: t.primary, paddingVertical: 12, paddingHorizontal: 16, borderRadius: 10 },
+  modalConfirmText: { color: t.isDark ? '#111' : '#fff', fontWeight: '700' },
   bottomToast: { position: 'absolute', left: 0, right: 0, bottom: 22, alignItems: 'center' },
-  bottomToastText: { backgroundColor: 'rgba(26, 233, 239, 0.18)', color: '#cdeff0', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 14, overflow: 'hidden', fontWeight: '600' },
+  bottomToastText: { backgroundColor: 'rgba(26, 233, 239, 0.18)', color: t.text, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 14, overflow: 'hidden', fontWeight: '600' },
 });

@@ -49,17 +49,11 @@ import { useActivityContext } from '../context/ActivityContext';
 import { ActivityIcon } from '../components/ActivityIcons';
 import { normalizeDateFormat } from '../utils/storage';
 import { useInboxBadge } from '../context/InboxBadgeContext';
+import { useTheme } from '../context/ThemeContext';
 
 /** ================= Constants ================= */
 
-const TURQUOISE = '#1ae9ef';
-const BG = '#121212';
-const SURFACE = '#1a1a1a';
-const CARD = '#1e1e1e';
-const STROKE = '#2b2b2b';
-const DANGER = '#e74c3c';
-const TEXT = '#ffffff';
-const MUTED = '#bbb';
+// Colors now driven by theme via createStyles
 const TYPING_FRESH_MS = 3000; // 3 seconds instead of 5
 
 type Chat = {
@@ -80,11 +74,20 @@ type Chat = {
   [key: string]: any;
 };
 
-const sportIconMap: Record<string, React.ReactNode> = {
-  football: <MaterialCommunityIcons name="soccer" size={28} color={TURQUOISE} />,
-  basketball: <MaterialCommunityIcons name="basketball" size={28} color={TURQUOISE} />,
-  tennis: <MaterialCommunityIcons name="tennis" size={28} color={TURQUOISE} />,
-  hiking: <MaterialCommunityIcons name="hiking" size={28} color={TURQUOISE} />,
+const sportIconFor = (key: string | undefined, color: string) => {
+  switch ((key || '').toLowerCase()) {
+    case 'football':
+    case 'soccer':
+      return <MaterialCommunityIcons name="soccer" size={28} color={color} />;
+    case 'basketball':
+      return <MaterialCommunityIcons name="basketball" size={28} color={color} />;
+    case 'tennis':
+      return <MaterialCommunityIcons name="tennis" size={28} color={color} />;
+    case 'hiking':
+      return <MaterialCommunityIcons name="hiking" size={28} color={color} />;
+    default:
+      return null;
+  }
 };
 
 /** ================= Helper Functions ================= */
@@ -122,7 +125,8 @@ function formatTimeAgo(tsMillis?: number) {
   return y === 1 ? '1 year ago' : `${y} years ago`;
 }
 
-const TypingDots = ({ color = TURQUOISE }: { color?: string }) => {
+const TypingDots = ({ color }: { color?: string }) => {
+  const { theme } = useTheme();
   const a = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     const loop = Animated.loop(
@@ -166,6 +170,8 @@ const TypingDots = ({ color = TURQUOISE }: { color?: string }) => {
 /** ================= Main Component ================= */
 
 const ChatsScreen = ({ navigation }: any) => {
+  const { theme } = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
   const [searchQuery, setSearchQuery] = useState('');
   const [chats, setChats] = useState<Chat[]>([]);
   const [isReady, setIsReady] = useState(false);
@@ -500,9 +506,9 @@ const ChatsScreen = ({ navigation }: any) => {
     const total = (unreadNotifications ?? notificationCount ?? 0) + chatUnreadCount;
     nav.setOptions?.({
       tabBarBadge: total > 0 ? (total > 99 ? '99+' : total) : undefined,
-      tabBarBadgeStyle: { backgroundColor: DANGER, color: '#fff' },
+      tabBarBadgeStyle: { backgroundColor: theme.danger, color: '#fff' },
     });
-  }, [unreadNotifications, unreadChatMessages, notificationCount, chatUnreadTotal, nav]);
+  }, [unreadNotifications, unreadChatMessages, notificationCount, chatUnreadTotal, nav, theme]);
 
   /** ========= Create group ========= */
   const toggleSelectFriend = (uid: string) => setSelected((prev) => ({ ...prev, [uid]: !prev[uid] }));
@@ -615,8 +621,8 @@ const ChatsScreen = ({ navigation }: any) => {
     if (showTyping) {
       preview = (
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <TypingDots />
-          <Text style={[styles.lastMessage, { color: '#9adfe2', marginLeft: 8 }]} numberOfLines={1}>
+          <TypingDots color={theme.primary} />
+          <Text style={[styles.lastMessage, { color: theme.primary, opacity: 0.85, marginLeft: 8 }]} numberOfLines={1}>
             {item.typingLabel}
           </Text>
         </View>
@@ -642,13 +648,13 @@ const ChatsScreen = ({ navigation }: any) => {
         />
       ) : item.activityId ? (
           <View style={styles.groupAvatar}>
-            {sportIconMap[item.activityType?.toLowerCase?.()] || <ActivityIcon activity={item.activityType} size={28} color={TURQUOISE} />}
+            {sportIconFor(item.activityType?.toLowerCase?.(), theme.primary) || <ActivityIcon activity={item.activityType} size={28} color={theme.primary} />}
           </View>
       ) : item.image ? (
         <Image source={{ uri: item.image }} style={styles.dmAvatar} />
       ) : (
         <View style={styles.groupAvatar}>
-          <Ionicons name="people" size={28} color={TURQUOISE} />
+          <Ionicons name="people" size={28} color={theme.primary} />
         </View>
       );
 
@@ -709,8 +715,8 @@ const ChatsScreen = ({ navigation }: any) => {
 
   if (!isReady) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: BG, justifyContent: 'center', alignItems: 'center' }} edges={['top']}>
-        <ActivityIndicator size="large" color={TURQUOISE} />
+      <SafeAreaView style={{ flex: 1, backgroundColor: theme.background, justifyContent: 'center', alignItems: 'center' }} edges={['top']}>
+        <ActivityIndicator size="large" color={theme.primary} />
       </SafeAreaView>
     );
   }
@@ -729,7 +735,7 @@ const ChatsScreen = ({ navigation }: any) => {
             style={[styles.squareIconBtn, { position: 'absolute', top: 10, right: 0, zIndex: 10 }]}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
-            <Ionicons name="add" size={20} color="#000" />
+            <Ionicons name="add" size={20} color={theme.isDark ? '#111' : '#fff'} />
           </TouchableOpacity>
         )}
         {showActivity && (
@@ -739,7 +745,7 @@ const ChatsScreen = ({ navigation }: any) => {
               style={[styles.headerBackBtn, { position: 'absolute', top: 10, left: 0, zIndex: 10 }]}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
-              <Ionicons name="arrow-back" size={26} color={TURQUOISE} />
+              <Ionicons name="arrow-back" size={26} color={theme.primary} />
             </TouchableOpacity>
             {notifications.length > 0 ? (
               <TouchableOpacity
@@ -757,7 +763,7 @@ const ChatsScreen = ({ navigation }: any) => {
                 style={[styles.headerBackBtn, { position: 'absolute', top: 10, right: 0, zIndex: 10 }]}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
-                <Ionicons name="trash-outline" size={26} color={TURQUOISE} />
+                <Ionicons name="trash-outline" size={26} color={theme.primary} />
               </TouchableOpacity>
             ) : null}
           </>
@@ -770,11 +776,11 @@ const ChatsScreen = ({ navigation }: any) => {
 
         {/* Search */}
         <View style={styles.searchContainer}>
-          <Ionicons name="search" size={18} color="#ccc" />
+          <Ionicons name="search" size={18} color={theme.muted} />
           <TextInput
             style={styles.searchInput}
             placeholder="Search conversations"
-            placeholderTextColor="#bbb"
+            placeholderTextColor={theme.muted}
             value={searchQuery}
             onChangeText={setSearchQuery}
             returnKeyType="search"
@@ -789,7 +795,7 @@ const ChatsScreen = ({ navigation }: any) => {
         >
           <View style={styles.activityLeft}>
             <View style={styles.activityIconWrap}>
-              <Ionicons name="notifications-outline" size={22} color={TURQUOISE} />
+              <Ionicons name="notifications-outline" size={22} color={theme.primary} />
               {notificationCount > 0 && (
                 <View style={styles.badge}>
                   <Text style={styles.badgeText}>{notificationCount > 99 ? '99+' : notificationCount}</Text>
@@ -805,7 +811,7 @@ const ChatsScreen = ({ navigation }: any) => {
               )}
             </View>
           </View>
-          <Ionicons name={showActivity ? 'chevron-down' : 'chevron-forward'} size={18} color={TURQUOISE} />
+          <Ionicons name={showActivity ? 'chevron-down' : 'chevron-forward'} size={18} color={theme.primary} />
         </TouchableOpacity>
 
         {/* Body */}
@@ -813,7 +819,7 @@ const ChatsScreen = ({ navigation }: any) => {
           <Animated.View style={{ flex: 1, opacity: notifFade.current }}>
             {notifications.length === 0 ? (
               <View style={styles.activityEmpty}>
-                <Ionicons name="notifications-outline" size={46} color={TURQUOISE} />
+                <Ionicons name="notifications-outline" size={46} color={theme.primary} />
                 <Text style={styles.activityEmptyTitle}>No notifications yet</Text>
                 <Text style={styles.activityEmptyText}>When there's activity, it'll show up here.</Text>
               </View>
@@ -982,10 +988,10 @@ const ChatsScreen = ({ navigation }: any) => {
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.chatList}
             renderItem={renderChatItem}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={TURQUOISE} />}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.primary} />}
             ListEmptyComponent={
               <View style={styles.activityEmpty}>
-                <Ionicons name="chatbubbles-outline" size={46} color={TURQUOISE} />
+                <Ionicons name="chatbubbles-outline" size={46} color={theme.primary} />
                 <Text style={styles.activityEmptyTitle}>No conversations yet</Text>
                 <Text style={styles.activityEmptyText}>Start a new chat or join an activity!</Text>
               </View>
@@ -1038,9 +1044,9 @@ const ChatsScreen = ({ navigation }: any) => {
                   disabled={creating}
                 >
                   <View style={styles.groupPhotoPlaceholder}>
-                    <Ionicons name="image-outline" size={44} color={TURQUOISE} />
+                    <Ionicons name="image-outline" size={44} color={theme.primary} />
                     <View style={styles.photoPlus}>
-                      <Ionicons name="add" size={16} color="#000" />
+                      <Ionicons name="add" size={16} color={theme.isDark ? '#111' : '#fff'} />
                     </View>
                   </View>
                 </TouchableOpacity>
@@ -1053,7 +1059,7 @@ const ChatsScreen = ({ navigation }: any) => {
               value={groupTitle}
               onChangeText={(t) => setGroupTitle(t.slice(0, 25))}
               placeholder="Group name"
-              placeholderTextColor="#888"
+              placeholderTextColor={theme.muted}
               maxLength={25}
               editable={!creating}
             />
@@ -1083,7 +1089,7 @@ const ChatsScreen = ({ navigation }: any) => {
                     <Ionicons
                       name={selected[item.uid] ? 'checkbox' : 'square-outline'}
                       size={24}
-                      color={selected[item.uid] ? TURQUOISE : '#666'}
+                      color={selected[item.uid] ? theme.primary : theme.muted}
                     />
                   </TouchableOpacity>
                 )}
@@ -1117,7 +1123,7 @@ const ChatsScreen = ({ navigation }: any) => {
                 disabled={creating || !groupTitle.trim() || Object.keys(selected).filter(k => selected[k]).length < 2}
               >
                 {creating ? (
-                  <ActivityIndicator size="small" color="#000" />
+                  <ActivityIndicator size="small" color={theme.isDark ? '#111' : '#fff'} />
                 ) : (
                   <Text style={styles.createButtonText}>Create</Text>
                 )}
@@ -1130,8 +1136,8 @@ const ChatsScreen = ({ navigation }: any) => {
   );
 };
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: BG, paddingHorizontal: 14 },
+const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: t.background, paddingHorizontal: 14 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1142,7 +1148,7 @@ const styles = StyleSheet.create({
   headerBackBtn: { padding: 4 },
   headerTitle: {
     fontSize: 28,
-    color: TURQUOISE,
+    color: t.primary,
     fontWeight: 'bold',
     textAlign: 'center',
     marginTop: 10,
@@ -1150,47 +1156,47 @@ const styles = StyleSheet.create({
   },
   headerRightBtn: { padding: 4 },
   headerRightWrap: {},
-  squareIconBtn: { width: 36, height: 36, borderRadius: 8, borderWidth: 1, borderColor: TURQUOISE, backgroundColor: TURQUOISE, alignItems: 'center', justifyContent: 'center' },
-  searchContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: CARD, borderWidth: 1, borderColor: STROKE, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, marginTop: 8, marginBottom: 10 },
-  searchInput: { flex: 1, marginLeft: 8, color: TEXT, fontSize: 16, fontWeight: '500' },
-  activityCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: SURFACE, borderWidth: 1, borderColor: STROKE, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12, marginBottom: 12 },
+  squareIconBtn: { width: 36, height: 36, borderRadius: 8, borderWidth: 1, borderColor: t.primary, backgroundColor: t.primary, alignItems: 'center', justifyContent: 'center' },
+  searchContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: t.card, borderWidth: 1, borderColor: t.border, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, marginTop: 8, marginBottom: 10 },
+  searchInput: { flex: 1, marginLeft: 8, color: t.text, fontSize: 16, fontWeight: '500' },
+  activityCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: t.card, borderWidth: 1, borderColor: t.border, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12, marginBottom: 12 },
   activityLeft: { flexDirection: 'row', alignItems: 'center' },
-  activityIconWrap: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#202020', marginRight: 10, position: 'relative' },
-  badge: { position: 'absolute', top: -4, right: -4, minWidth: 16, height: 16, borderRadius: 8, backgroundColor: DANGER, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3 },
+  activityIconWrap: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: t.card, marginRight: 10, position: 'relative' },
+  badge: { position: 'absolute', top: -4, right: -4, minWidth: 16, height: 16, borderRadius: 8, backgroundColor: t.danger, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3 },
   badgeText: { color: '#fff', fontSize: 10, fontWeight: '700' },
-  activityTitle: { color: TEXT, fontSize: 16, fontWeight: '700' },
-  activitySubtitle: { color: MUTED, fontSize: 12, marginTop: 2, maxWidth: 220 },
+  activityTitle: { color: t.text, fontSize: 16, fontWeight: '700' },
+  activitySubtitle: { color: t.muted, fontSize: 12, marginTop: 2, maxWidth: 220 },
   // center but nudge upward slightly to compensate for header/title above
   activityEmpty: { flex: 1, alignItems: 'center', justifyContent: 'center', transform: [{ translateY: -40 }] },
-  activityEmptyTitle: { color: TEXT, fontSize: 18, fontWeight: '800', marginTop: 8 },
-  activityEmptyText: { color: MUTED, fontSize: 14, marginTop: 4 },
+  activityEmptyTitle: { color: t.text, fontSize: 18, fontWeight: '800', marginTop: 8 },
+  activityEmptyText: { color: t.muted, fontSize: 14, marginTop: 4 },
   chatList: { paddingBottom: 20 },
-  chatItem: { flexDirection: 'row', alignItems: 'center', padding: 12, marginVertical: 5, backgroundColor: CARD, borderRadius: 12, borderWidth: 1, borderColor: STROKE },
-  dmAvatar: { width: 50, height: 50, borderRadius: 25, borderWidth: 1, borderColor: TURQUOISE, marginRight: 12 },
-  groupAvatar: { width: 50, height: 50, borderRadius: 25, borderWidth: 1, borderColor: TURQUOISE, marginRight: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: 'transparent' },
+  chatItem: { flexDirection: 'row', alignItems: 'center', padding: 12, marginVertical: 5, backgroundColor: t.card, borderRadius: 12, borderWidth: 1, borderColor: t.border },
+  dmAvatar: { width: 50, height: 50, borderRadius: 25, borderWidth: 1, borderColor: t.primary, marginRight: 12 },
+  groupAvatar: { width: 50, height: 50, borderRadius: 25, borderWidth: 1, borderColor: t.primary, marginRight: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: 'transparent' },
   chatRowRight: { flex: 1, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
   chatInfo: { flex: 1, paddingRight: 8 },
-  chatTitle: { color: TURQUOISE, fontWeight: 'bold', fontSize: 18 },
-  lastMessage: { fontSize: 14, color: '#ccc', fontWeight: '500' },
-  lastSenderStrong: { color: '#fff', fontWeight: 'bold' },
-  lastMessageCore: { color: '#ccc', fontWeight: '500' },
-  lastMessageEm: { color: '#fff', fontWeight: '700' },
+  chatTitle: { color: t.primary, fontWeight: 'bold', fontSize: 18 },
+  lastMessage: { fontSize: 14, color: t.text, opacity: 0.85, fontWeight: '500' },
+  lastSenderStrong: { color: t.text, fontWeight: 'bold' },
+  lastMessageCore: { color: t.text, opacity: 0.85, fontWeight: '500' },
+  lastMessageEm: { color: t.text, fontWeight: '700' },
   metaRight: { alignItems: 'flex-end', marginLeft: 8, maxWidth: 120 },
-  timeAgo: { color: '#aaa', fontSize: 12 },
-  timeAgoSmall: { color: '#aaa', fontSize: 12, marginTop: 2 },
-  activityMeta: { color: TEXT, fontSize: 12, fontWeight: '500', marginTop: 2 },
+  timeAgo: { color: t.muted, fontSize: 12 },
+  timeAgoSmall: { color: t.muted, fontSize: 12, marginTop: 2 },
+  activityMeta: { color: t.text, fontSize: 12, fontWeight: '500', marginTop: 2 },
   // Stack notification content vertically: top row contains avatar+message (and friend actions), below it sits invite action buttons
-  notificationItem: { flexDirection: 'column', alignItems: 'stretch', padding: 12, marginVertical: 5, backgroundColor: CARD, borderRadius: 12, borderWidth: 1, borderColor: STROKE },
+  notificationItem: { flexDirection: 'column', alignItems: 'stretch', padding: 12, marginVertical: 5, backgroundColor: t.card, borderRadius: 12, borderWidth: 1, borderColor: t.border },
   notificationRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flex: 1 },
-  notificationAvatar: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: TURQUOISE, marginRight: 10 },
-  notificationText: { color: TEXT, fontSize: 15, fontWeight: '700' },
-  notificationMeta: { color: MUTED, fontSize: 12, marginTop: 2 },
+  notificationAvatar: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: t.primary, marginRight: 10 },
+  notificationText: { color: t.text, fontSize: 15, fontWeight: '700' },
+  notificationMeta: { color: t.muted, fontSize: 12, marginTop: 2 },
   notificationActions: { flexDirection: 'row', alignItems: 'center', marginLeft: 10, gap: 6 },
-  connectBtn: { backgroundColor: '#1ae9ef', borderRadius: 16, paddingVertical: 6, paddingHorizontal: 10 },
-  connectBtnText: { color: '#000', fontWeight: '700', fontSize: 12 },
-  deleteBtn: { backgroundColor: '#000', borderWidth: 1, borderColor: '#1ae9ef', borderRadius: 16, paddingVertical: 6, paddingHorizontal: 10 },
-  deleteBtnText: { color: '#1ae9ef', fontWeight: '700', fontSize: 12 },
-  notificationTimeInline: { color: '#888', fontSize: 11, marginTop: 2 },
+  connectBtn: { backgroundColor: t.primary, borderRadius: 16, paddingVertical: 6, paddingHorizontal: 10 },
+  connectBtnText: { color: t.isDark ? '#111' : '#fff', fontWeight: '700', fontSize: 12 },
+  deleteBtn: { backgroundColor: t.card, borderWidth: 1, borderColor: t.primary, borderRadius: 16, paddingVertical: 6, paddingHorizontal: 10 },
+  deleteBtnText: { color: t.primary, fontWeight: '700', fontSize: 12 },
+  notificationTimeInline: { color: t.muted, fontSize: 11, marginTop: 2 },
   // place invite buttons under the time/timestamp; nudge upward so the top half overlaps the timestamp line
   // small translateX moves the buttons a bit to the right so they don't cover the end of the timestamp text
   inviteActionRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: -12, gap: 8, alignItems: 'center', zIndex: 2, transform: [{ translateX: 8 }] },
@@ -1200,9 +1206,9 @@ const styles = StyleSheet.create({
   friendActionRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: -12, gap: 8, alignItems: 'center', zIndex: 2, transform: [{ translateX: 8 }] },
   friendConnectBtn: { paddingHorizontal: 14, borderRadius: 16, minHeight: 36, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
   friendDeleteBtn: { paddingHorizontal: 14, borderRadius: 16, minHeight: 36, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginLeft: 8 },
-  unreadBadgeSmall: { minWidth: 18, height: 18, paddingHorizontal: 5, borderRadius: 9, backgroundColor: DANGER, alignItems: 'center', justifyContent: 'center' },
+  unreadBadgeSmall: { minWidth: 18, height: 18, paddingHorizontal: 5, borderRadius: 9, backgroundColor: t.danger, alignItems: 'center', justifyContent: 'center' },
   unreadBadgeText: { color: '#fff', fontSize: 12, fontWeight: '700' },
-  swipeActionRight: { justifyContent: 'center', alignItems: 'flex-end', backgroundColor: DANGER, borderRadius: 12, marginVertical: 5 },
+  swipeActionRight: { justifyContent: 'center', alignItems: 'flex-end', backgroundColor: t.danger, borderRadius: 12, marginVertical: 5 },
   swipeDeleteBtn: { width: 64, height: '100%', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 8 },
   // Create Group Chat Modal Styles
   modalOverlay: {
@@ -1215,17 +1221,17 @@ const styles = StyleSheet.create({
   createGroupPanel: {
     width: '100%',
     maxWidth: 400,
-    backgroundColor: SURFACE,
+    backgroundColor: t.card,
     borderRadius: 16,
     padding: 20,
     borderWidth: 1,
-    borderColor: STROKE,
+    borderColor: t.border,
     maxHeight: '80%',
   },
   createGroupTitle: {
     fontSize: 24,
     fontWeight: '900',
-    color: TURQUOISE,
+    color: t.primary,
     marginBottom: 20,
     textAlign: 'center',
   },
@@ -1238,48 +1244,48 @@ const styles = StyleSheet.create({
     height: 100,
     borderRadius: 50,
     borderWidth: 2,
-    borderColor: TURQUOISE,
+    borderColor: t.primary,
   },
   groupPhotoPlaceholder: {
     width: 100,
     height: 100,
     borderRadius: 50,
     borderWidth: 2,
-    borderColor: TURQUOISE,
-    backgroundColor: '#1a1a1a',
+    borderColor: t.primary,
+    backgroundColor: t.card,
     alignItems: 'center',
     justifyContent: 'center',
   },
   photoPickerText: {
-    color: '#888',
+    color: t.muted,
     fontSize: 12,
     marginTop: 4,
   },
   groupTitleInput: {
-    backgroundColor: '#232323',
-    color: '#fff',
+    backgroundColor: t.card,
+    color: t.text,
     borderRadius: 12,
     paddingHorizontal: 16,
     paddingVertical: 12,
     fontSize: 16,
     borderWidth: 1,
-    borderColor: STROKE,
+    borderColor: t.border,
   },
   characterCount: {
-    color: '#888',
+    color: t.muted,
     fontSize: 12,
     textAlign: 'right',
     marginTop: 4,
     marginBottom: 16,
   },
   sectionLabel: {
-    color: TURQUOISE,
+    color: t.primary,
     fontSize: 16,
     fontWeight: '700',
     marginBottom: 12,
   },
   emptyText: {
-    color: '#888',
+    color: t.muted,
     fontSize: 14,
     textAlign: 'center',
     marginVertical: 20,
@@ -1292,10 +1298,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     padding: 12,
-    backgroundColor: CARD,
+    backgroundColor: t.card,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: STROKE,
+    borderColor: t.border,
   },
   friendAvatar: {
     width: 40,
@@ -1303,11 +1309,11 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     marginRight: 12,
     borderWidth: 1,
-    borderColor: TURQUOISE,
+    borderColor: t.primary,
   },
   friendName: {
     flex: 1,
-    color: '#fff',
+    color: t.text,
     fontSize: 16,
     fontWeight: '600',
   },
@@ -1324,18 +1330,20 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   cancelButton: {
-    backgroundColor: '#8e2323',
+    backgroundColor: t.card,
+    borderWidth: 1,
+    borderColor: t.danger,
   },
   cancelButtonText: {
-    color: '#fff',
+    color: t.danger,
     fontSize: 16,
     fontWeight: '700',
   },
   createButton: {
-    backgroundColor: TURQUOISE,
+    backgroundColor: t.primary,
   },
   createButtonText: {
-    color: '#000',
+    color: t.isDark ? '#111' : '#fff',
     fontSize: 16,
     fontWeight: '900',
   },
@@ -1349,11 +1357,11 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: TURQUOISE,
+    backgroundColor: t.primary,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: '#0b0b0b',
+    borderColor: t.border,
   },
 });
 

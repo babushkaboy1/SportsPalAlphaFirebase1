@@ -24,6 +24,16 @@ The script expects these variables to be present:
 - FIREBASE_MEASUREMENT_ID
 - GOOGLE_MAPS_API_KEY
 
+### Google OAuth client IDs (recommended)
+
+To avoid Google sign-in "invalid credential / audience mismatch" errors, set platform-specific client IDs and link them in your Google Cloud Console and Firebase Auth provider:
+
+- GOOGLE_ANDROID_CLIENT_ID
+- GOOGLE_IOS_CLIENT_ID
+- GOOGLE_WEB_CLIENT_ID
+
+These are included in the build if present. For production TestFlight builds, you should set them.
+
 ## Setting secrets in Expo (Terminal)
 
 Use the EAS CLI to create project-level secrets that your builds can read. Replace the example values with your real secrets.
@@ -47,6 +57,11 @@ npx eas secret:create --scope project --name FIREBASE_APP_ID_IOS --value "<your-
 npx eas secret:create --scope project --name FIREBASE_APP_ID_ANDROID --value "<your-android-app-id>"
 npx eas secret:create --scope project --name FIREBASE_MEASUREMENT_ID --value "<your-measurement-id>"
 npx eas secret:create --scope project --name GOOGLE_MAPS_API_KEY --value "<your-maps-key>"
+
+# Google OAuth client IDs (recommended)
+npx eas secret:create --scope project --name GOOGLE_ANDROID_CLIENT_ID --value "<your-android-client-id>"
+npx eas secret:create --scope project --name GOOGLE_IOS_CLIENT_ID --value "<your-ios-client-id>"
+npx eas secret:create --scope project --name GOOGLE_WEB_CLIENT_ID --value "<your-web-client-id>"
 
 # List secrets
 npx eas secret:list
