@@ -10,7 +10,6 @@ import {
   Platform,
   FlatList,
   TextInput,
-  Share,
   StatusBar, // <-- Add this import
   Animated,
   RefreshControl,
@@ -40,6 +39,8 @@ import { activities } from '../data/activitiesData';
 
 import { getDisplayCreatorUsername } from '../utils/getDisplayCreatorUsername';
 import { useTheme } from '../context/ThemeContext';
+import { getProfileFromCache, updateProfileInCache } from '../utils/chatCache';
+import { shareActivity, shareProfile } from '../utils/deepLinking';
 
 // Slight darken helper for hex colors (fallback to original on parse failure)
 function darkenHex(color: string, amount = 0.12): string {
@@ -104,7 +105,15 @@ const ProfileScreen = () => {
   const route = useRoute<RouteProp<RootStackParamList, 'Profile'>>();
   const userId = route.params?.userId;
   const insets = useSafeAreaInsets();
-  const [profile, setProfile] = useState<any>(null);
+  const { joinedActivities, toggleJoinActivity, isActivityJoined, allActivities, profile: contextProfile, reloadAllActivities } = useActivityContext();
+  
+  // Initialize with contextProfile to avoid 0 flash (if viewing own profile)
+  const [profile, setProfile] = useState<any>(() => {
+    if (!userId && contextProfile) {
+      return contextProfile;
+    }
+    return null;
+  });
   const [activeTab, setActiveTab] = useState<'activities' | 'history' | 'friends'>('activities');
   const [userLocation, setUserLocation] = useState<{ latitude: number, longitude: number } | null>(null);
   const [userJoinedActivities, setUserJoinedActivities] = useState<any[]>([]);
@@ -112,7 +121,6 @@ const ProfileScreen = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshLocked, setRefreshLocked] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const { joinedActivities, toggleJoinActivity, isActivityJoined, allActivities, profile: contextProfile, reloadAllActivities } = useActivityContext();
   const [inviteModalVisible, setInviteModalVisible] = useState(false);
   const [inviteTargetUser, setInviteTargetUser] = useState<{uid: string; username: string; photo?: string} | null>(null);
   const [inviteSelection, setInviteSelection] = useState<Record<string, boolean>>({});
@@ -195,10 +203,30 @@ const ProfileScreen = () => {
       if (!user) return;
       uid = user.uid;
     }
+
+    // ========== LOAD FROM CACHE FIRST (instant UI) ==========
+    const cachedProfile = await getProfileFromCache(uid);
+    if (cachedProfile) {
+      console.log('📦 Loaded profile from cache (instant UI)');
+      setProfile({ ...cachedProfile, uid });
+    }
+
+    // Fetch fresh from Firestore
     const docRef = doc(db, "profiles", uid);
     const docSnap = await getDoc(docRef);
     if (docSnap.exists()) {
-      setProfile({ ...docSnap.data(), uid }); // <-- Ensure uid is present
+      const data: any = docSnap.data();
+      const profileData = { ...data, uid };
+      setProfile(profileData);
+      
+      // ========== SAVE TO CACHE ==========
+      await updateProfileInCache({
+        uid,
+        username: data.username || 'User',
+        photo: data.photo || data.photoURL,
+        bio: data.bio,
+        selectedSports: data.selectedSports,
+      } as any);
     } else {
       setProfile(null);
     }
@@ -206,9 +234,7 @@ const ProfileScreen = () => {
 
   const handleShareProfile = async () => {
     try {
-      await Share.share({
-        message: `Check out my profile on SportsPal! Username: ${profile?.username}`,
-      });
+      await shareProfile(auth.currentUser?.uid || '', profile?.username || 'User');
     } catch (error) {
       console.error(error);
     }
@@ -277,7 +303,43 @@ const ProfileScreen = () => {
   useEffect(() => {
     const me = auth.currentUser?.uid;
     if (!me) return;
-    // Subscribe to my profile to get friend ids
+    
+    // Load friends from cache first (instant UI, prevents glitching)
+    const loadCachedFriends = async () => {
+      try {
+        const cached = await getProfileFromCache(me);
+        if (cached && Array.isArray((cached as any).friends)) {
+          const friendIds: string[] = (cached as any).friends;
+          setMyFriendIds(friendIds);
+          
+          // If we have cached friend profiles, show them immediately
+          if (friendIds.length > 0) {
+            // Try to load cached profiles for friends
+            const cachedFriendProfiles: Array<{ uid: string; username: string; photo?: string }> = [];
+            for (const fid of friendIds.slice(0, 20)) { // Limit to 20 to avoid excessive cache lookups
+              const fp = await getProfileFromCache(fid);
+              if (fp) {
+                cachedFriendProfiles.push({
+                  uid: fid,
+                  username: fp.username || 'User',
+                  photo: fp.photo,
+                });
+              }
+            }
+            if (cachedFriendProfiles.length > 0) {
+              console.log('📦 Loaded friends list from cache (instant UI)');
+              cachedFriendProfiles.sort((a, b) => a.username.localeCompare(b.username));
+              setFriends(cachedFriendProfiles);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to load cached friends:', e);
+      }
+    };
+    loadCachedFriends();
+    
+    // Subscribe to my profile to get friend ids (fresh data)
     const unsub = onSnapshot(doc(db, 'profiles', me), async (snap) => {
       if (!snap.exists()) return setFriends([]);
       const data: any = snap.data();
@@ -285,6 +347,17 @@ const ProfileScreen = () => {
       const reqs: string[] = data?.requestsSent || [];
       setMyFriendIds(Array.isArray(friendIds) ? friendIds : []);
       setMyRequestsSent(Array.isArray(reqs) ? reqs : []);
+      
+      // Update my profile cache with latest friends list
+      await updateProfileInCache({
+        uid: me,
+        username: data.username || 'User',
+        photo: data.photo || data.photoURL,
+        bio: data.bio,
+        selectedSports: data.selectedSports,
+        friends: friendIds,
+      } as any);
+      
       if (!Array.isArray(friendIds) || friendIds.length === 0) {
         setFriends([]);
         return;
@@ -298,7 +371,17 @@ const ProfileScreen = () => {
         const snap2 = await getDocs(q);
         snap2.forEach((d) => {
           const p: any = d.data();
-          rows.push({ uid: d.id, username: p.username || p.username_lower || 'User', photo: p.photo || p.photoURL });
+          const friendProfile = { uid: d.id, username: p.username || p.username_lower || 'User', photo: p.photo || p.photoURL };
+          rows.push(friendProfile);
+          
+          // Cache each friend's profile
+          updateProfileInCache({
+            uid: d.id,
+            username: p.username || 'User',
+            photo: p.photo || p.photoURL,
+            bio: p.bio,
+            selectedSports: p.selectedSports,
+          } as any);
         });
       }
       // Stable order by username
@@ -448,7 +531,7 @@ const ProfileScreen = () => {
           </TouchableOpacity>
           <TouchableOpacity 
             style={styles.shareButton} 
-            onPress={() => Share.share({ message: `Join me for ${item.activity} at ${item.location} on ${item.date}!` })}
+            onPress={() => shareActivity(item.id, item.activity)}
           >
             <Ionicons name="share-social-outline" size={20} color="#fff" />
           </TouchableOpacity>
@@ -999,8 +1082,8 @@ const ProfileScreen = () => {
               <Text style={[styles.statLabel, { opacity: 0 }]}>_</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.statBlock} activeOpacity={0.8} onPress={() => setFavModalVisible(true)}>
-              <View style={styles.statNumberWrap}><Text style={styles.statNumber}>{(profile?.sportsPreferences || profile?.selectedSports || []).length}</Text></View>
-              <Text style={styles.statLabel}>Favourite{((profile?.sportsPreferences || profile?.selectedSports || []).length === 1) ? '' : 's'}</Text>
+              <View style={styles.statNumberWrap}><Text style={styles.statNumber}>{(contextProfile?.sportsPreferences || contextProfile?.selectedSports || []).length}</Text></View>
+              <Text style={styles.statLabel}>Favourite{((contextProfile?.sportsPreferences || contextProfile?.selectedSports || []).length === 1) ? '' : 's'}</Text>
               <Text style={[styles.statLabel, { marginTop: -2 }]}>Sports</Text>
             </TouchableOpacity>
             <View style={styles.statBlock}>
@@ -1051,7 +1134,7 @@ const ProfileScreen = () => {
             <Ionicons
               name={getIconName(tab)}
               size={28}
-              color={activeTab === tab ? theme.primary : theme.text}
+              color={activeTab === tab ? theme.primary : theme.muted}
             />
           </TouchableOpacity>
         ))}
@@ -1074,11 +1157,11 @@ const ProfileScreen = () => {
               </TouchableOpacity>
             </View>
             <View style={{ height: 10 }} />
-            {((profile?.sportsPreferences || profile?.selectedSports || []) as string[]).length === 0 ? (
+            {((contextProfile?.sportsPreferences || contextProfile?.selectedSports || []) as string[]).length === 0 ? (
               <Text style={{ color: theme.muted }}>No favourites yet.</Text>
             ) : (
               <FlatList
-                data={[...(((profile?.sportsPreferences || profile?.selectedSports || []) as string[]))].sort((a, b) => a.localeCompare(b))}
+                data={[...(((contextProfile?.sportsPreferences || contextProfile?.selectedSports || []) as string[]))].sort((a, b) => a.localeCompare(b))}
                 keyExtractor={(s, i) => s + i}
                 ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
                 renderItem={({ item }) => (

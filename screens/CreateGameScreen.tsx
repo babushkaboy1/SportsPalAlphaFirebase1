@@ -742,7 +742,7 @@ const CreateGameScreen = () => {
             <TouchableOpacity
               style={[
                 styles.mapButton,
-                selectedCoords ? { backgroundColor: theme.isDark ? '#009fa3' : '#1ae9ef' } : null,
+                selectedCoords ? { backgroundColor: theme.isDark ? '#009fa3' : theme.primaryStrong } : null,
               ]}
               onPress={() =>
                 navigation.navigate('PickLocation', {
@@ -1080,12 +1080,17 @@ const CreateGameScreen = () => {
           )}
 
           <TouchableOpacity
-            style={[styles.createButton, creating ? { backgroundColor: theme.primaryStrong } : null]}
+            style={[
+              styles.createButton,
+              creating ? { backgroundColor: theme.isDark ? '#009fa3' : theme.primaryStrong } : null
+            ]}
             onPress={creating ? undefined : handleCreateGame}
             disabled={creating}
           >
-            {creating && <ActivityIndicator size="small" color={theme.isDark ? '#111' : '#fff'} />}
-            <Text style={styles.createButtonText}>{creating ? 'Creating Activity' : 'Create Activity'}</Text>
+            {creating && <ActivityIndicator size="small" color="#fff" />}
+            <Text style={[styles.createButtonText, { color: '#fff' }]}>
+              {creating ? 'Creating Activity' : 'Create Activity'}
+            </Text>
           </TouchableOpacity>
           </ScrollView>
         </Animated.View>
@@ -1193,13 +1198,13 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: t.primary,
+    backgroundColor: t.isDark ? '#1ae9ef' : t.primary,
     padding: 15,
     borderRadius: 8,
     marginTop: 20,
   },
   createButtonText: {
-    color: t.isDark ? '#111' : '#fff',
+    color: '#fff',
     fontSize: 18,
     marginLeft: 8,
     fontWeight: 'bold',

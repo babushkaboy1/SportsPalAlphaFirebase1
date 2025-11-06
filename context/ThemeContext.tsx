@@ -1,9 +1,8 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { Appearance, ColorSchemeName } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DarkTheme as NavDarkTheme, DefaultTheme as NavLightTheme, Theme as NavTheme } from '@react-navigation/native';
 
-export type ThemeMode = 'light' | 'dark' | 'system';
+export type ThemeMode = 'light' | 'dark';
 
 export type AppPalette = {
   isDark: boolean;
@@ -62,21 +61,15 @@ const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 
 const STORAGE_KEY = 'themeMode';
 
-function resolveMode(mode: ThemeMode, system: ColorSchemeName): 'light' | 'dark' {
-  if (mode === 'system') return system === 'dark' ? 'dark' : 'light';
-  return mode;
-}
-
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [themeMode, setThemeModeState] = useState<ThemeMode>('system');
+  const [themeMode, setThemeModeState] = useState<ThemeMode>('dark');
   const [loaded, setLoaded] = useState(false);
-  const [systemScheme, setSystemScheme] = useState<ColorSchemeName>(Appearance.getColorScheme());
 
   useEffect(() => {
     (async () => {
       try {
         const saved = await AsyncStorage.getItem(STORAGE_KEY);
-        if (saved === 'light' || saved === 'dark' || saved === 'system') {
+        if (saved === 'light' || saved === 'dark') {
           setThemeModeState(saved);
         }
       } finally {
@@ -85,22 +78,13 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     })();
   }, []);
 
-  // React to system theme changes when in 'system' mode
-  useEffect(() => {
-    const sub = Appearance.addChangeListener(({ colorScheme }) => {
-      setSystemScheme(colorScheme);
-    });
-    return () => sub.remove();
-  }, []);
-
   // Persist on change
   const setThemeMode = (m: ThemeMode) => {
     setThemeModeState(m);
     AsyncStorage.setItem(STORAGE_KEY, m).catch(() => {});
   };
 
-  const effective = resolveMode(themeMode, systemScheme);
-  const theme = effective === 'dark' ? DARK : LIGHT;
+  const theme = themeMode === 'dark' ? DARK : LIGHT;
 
   const navTheme: NavTheme = useMemo(() => {
     if (theme.isDark) {

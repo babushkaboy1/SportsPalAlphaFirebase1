@@ -2,6 +2,7 @@ import { collection, query, where, getDocs, addDoc, deleteDoc, doc, updateDoc, a
 import { auth, db } from '../firebaseConfig';
 import { Activity } from '../data/activitiesData';
 import { removeUserFromChat, addSystemMessage, getOrCreateChatForActivity } from './firestoreChats';
+import { getProfileFromCache, updateProfileInCache } from './chatCache';
 
 export const getUserJoinedActivities = async (): Promise<string[]> => {
   const user = auth.currentUser;
@@ -73,14 +74,46 @@ export const createActivity = async (activity: FirestoreActivity): Promise<strin
 
 export const fetchUsersByIds = async (userIds: string[]) => {
   if (!userIds.length) return [];
-  const usersRef = collection(db, "profiles"); // <-- was "users"
+  
   const users = await Promise.all(
     userIds.map(async (uid) => {
+      // Check cache first
+      const cached = await getProfileFromCache(uid);
+      if (cached) {
+        console.log(`📦 Loaded user profile from cache: ${cached.username}`);
+        return { ...cached, uid };
+      }
+      
+      // Fetch from Firestore if not cached
+      const usersRef = collection(db, "profiles");
       const docSnap = await getDoc(doc(usersRef, uid));
-      return docSnap.exists() ? { ...docSnap.data(), uid } : null;
+      
+      if (docSnap.exists()) {
+        const data: any = docSnap.data();
+        const profile = { 
+          ...data, 
+          uid,
+          username: data.username || 'User',
+          photo: data.photo || data.photoURL,
+        };
+        
+        // Save to cache for next time
+        await updateProfileInCache({
+          uid,
+          username: profile.username,
+          photo: profile.photo,
+          bio: data.bio,
+          selectedSports: data.selectedSports,
+        } as any);
+        
+        return profile;
+      }
+      
+      return null;
     })
   );
-  return users.filter(Boolean);
+  
+  return users.filter(u => u !== null);
 };
 
 export const deleteActivity = async (activityId: string) => {

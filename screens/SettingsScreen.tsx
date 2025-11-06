@@ -12,11 +12,8 @@ import {
   Platform,
   Linking,
   Alert,
-  Animated,
-  PanResponder,
-  GestureResponderEvent,
-  PanResponderGestureState,
 } from 'react-native';
+import Slider from '@react-native-community/slider';
 import { auth, db } from '../firebaseConfig';
 import { doc, getDoc } from 'firebase/firestore';
 import { removeSavedTokenAndUnregister } from '../utils/notifications';
@@ -49,10 +46,17 @@ const SettingsScreen: React.FC = () => {
   const [rangeModalVisible, setRangeModalVisible] = useState(false);
   const [termsModalVisible, setTermsModalVisible] = useState(false);
   const [privacyModalVisible, setPrivacyModalVisible] = useState(false);
+  const [linkedAccountsVisible, setLinkedAccountsVisible] = useState(false);
+
+  // Linked accounts state
+  const [hasGoogle, setHasGoogle] = useState(false);
+  const [hasFacebook, setHasFacebook] = useState(false);
+  const [hasApple, setHasApple] = useState(false);
+  const [hasPassword, setHasPassword] = useState(false);
 
   const styles = useMemo(() => createStyles(theme), [theme]);
-  const themeModeLabel = themeMode === 'system' ? 'System' : themeMode === 'dark' ? 'Dark' : 'Light';
-  const themeModeIcon = themeMode === 'system' ? 'phone-portrait' : themeMode === 'dark' ? 'moon' : 'sunny';
+  const themeModeLabel = themeMode === 'dark' ? 'Dark' : 'Light';
+  const themeModeIcon = themeMode === 'dark' ? 'moon' : 'sunny';
 
   // Load discovery range from storage
   useEffect(() => {
@@ -67,6 +71,22 @@ const SettingsScreen: React.FC = () => {
       }
     };
     loadDiscoveryRange();
+  }, []);
+
+  // Check linked accounts
+  useEffect(() => {
+    const checkLinkedAccounts = () => {
+      const user = auth.currentUser;
+      if (!user) return;
+      
+      const providers = user.providerData.map(p => p.providerId);
+      setHasGoogle(providers.includes('google.com'));
+      setHasFacebook(providers.includes('facebook.com'));
+      setHasApple(providers.includes('apple.com'));
+      setHasPassword(providers.includes('password'));
+    };
+    
+    checkLinkedAccounts();
   }, []);
 
   // Save discovery range to storage
@@ -165,6 +185,13 @@ const SettingsScreen: React.FC = () => {
             sub="Name, photo, bio"
             onPress={handleEditProfile}
           />
+          <Row
+            icon="link-outline"
+            label="Linked Accounts"
+            sub="Manage your sign-in methods"
+            rightIcon="chevron-forward"
+            onPress={() => setLinkedAccountsVisible(true)}
+          />
           <RowDanger
             icon="exit-outline"
             label="Sign out of SportsPal"
@@ -219,7 +246,7 @@ const SettingsScreen: React.FC = () => {
           <Row
             icon={themeModeIcon as any}
             label="Theme"
-            sub="Choose Light, Dark, or System"
+            sub="Choose Light or Dark"
             rightText={themeModeLabel}
             onPress={() => setThemeModalVisible(true)}
           />
@@ -297,16 +324,6 @@ const SettingsScreen: React.FC = () => {
                   setThemeModalVisible(false); 
                 }} 
               />
-              <ThemeOption 
-                icon="phone-portrait" 
-                label="System" 
-                selected={themeMode === 'system'} 
-                onPress={() => { 
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  setThemeMode('system'); 
-                  setThemeModalVisible(false); 
-                }} 
-              />
             </View>
           </Pressable>
         </Pressable>
@@ -315,66 +332,71 @@ const SettingsScreen: React.FC = () => {
       {/* Discovery Range Modal */}
       <Modal transparent visible={rangeModalVisible} onRequestClose={() => setRangeModalVisible(false)} animationType="fade">
         <Pressable style={styles.modalBackdrop} onPress={() => setRangeModalVisible(false)}>
-          <Pressable style={[styles.modalCard, { paddingVertical: 24, width: '90%', maxHeight: '80%' }]}>
+          <Pressable style={[styles.modalCard, { paddingVertical: 24, width: '90%' }]}>
             <Ionicons name="compass-outline" size={26} color={theme.primary} style={{ marginBottom: 8 }} />
             <Text style={styles.modalTitle}>Discovery Range</Text>
             <Text style={styles.modalText}>How far to search for activities</Text>
             
-            <ScrollView style={{ width: '100%', marginTop: 20 }} contentContainerStyle={{ paddingHorizontal: 20 }}>
-              <Text style={[styles.rangeValue, { color: theme.primary, textAlign: 'center', marginBottom: 16 }]}>
+            <View style={{ width: '100%', paddingHorizontal: 20, marginTop: 20, marginBottom: 20 }}>
+              <Text style={[styles.rangeValue, { color: theme.primary, textAlign: 'center', marginBottom: 24 }]}>
                 {discoveryRange} km
               </Text>
               
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-start' }}>
-                {[5, 10, 15, 20, 25, 30, 40, 50, 60, 70, 80, 90, 100, 120, 150].map((km) => (
-                  <TouchableOpacity
-                    key={km}
-                    onPress={() => {
-                      setDiscoveryRange(km);
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    }}
-                    style={[
-                      styles.rangeButton,
-                      { 
-                        backgroundColor: discoveryRange === km ? theme.primary : theme.card,
-                        borderColor: discoveryRange === km ? theme.primary : theme.border,
-                        borderWidth: 2,
-                        marginRight: 8,
-                        marginBottom: 8,
-                        minWidth: 70,
-                        flex: 0,
-                      }
-                    ]}
-                  >
-                    <Text style={[
-                      styles.rangeButtonText,
-                      { color: discoveryRange === km ? '#ffffff' : theme.text }
-                    ]}>
-                      {km} km
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+              <Slider
+                style={{ width: '100%', height: 40 }}
+                minimumValue={5}
+                maximumValue={150}
+                step={5}
+                value={discoveryRange}
+                onValueChange={(value) => {
+                  setDiscoveryRange(Math.round(value));
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                }}
+                minimumTrackTintColor={theme.primary}
+                maximumTrackTintColor={theme.border}
+                thumbTintColor={theme.primary}
+              />
+              
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 }}>
+                <Text style={{ color: theme.muted, fontSize: 12 }}>5 km</Text>
+                <Text style={{ color: theme.muted, fontSize: 12 }}>150 km</Text>
               </View>
-            </ScrollView>
+            </View>
 
-            <TouchableOpacity 
-              style={[
-                styles.modalBtn, 
-                { 
-                  backgroundColor: theme.primary, 
-                  marginTop: 20, 
-                  width: '100%',
-                  flex: 0,
-                }
-              ]} 
-              onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                saveDiscoveryRange(discoveryRange);
-                setRangeModalVisible(false);
-              }}
-            >
-              <Text style={[styles.modalBtnText, { color: theme.isDark ? '#111' : '#fff' }]}>Done</Text>
-            </TouchableOpacity>
+            <View style={{ width: '100%', flexDirection: 'row', gap: 10, marginTop: 8 }}>
+              <TouchableOpacity 
+                style={[
+                  styles.modalBtn, 
+                  { 
+                    backgroundColor: theme.border, 
+                    flex: 1,
+                  }
+                ]} 
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setDiscoveryRange(70);
+                }}
+              >
+                <Text style={[styles.modalBtnText, { color: theme.text }]}>Reset to Default</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={[
+                  styles.modalBtn, 
+                  { 
+                    backgroundColor: theme.primary, 
+                    flex: 1,
+                  }
+                ]} 
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                  saveDiscoveryRange(discoveryRange);
+                  setRangeModalVisible(false);
+                }}
+              >
+                <Text style={[styles.modalBtnText, { color: theme.isDark ? '#111' : '#fff' }]}>Done</Text>
+              </TouchableOpacity>
+            </View>
           </Pressable>
         </Pressable>
       </Modal>
@@ -516,6 +538,101 @@ const SettingsScreen: React.FC = () => {
             </TouchableOpacity>
           </View>
         </View>
+      </Modal>
+
+      {/* Linked Accounts Modal */}
+      <Modal transparent visible={linkedAccountsVisible} onRequestClose={() => setLinkedAccountsVisible(false)} animationType="fade">
+        <Pressable style={styles.modalBackdrop} onPress={() => setLinkedAccountsVisible(false)}>
+          <Pressable style={[styles.modalCard, { width: '90%', paddingVertical: 24 }]}>
+            <Ionicons name="link-outline" size={26} color={theme.primary} style={{ marginBottom: 8 }} />
+            <Text style={styles.modalTitle}>Linked Accounts</Text>
+            <Text style={styles.modalText}>Manage your sign-in methods</Text>
+            
+            <View style={{ width: '100%', marginTop: 16, gap: 12 }}>
+              {/* Google */}
+              <View style={styles.linkedAccountRow}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                  <Ionicons name="logo-google" size={24} color={hasGoogle ? theme.primary : theme.muted} style={{ marginRight: 12 }} />
+                  <View>
+                    <Text style={[styles.linkedAccountLabel, { color: hasGoogle ? theme.text : theme.muted }]}>Google</Text>
+                    <Text style={styles.linkedAccountStatus}>{hasGoogle ? 'Connected' : 'Not connected'}</Text>
+                  </View>
+                </View>
+                {hasGoogle && (
+                  <Ionicons name="checkmark-circle" size={22} color={theme.primary} />
+                )}
+              </View>
+
+              {/* Facebook */}
+              <View style={styles.linkedAccountRow}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                  <Ionicons name="logo-facebook" size={24} color={hasFacebook ? theme.primary : theme.muted} style={{ marginRight: 12 }} />
+                  <View>
+                    <Text style={[styles.linkedAccountLabel, { color: hasFacebook ? theme.text : theme.muted }]}>Facebook</Text>
+                    <Text style={styles.linkedAccountStatus}>{hasFacebook ? 'Connected' : 'Not connected'}</Text>
+                  </View>
+                </View>
+                {hasFacebook && (
+                  <Ionicons name="checkmark-circle" size={22} color={theme.primary} />
+                )}
+              </View>
+
+              {/* Apple */}
+              {Platform.OS === 'ios' && (
+                <View style={styles.linkedAccountRow}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                    <Ionicons name="logo-apple" size={24} color={hasApple ? theme.primary : theme.muted} style={{ marginRight: 12 }} />
+                    <View>
+                      <Text style={[styles.linkedAccountLabel, { color: hasApple ? theme.text : theme.muted }]}>Apple</Text>
+                      <Text style={styles.linkedAccountStatus}>{hasApple ? 'Connected' : 'Not connected'}</Text>
+                    </View>
+                  </View>
+                  {hasApple && (
+                    <Ionicons name="checkmark-circle" size={22} color={theme.primary} />
+                  )}
+                </View>
+              )}
+
+              {/* Password */}
+              <View style={styles.linkedAccountRow}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                  <Ionicons name="key-outline" size={24} color={hasPassword ? theme.primary : theme.muted} style={{ marginRight: 12 }} />
+                  <View>
+                    <Text style={[styles.linkedAccountLabel, { color: hasPassword ? theme.text : theme.muted }]}>Email & Password</Text>
+                    <Text style={styles.linkedAccountStatus}>{hasPassword ? 'Set up' : 'Not set up'}</Text>
+                  </View>
+                </View>
+                {hasPassword && (
+                  <Ionicons name="checkmark-circle" size={22} color={theme.primary} />
+                )}
+              </View>
+            </View>
+
+            <View style={{ width: '100%', marginTop: 20, paddingHorizontal: 12 }}>
+              <Text style={[styles.modalText, { fontSize: 12, marginBottom: 0 }]}>
+                To link additional accounts, sign in with your email and password, then use the social login buttons on the login screen.
+              </Text>
+            </View>
+
+            <TouchableOpacity 
+              style={[
+                styles.modalBtn, 
+                { 
+                  backgroundColor: theme.primary, 
+                  marginTop: 20, 
+                  width: '100%',
+                  flex: 0,
+                }
+              ]} 
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setLinkedAccountsVisible(false);
+              }}
+            >
+              <Text style={[styles.modalBtnText, { color: theme.isDark ? '#111' : '#fff' }]}>Done</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
       </Modal>
     </View>
   );
@@ -723,6 +840,27 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
     fontSize: 13,
     lineHeight: 20,
     paddingHorizontal: 8,
+  },
+
+  // Linked Accounts
+  linkedAccountRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    backgroundColor: t.background,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: t.border,
+  },
+  linkedAccountLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  linkedAccountStatus: {
+    fontSize: 12,
+    color: t.muted,
+    marginTop: 2,
   },
 });
 

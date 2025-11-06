@@ -1,21 +1,60 @@
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
-import { Platform } from 'react-native';
+import { Platform, AppState } from 'react-native';
 import { arrayUnion, arrayRemove, doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { auth, db } from '../firebaseConfig';
 
+// Store the in-app notification handler
+let inAppNotificationHandler: ((notification: any) => void) | null = null;
+
+export function setInAppNotificationHandler(handler: (notification: any) => void) {
+  inAppNotificationHandler = handler;
+}
+
 // Configure how notifications are handled when received in foreground
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-    // iOS presentation options
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
+  handleNotification: async (notification) => {
+    const appState = AppState.currentState;
+    const isAppActive = appState === 'active';
+
+    // If app is in foreground, show in-app notification instead of system notification
+    if (isAppActive && inAppNotificationHandler) {
+      const data = notification.request.content.data as any;
+      const title = notification.request.content.title || 'Notification';
+      const body = notification.request.content.body || '';
+      
+      inAppNotificationHandler({
+        id: notification.request.identifier,
+        title,
+        body,
+        image: data?.senderPhoto,
+        type: data?.type || 'chat',
+        chatId: data?.chatId,
+        activityId: data?.activityId,
+        userId: data?.userId,
+      });
+
+      // Don't show system notification
+      return {
+        shouldShowAlert: false,
+        shouldPlaySound: true,
+        shouldSetBadge: false,
+        shouldShowBanner: false,
+        shouldShowList: false,
+      };
+    }
+
+    // If app is in background, show system notification as normal
+    return {
+      shouldShowAlert: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+      shouldShowBanner: true,
+      shouldShowList: true,
+    };
+  },
 });
 
 export type PushData = {

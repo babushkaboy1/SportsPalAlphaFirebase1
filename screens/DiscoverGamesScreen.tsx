@@ -1,22 +1,23 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useFocusEffect } from '@react-navigation/native';
+import { auth } from '../firebaseConfig';
 
-// Helper component for host username
-
+// Helper component for host username - now uses cached creatorUsername
 function HostUsername({ activity }: { activity: any }) {
-  const [username, setUsername] = useState('');
   const { theme } = useTheme();
-  useEffect(() => {
-    let mounted = true;
-    const fetchUsername = async () => {
-  const name = await getDisplayCreatorUsername(activity.creatorId, activity.creator);
-      if (mounted) setUsername(name);
-    };
-    fetchUsername();
-    return () => { mounted = false; };
-  }, [activity.creatorId, activity.creator]);
-  return <Text style={{ fontSize: 14, color: theme.muted, fontWeight: '500' }}>{username}</Text>;
+  
+  // Use cached creatorUsername from ActivityContext (no more fetching!)
+  let displayName = activity.creatorUsername || activity.creator || 'Unknown';
+  
+  // Show "You" if current user is the creator
+  if (auth.currentUser?.uid && activity.creatorId && auth.currentUser.uid === activity.creatorId) {
+    displayName = 'You';
+  }
+  
+  return <Text style={{ fontSize: 14, color: theme.muted, fontWeight: '500' }}>{displayName}</Text>;
 }
+
 import {
   View,
   Text,
@@ -27,7 +28,6 @@ import {
   ScrollView,
   RefreshControl,
   Platform,
-  Share,
   Animated,
   Modal,
 } from 'react-native';
@@ -44,6 +44,7 @@ import { fetchAllActivities } from '../utils/firestoreActivities';
 import { activities as fakeActivities, Activity } from '../data/activitiesData';
 import { useActivityContext } from '../context/ActivityContext';
 import { getDisplayCreatorUsername } from '../utils/getDisplayCreatorUsername';
+import { shareActivity } from '../utils/deepLinking';
 
 // Default discovery radius ≈45-min drive at 80–100 km/h
 const DEFAULT_RADIUS_KM = 70;
@@ -107,7 +108,7 @@ type DiscoverNav = NavigationProp<RootStackParamList, 'ActivityDetails'>;
 const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation }) => {
   const { theme } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
-  const { allActivities, isActivityJoined, toggleJoinActivity, profile } = useActivityContext();
+  const { allActivities, isActivityJoined, toggleJoinActivity, profile, reloadAllActivities } = useActivityContext();
 
   // Discovery range from settings (default 70 km)
   const [discoveryRange, setDiscoveryRange] = useState(DEFAULT_RADIUS_KM);
@@ -125,7 +126,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
   const [isSortingByDistance, setIsSortingByDistance] = useState(false);
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
 
-  // Load discovery range from AsyncStorage
+  // Load discovery range from AsyncStorage on mount and on screen focus
   useEffect(() => {
     const loadDiscoveryRange = async () => {
       try {
@@ -139,6 +140,23 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
     };
     loadDiscoveryRange();
   }, []);
+
+  // Reload discovery range when screen comes into focus (instant updates from Settings)
+  useFocusEffect(
+    useCallback(() => {
+      const reloadDiscoveryRange = async () => {
+        try {
+          const saved = await AsyncStorage.getItem('discoveryRange');
+          if (saved) {
+            setDiscoveryRange(parseInt(saved, 10));
+          }
+        } catch (error) {
+          console.error('Failed to reload discovery range:', error);
+        }
+      };
+      reloadDiscoveryRange();
+    }, [])
+  );
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const searchDebounceRef = useRef<number | null>(null);
@@ -157,27 +175,24 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
   }, [profile?.sportsPreferences, profile?.selectedSports]);
 
   // Load activities from Firestore + fake on mount/refresh
+  // NOW USES: Force refresh to bypass cache and fetch fresh data
   const loadActivities = useCallback(async () => {
     setRefreshing(true);
     setRefreshLocked(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     try {
-      const firestoreActivities = await fetchAllActivities();
-      // Merge with local sample without duplicates (kept behavior)
-      const _merged = [
-        ...firestoreActivities,
-        ...fakeActivities.filter(fake => !firestoreActivities.some(real => real.id === fake.id)),
-      ];
-      // setAllActivities(_merged);
-    } catch {
-      // setAllActivities(fakeActivities);
+      console.log('🔄 Pull-to-refresh: Fetching fresh activities (bypassing cache)');
+      // Force refresh = true to bypass cache and fetch fresh from Firestore
+      await reloadAllActivities(true);
+    } catch (error) {
+      console.error('❌ Failed to refresh activities:', error);
     } finally {
       setTimeout(() => {
         setRefreshing(false);
         setRefreshLocked(false);
       }, 1500);
     }
-  }, []);
+  }, [reloadAllActivities]);
 
   useEffect(() => {
     loadActivities();
@@ -496,11 +511,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.shareButton}
-            onPress={() =>
-              Share.share({
-                message: `Join me for ${item.activity} at ${item.location} on ${item.date}!`,
-              })
-            }
+            onPress={() => shareActivity(item.id, item.activity)}
           >
             <Ionicons name="share-social-outline" size={20} color={theme.text} />
           </TouchableOpacity>
@@ -523,7 +534,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
 
         <View style={styles.topSection}>
           <View style={styles.searchContainer}>
-            <Ionicons name="search" size={18} color={theme.muted} />
+            <Ionicons name="search" size={18} color={theme.primary} />
             <TextInput
               style={styles.searchInput}
               placeholder="Search by activity or host..."
@@ -532,6 +543,14 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
               onChangeText={setRawSearchQuery}
               returnKeyType="search"
             />
+            {rawSearchQuery.length > 0 && (
+              <TouchableOpacity
+                onPress={() => setRawSearchQuery('')}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="close-circle" size={20} color={theme.primary} />
+              </TouchableOpacity>
+            )}
           </View>
 
           <View style={styles.sortButtons}>

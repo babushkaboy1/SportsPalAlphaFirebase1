@@ -49,6 +49,7 @@ import { normalizeDateFormat } from '../utils/storage';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { ActivityIcon } from '../components/ActivityIcons';
 import * as ExpoCalendar from 'expo-calendar';
+import { shareActivity } from '../utils/deepLinking';
 import { doc, getDoc, updateDoc, arrayUnion } from 'firebase/firestore';
 import { db, auth } from '../firebaseConfig';
 import { useFocusEffect, useRoute, useNavigation } from '@react-navigation/native';
@@ -125,7 +126,7 @@ const getSportEmoji = (sport: string): string => {
 /* ---------- Component ---------- */
 
 const CalendarScreen = ({ navigation, route }: any) => {
-  const { theme } = useTheme();
+  const { theme, themeMode } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
   const { joinedActivities, allActivities, reloadAllActivities, toggleJoinActivity } = useActivityContext();
 
@@ -400,7 +401,7 @@ const CalendarScreen = ({ navigation, route }: any) => {
           contentContainerStyle={{ flexGrow: 1 }}
         >
           <Calendar
-            key={currentDate}
+            key={`${currentDate}-${themeMode}`}
             current={(() => {
               const parts = currentDate.split('-');
               if (parts.length === 3) {
@@ -536,7 +537,7 @@ const CalendarScreen = ({ navigation, route }: any) => {
                             </Text>
                           </TouchableOpacity>
 
-                          <TouchableOpacity style={styles.shareButton} onPress={() => console.log(`Share event ${item.id}`)}>
+                          <TouchableOpacity style={styles.shareButton} onPress={() => shareActivity(item.id, item.activity)}>
                             <Ionicons name="share-social-outline" size={20} color="#fff" />
                           </TouchableOpacity>
                         </>

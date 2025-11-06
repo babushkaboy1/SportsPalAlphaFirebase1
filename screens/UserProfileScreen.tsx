@@ -16,7 +16,7 @@ function HostUsername({ activity }: { activity: any }) {
   return <Text style={{ fontSize: 14, color: theme.muted, fontWeight: '500' }}>{username}</Text>;
 }
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, Share, FlatList, Animated, RefreshControl, Alert, Modal, Pressable, TextInput } from 'react-native';
+import { View, Text, StyleSheet, Image, TouchableOpacity, FlatList, Animated, RefreshControl, Alert, Modal, Pressable, TextInput } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
 import { useRoute, useNavigation } from '@react-navigation/native';
@@ -29,7 +29,9 @@ import { ActivityIcon } from '../components/ActivityIcons';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../types/navigation';
 import { sendFriendRequest, cancelFriendRequest, removeFriend, acceptIncomingRequestFromProfile, declineIncomingRequestFromProfile } from '../utils/firestoreFriends';
+import { shareActivity, shareProfile } from '../utils/deepLinking';
 import { ensureDmChat } from '../utils/firestoreChats';
+import { getProfileFromCache, updateProfileInCache } from '../utils/chatCache';
 
 // Slight darken helper for hex colors (fallback to original on parse failure)
 function darkenHex(color: string, amount = 0.12): string {
@@ -86,10 +88,31 @@ const UserProfileScreen = () => {
 
   useEffect(() => {
     const fetchProfile = async () => {
+      // Load from cache first (instant UI)
+      const cached = await getProfileFromCache(userId);
+      if (cached) {
+        console.log('📦 Loaded user profile from cache (instant UI)');
+        setProfile({ ...cached, uid: userId });
+        setIsReady(true);
+      }
+
+      // Fetch fresh from Firestore
       const docRef = doc(db, "profiles", userId);
       const docSnap = await getDoc(docRef);
       if (docSnap.exists()) {
-        setProfile({ ...docSnap.data(), uid: userId });
+        const data: any = docSnap.data();
+        setProfile({ ...data, uid: userId });
+        
+        // Save to cache
+        await updateProfileInCache({
+          uid: userId,
+          username: data.username || 'User',
+          photo: data.photo || data.photoURL,
+          bio: data.bio,
+          selectedSports: data.selectedSports || data.sportsPreferences,
+          friends: data.friends,
+        } as any);
+        setIsReady(true);
       }
     };
     fetchProfile();
@@ -163,11 +186,25 @@ const UserProfileScreen = () => {
     setRefreshing(true);
     setRefreshLocked(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    
+    // Fetch fresh profile
     const docRef = doc(db, "profiles", userId);
     const docSnap = await getDoc(docRef);
     if (docSnap.exists()) {
-      setProfile({ ...docSnap.data(), uid: userId });
+      const data: any = docSnap.data();
+      setProfile({ ...data, uid: userId });
+      
+      // Update cache
+      await updateProfileInCache({
+        uid: userId,
+        username: data.username || 'User',
+        photo: data.photo || data.photoURL,
+        bio: data.bio,
+        selectedSports: data.selectedSports || data.sportsPreferences,
+        friends: data.friends,
+      } as any);
     }
+    
     await reloadAllActivities();
     setTimeout(() => {
       setRefreshing(false);
@@ -261,9 +298,7 @@ const UserProfileScreen = () => {
 
   const handleShareProfile = async () => {
     try {
-      await Share.share({
-        message: `Check out ${profile?.username}'s SportsPal profile!`,
-      });
+      await shareProfile(userId, profile?.username || 'User');
     } catch (error) {
       console.error(error);
     }
@@ -291,9 +326,7 @@ const UserProfileScreen = () => {
 
   const handleShareActivity = async (activity: any) => {
     try {
-      await Share.share({
-        message: `Check out this ${activity.activity} game on SportsPal!`,
-      });
+      await shareActivity(activity.id, activity.activity);
     } catch (error) {
       console.error(error);
     }
@@ -606,13 +639,13 @@ const UserProfileScreen = () => {
             style={[styles.tab, activeTab === 'games' && styles.activeTab]}
             onPress={() => setActiveTab('games')}
           >
-            <Ionicons name="list" size={28} color={activeTab === 'games' ? theme.primary : theme.text} />
+            <Ionicons name="list" size={28} color={activeTab === 'games' ? theme.primary : theme.muted} />
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.tab, activeTab === 'history' && styles.activeTab]}
             onPress={() => setActiveTab('history')}
           >
-            <Ionicons name="time" size={28} color={activeTab === 'history' ? theme.primary : theme.text} />
+            <Ionicons name="time" size={28} color={activeTab === 'history' ? theme.primary : theme.muted} />
           </TouchableOpacity>
         </View>
         <View style={styles.contentContainer}>

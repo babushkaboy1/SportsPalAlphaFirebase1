@@ -16,13 +16,14 @@ import { useTheme } from '../context/ThemeContext';
 import { CommonActions } from '@react-navigation/native';
 import { AntDesign, FontAwesome, Ionicons } from '@expo/vector-icons';
 import { signInWithEmailAndPassword, signInWithCredential, GoogleAuthProvider, sendPasswordResetEmail, fetchSignInMethodsForEmail, FacebookAuthProvider, OAuthProvider, linkWithCredential, AuthCredential } from 'firebase/auth';
-import { auth } from '../firebaseConfig';
+import { auth, db } from '../firebaseConfig';
+import { doc, getDoc } from 'firebase/firestore';
 import * as Google from 'expo-auth-session/providers/google';
 import * as Facebook from 'expo-auth-session/providers/facebook';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import * as Crypto from 'expo-crypto';
 import Svg, { Path } from 'react-native-svg';
-import { GOOGLE_ANDROID_CLIENT_ID, GOOGLE_IOS_CLIENT_ID, GOOGLE_WEB_CLIENT_ID } from '@env';
+import { GOOGLE_ANDROID_CLIENT_ID, GOOGLE_IOS_CLIENT_ID, GOOGLE_WEB_CLIENT_ID, FACEBOOK_APP_ID } from '@env';
 
 // Google Logo Component (multicolor)
 const GoogleLogo = () => (
@@ -59,7 +60,7 @@ const LoginScreen = ({ navigation }: any) => {
     webClientId: GOOGLE_WEB_CLIENT_ID || '690971568236-1slb2hq568pk1cqnpo44aioi5549avl7.apps.googleusercontent.com',
   });
   const [fbRequest, fbResponse, fbPromptAsync] = Facebook.useAuthRequest({
-    clientId: 'FACEBOOK_APP_ID', // TODO: replace with your Facebook App ID
+    clientId: FACEBOOK_APP_ID || '',
     scopes: ['public_profile', 'email'],
   });
 
@@ -109,9 +110,11 @@ const LoginScreen = ({ navigation }: any) => {
               await linkWithCredential(auth.currentUser!, pendingCredentialRef.current);
               pendingCredentialRef.current = null;
               linkEmailRef.current = null;
+              Alert.alert('Success', 'Accounts linked successfully!');
             }
             navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
           } catch (e: any) {
+            console.error('Google link error:', e);
             Alert.alert('Google link failed', e?.message || 'Could not link accounts.');
           } finally {
             flowRef.current = { mode: null, forLink: false };
@@ -138,9 +141,11 @@ const LoginScreen = ({ navigation }: any) => {
               await linkWithCredential(auth.currentUser!, pendingCredentialRef.current);
               pendingCredentialRef.current = null;
               linkEmailRef.current = null;
+              Alert.alert('Success', 'Accounts linked successfully!');
             }
             navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
           } catch (e: any) {
+            console.error('Facebook link error:', e);
             Alert.alert('Facebook link failed', e?.message || 'Could not link accounts.');
           } finally {
             flowRef.current = { mode: null, forLink: false };
@@ -153,11 +158,49 @@ const LoginScreen = ({ navigation }: any) => {
     })();
   }, [fbResponse]);
 
+  // Helper function to check if user has a profile in Firestore
+  const checkUserProfile = async (userId: string): Promise<boolean> => {
+    try {
+      const profileDoc = await getDoc(doc(db, 'profiles', userId));
+      return profileDoc.exists();
+    } catch (error) {
+      console.error('Error checking profile:', error);
+      return false;
+    }
+  };
+
   // Centralized credential sign-in with automatic linking fallback
   const handleCredentialSignIn = async (cred: AuthCredential) => {
     try {
-      await signInWithCredential(auth, cred);
-      navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
+      const userCredential = await signInWithCredential(auth, cred);
+      const user = userCredential.user;
+      
+      // Check if user has a profile
+      const hasProfile = await checkUserProfile(user.uid);
+      
+      if (hasProfile) {
+        // User has profile, go to main app
+        navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
+      } else {
+        // New user, redirect to profile creation with email locked
+        navigation.dispatch(
+          CommonActions.reset({
+            index: 0,
+            routes: [
+              {
+                name: 'CreateProfile',
+                params: {
+                  mode: 'create',
+                  profileData: {
+                    email: user.email || '',
+                    emailLocked: true,
+                  },
+                },
+              },
+            ],
+          })
+        );
+      }
     } catch (err: any) {
       if (err?.code === 'auth/account-exists-with-different-credential') {
         const emailForLink = (err as any)?.customData?.email || email || null;
@@ -228,9 +271,11 @@ const LoginScreen = ({ navigation }: any) => {
             await linkWithCredential(auth.currentUser!, pendingCredentialRef.current);
             pendingCredentialRef.current = null;
             linkEmailRef.current = null;
+            Alert.alert('Success', 'Accounts linked successfully!');
           }
           navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
         } catch (e: any) {
+          console.error('Apple link error:', e);
           Alert.alert('Apple link failed', e?.message || 'Could not link accounts.');
         } finally {
           flowRef.current = { mode: null, forLink: false };
@@ -248,8 +293,34 @@ const LoginScreen = ({ navigation }: any) => {
   const handleLogin = async () => {
     setIsLoading(true);
     try {
-  await signInWithEmailAndPassword(auth, email, password);
-  navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
+      
+      // Check if user has a profile
+      const hasProfile = await checkUserProfile(user.uid);
+      
+      if (hasProfile) {
+        navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
+      } else {
+        // Redirect to profile creation with email locked
+        navigation.dispatch(
+          CommonActions.reset({
+            index: 0,
+            routes: [
+              {
+                name: 'CreateProfile',
+                params: {
+                  mode: 'create',
+                  profileData: {
+                    email: user.email || email,
+                    emailLocked: true,
+                  },
+                },
+              },
+            ],
+          })
+        );
+      }
     } catch (error: any) {
       let message = 'Login error. Please try again.';
       let title = 'Login Failed';
@@ -329,7 +400,13 @@ const LoginScreen = ({ navigation }: any) => {
   };
 
   const handleSignUp = () => {
-    navigation.navigate('CreateProfile');
+    navigation.navigate('CreateProfile', {
+      mode: 'create',
+      profileData: {
+        email: email || '',
+        emailLocked: false,
+      },
+    });
   };
 
   return (

@@ -13,7 +13,7 @@ import { auth } from './firebaseConfig';
 import * as NavigationBar from 'expo-navigation-bar';
 import * as SystemUI from 'expo-system-ui';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { registerPushNotificationsForCurrentUser, subscribeNotificationResponses, getLastNotificationResponseData } from './utils/notifications';
+import { registerPushNotificationsForCurrentUser, subscribeNotificationResponses, getLastNotificationResponseData, setInAppNotificationHandler } from './utils/notifications';
 
 // Import your screens
 import DiscoverGamesScreen from './screens/DiscoverGamesScreen';
@@ -31,6 +31,8 @@ import UserProfileScreen from './screens/UserProfileScreen';
 // Import the ActivityProvider
 import { ActivityProvider } from './context/ActivityContext';
 import { InboxBadgeProvider, useInboxBadge } from './context/InboxBadgeContext';
+import { InAppNotificationProvider, useInAppNotification } from './context/InAppNotificationContext';
+import { InAppNotification } from './components/InAppNotification';
 import { RootStackParamList } from './types/navigation';
 import DiscoverStack from './navigation/DiscoverStack';
 import CalendarStack from './navigation/CalendarStack';
@@ -192,6 +194,26 @@ function AppInner() {
   const [user, setUser] = useState<User | null>(null);
   const [initializing, setInitializing] = useState(true);
   const { theme, navTheme } = useTheme();
+  const { currentNotification, dismissNotification, showNotification } = useInAppNotification();
+
+  // Connect in-app notification handler
+  useEffect(() => {
+    setInAppNotificationHandler((notification) => {
+      showNotification(notification);
+    });
+  }, [showNotification]);
+
+  const handleNotificationPress = () => {
+    if (!currentNotification || !navRef.isReady()) return;
+
+    if (currentNotification.type === 'chat' && currentNotification.chatId) {
+      try { (navRef as any).navigate('ChatDetail', { chatId: currentNotification.chatId }); } catch {}
+    } else if (currentNotification.type === 'activity_invite' && currentNotification.activityId) {
+      try { (navRef as any).navigate('ActivityDetails', { activityId: currentNotification.activityId }); } catch {}
+    } else if (currentNotification.type === 'friend_request' || currentNotification.type === 'friend_accept') {
+      try { (navRef as any).navigate('MainTabs', { screen: 'Inbox' }); } catch {}
+    }
+  };
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
@@ -297,6 +319,15 @@ function AppInner() {
           <Stack.Screen name="UserProfile" component={UserProfileScreen} options={{ headerShown: false }} />
           </Stack.Navigator>
           )}
+          {/* In-App Notification Banner */}
+          <InAppNotification
+            visible={!!currentNotification}
+            title={currentNotification?.title || ''}
+            body={currentNotification?.body || ''}
+            image={currentNotification?.image}
+            onPress={handleNotificationPress}
+            onDismiss={dismissNotification}
+          />
           </NavigationContainer>
           </InboxBadgeProvider>
         </ActivityProvider>
@@ -340,7 +371,9 @@ if (Platform.OS === 'android') {
 export default function App() {
   return (
     <ThemeProvider>
-      <AppInner />
+      <InAppNotificationProvider>
+        <AppInner />
+      </InAppNotificationProvider>
     </ThemeProvider>
   );
 }

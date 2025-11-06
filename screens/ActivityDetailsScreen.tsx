@@ -32,6 +32,7 @@ import { normalizeDateFormat } from '../utils/storage';
 import { ActivityIcon } from '../components/ActivityIcons';
 import { sendActivityInvites } from '../utils/firestoreInvites';
 import { useTheme } from '../context/ThemeContext';
+import { shareActivity } from '../utils/deepLinking';
 
 // Slight darken helper for hex colors (fallback to original on parse failure)
 function darkenHex(color: string, amount = 0.12): string {
@@ -177,57 +178,44 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
 
   // Helper: fetch latest joined users & added-to-calendar state
   const fetchAndSetJoinedUsers = async () => {
-    const activityRef = doc(db, 'activities', activity.id);
-    const activitySnap = await getDoc(activityRef);
+    try {
+      const activityRef = doc(db, 'activities', activity.id);
+      const activitySnap = await getDoc(activityRef);
 
-    let latestJoinedUserIds: string[] = [];
-    if (activitySnap.exists()) {
+      // If activity was deleted, navigate back
+      if (!activitySnap.exists()) {
+        console.log('Activity deleted, navigating back');
+        if (navigation.canGoBack()) {
+          navigation.goBack();
+        } else {
+          navigation.navigate('DiscoverGames');
+        }
+        return;
+      }
+
       const data: any = activitySnap.data();
-      latestJoinedUserIds = Array.isArray(data.joinedUserIds) ? data.joinedUserIds : [];
+      const latestJoinedUserIds: string[] = Array.isArray(data.joinedUserIds) ? data.joinedUserIds : [];
 
       const currentUserId = auth.currentUser?.uid;
       if (currentUserId) {
         const addedToCalendarIds: string[] = data.addedToCalendarByUsers || [];
         setIsAddedToCalendar(addedToCalendarIds.includes(currentUserId));
       }
-    }
 
-    if (latestJoinedUserIds.length) {
-      const users = await fetchUsersByIds(latestJoinedUserIds);
-      setJoinedUsers(users);
-    } else {
-      setJoinedUsers([]);
+      if (latestJoinedUserIds.length) {
+        const users = await fetchUsersByIds(latestJoinedUserIds);
+        setJoinedUsers(users);
+      } else {
+        setJoinedUsers([]);
+      }
+    } catch (error) {
+      console.warn('Error fetching joined users:', error);
     }
   };
 
-  // Initial load + live updates
+  // Initial load only - NO real-time updates
   useEffect(() => {
     fetchAndSetJoinedUsers();
-
-    const activityRef = doc(db, 'activities', activity.id);
-    const unsub = onSnapshot(
-      activityRef,
-      async (snap) => {
-        if (!snap.exists()) return;
-        const data: any = snap.data();
-        const latestJoined = Array.isArray(data.joinedUserIds) ? data.joinedUserIds : [];
-        if (latestJoined.length) {
-          const users = await fetchUsersByIds(latestJoined);
-          setJoinedUsers(users);
-        } else {
-          setJoinedUsers([]);
-        }
-        const currentUserId = auth.currentUser?.uid;
-        if (currentUserId) {
-          const addedToCalendarIds = data.addedToCalendarByUsers || [];
-          setIsAddedToCalendar(addedToCalendarIds.includes(currentUserId));
-        }
-      },
-      (error) => {
-        if ((error as any)?.code !== 'permission-denied') console.warn('Activity snapshot error:', error);
-      }
-    );
-    return () => unsub();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activity.id]);
 
@@ -368,8 +356,40 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
   };
 
   const handleJoinLeave = async () => {
-    await toggleJoinActivity(activity);
-    await fetchAndSetJoinedUsers();
+    try {
+      const currentUserId = auth.currentUser?.uid;
+      const wasJoined = isActivityJoined(activity.id);
+      
+      // Optimistic update: Update joined users list instantly for current user
+      if (currentUserId) {
+        if (wasJoined) {
+          // Remove current user from list instantly
+          setJoinedUsers(prev => prev.filter(u => u.uid !== currentUserId));
+        } else {
+          // Add current user to list instantly (with basic profile info)
+          const currentUserProfile = {
+            uid: currentUserId,
+            username: profile?.username || 'You',
+            photo: profile?.photo || profile?.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(profile?.username || 'User')}`,
+          };
+          setJoinedUsers(prev => [...prev, currentUserProfile]);
+        }
+      }
+      
+      // Sync with Firestore (this updates ActivityContext state optimistically too)
+      await toggleJoinActivity(activity);
+      
+      // Only refetch if activity was deleted (which navigates back anyway)
+      await fetchAndSetJoinedUsers(); // This will navigate back if activity was deleted
+    } catch (error) {
+      console.warn('Error in handleJoinLeave:', error);
+      // If activity was deleted during the operation, navigate back
+      if (navigation.canGoBack()) {
+        navigation.goBack();
+      } else {
+        navigation.navigate('DiscoverGames');
+      }
+    }
   };
 
   const waitUntilParticipant = (chatId: string, uid: string, timeoutMs = 2000) =>
@@ -605,6 +625,13 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
               >
                 <Ionicons name="arrow-back" size={28} color={theme.primary} />
               </TouchableOpacity>
+              <TouchableOpacity
+                style={{ padding: 4, right: 0, position: 'absolute', zIndex: 10 }}
+                onPress={() => shareActivity(activity.id, activity.activity)}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <Ionicons name="share-social-outline" size={28} color={theme.primary} />
+              </TouchableOpacity>
               <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 44 }}>
                 <ActivityIcon activity={activity.activity} size={28} color={theme.primary} />
                 <Text style={{ fontSize: 28, color: theme.primary, fontWeight: 'bold', marginLeft: 0 }}>American Football</Text>
@@ -620,6 +647,13 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             >
               <Ionicons name="arrow-back" size={28} color={theme.primary} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.backButton, { right: 16, position: 'absolute', zIndex: 10 }]}
+              onPress={() => shareActivity(activity.id, activity.activity)}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Ionicons name="share-social-outline" size={28} color={theme.primary} />
             </TouchableOpacity>
             <View style={styles.headerTitleContainer}>
               <ActivityIcon activity={activity.activity} size={28} color={theme.primary} />

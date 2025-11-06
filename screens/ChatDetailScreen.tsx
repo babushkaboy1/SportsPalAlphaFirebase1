@@ -38,16 +38,18 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
+import * as FileSystem from 'expo-file-system/legacy';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { doc, getDoc, onSnapshot, collection, query, where, getDocs, updateDoc, arrayUnion } from 'firebase/firestore';
 import { db, auth } from '../firebaseConfig';
 import { ActivityIcon } from '../components/ActivityIcons';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../types/navigation';
-import { uploadChatImage } from '../utils/imageUtils';
+import { uploadChatImage, uploadAudioMessage } from '../utils/imageUtils';
 import { sendFriendRequest, cancelFriendRequest } from '../utils/firestoreFriends';
 import { useTheme } from '../context/ThemeContext';
 import { useActivityContext } from '../context/ActivityContext';
+import { useInAppNotification } from '../context/InAppNotificationContext';
 import { normalizeDateFormat } from '../utils/storage';
 import {
   sendMessage,
@@ -65,6 +67,12 @@ import {
   listenToReactions,
 } from '../utils/firestoreChats';
 import { sendActivityInvites } from '../utils/firestoreInvites';
+import {
+  saveMessagesToCache,
+  loadMessagesFromCache,
+  addMessageToCache,
+  clearMessagesCache,
+} from '../utils/chatCache';
 
 // ==================== TYPES ====================
 type Message = {
@@ -590,6 +598,13 @@ const ChatDetailScreen = () => {
   const route = useRoute<any>();
   const { chatId } = route.params;
   const { allActivities, joinedActivities } = useActivityContext();
+  const { setCurrentChatId } = useInAppNotification();
+
+  // Track when user is viewing this chat (suppress notifications)
+  useEffect(() => {
+    setCurrentChatId(chatId);
+    return () => setCurrentChatId(null);
+  }, [chatId, setCurrentChatId]);
 
   // ========== STATE ==========
   const [messages, setMessages] = useState<Message[]>([]);
@@ -615,12 +630,17 @@ const ChatDetailScreen = () => {
   const [participantsVisible, setParticipantsVisible] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
   const [toastVisible, setToastVisible] = useState(false);
+  const [showScrollButton, setShowScrollButton] = useState(false);
 
   // Audio
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const audioPlayer = useAudioPlayer();
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
   const [playbackRate, setPlaybackRate] = useState(1.0);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const recordingTimerRef = useRef<any>(null);
+  const recordingAnimRef = useRef(new Animated.Value(0)).current;
 
   // Refs
   const flatListRef = useRef<FlatList>(null);
@@ -633,6 +653,8 @@ const ChatDetailScreen = () => {
   const reactionUnsubsRef = useRef<Record<string, () => void>>({});
   const toastTimeoutRef = useRef<any>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const scrollButtonAnim = useRef(new Animated.Value(0)).current;
+  const isAtBottomRef = useRef(true);
 
   // ========== TOAST ==========
   const showToast = useCallback((msg: string) => {
@@ -644,6 +666,32 @@ const ChatDetailScreen = () => {
       toastTimeoutRef.current = null;
     }, 2000);
   }, []);
+
+  // ========== SCROLL TO BOTTOM ==========
+  const scrollToBottom = useCallback((animated: boolean = true) => {
+    // Scroll to the actual bottom of the list
+    flatListRef.current?.scrollToEnd({ animated });
+    isAtBottomRef.current = true;
+    setShowScrollButton(false);
+  }, []);
+
+  // ========== SCROLL BUTTON ANIMATION ==========
+  useEffect(() => {
+    if (showScrollButton) {
+      Animated.spring(scrollButtonAnim, {
+        toValue: 1,
+        useNativeDriver: true,
+        friction: 8,
+        tension: 120,
+      }).start();
+    } else {
+      Animated.timing(scrollButtonAnim, {
+        toValue: 0,
+        duration: 200,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [showScrollButton]);
 
   // ========== NAVIGATION ==========
   const exitChat = useCallback(() => {
@@ -682,21 +730,29 @@ const ChatDetailScreen = () => {
   useEffect(() => {
     return () => {
       clearTyping(chatId);
+      
+      // Clean up recording timer if still active
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+        recordingTimerRef.current = null;
+      }
     };
   }, [chatId]);
 
   // ========== KEYBOARD HANDLING ==========
   useEffect(() => {
     const showListener = Keyboard.addListener('keyboardDidShow', () => {
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
-      }, 100);
+      if (isAtBottomRef.current) {
+        setTimeout(() => {
+          scrollToBottom(true);
+        }, 100);
+      }
     });
 
     return () => {
       showListener.remove();
     };
-  }, []);
+  }, [scrollToBottom]);
 
   // ========== FETCH CHAT META ==========
   useEffect(() => {
@@ -718,18 +774,38 @@ const ChatDetailScreen = () => {
             const peerDoc = await getDoc(doc(db, 'profiles', peerId));
             if (peerDoc.exists()) {
               const peerData = peerDoc.data();
+              const peerProfile: Profile = {
+                uid: peerId,
+                username: peerData.username || 'User',
+                photo: peerData.photo || peerData.photoURL,
+                photoURL: peerData.photoURL || peerData.photo,
+              };
+              
+              // Cache the peer profile immediately
+              setProfiles((prev) => ({ ...prev, [peerId]: peerProfile }));
+              
               setChatMeta({
                 isDm: true,
                 isActivity: false,
                 isGroup: false,
                 participants,
-                dmPeer: {
-                  uid: peerId,
-                  username: peerData.username || 'User',
-                  photo: peerData.photo || peerData.photoURL,
-                },
+                dmPeer: peerProfile,
+              });
+            } else {
+              setChatMeta({
+                isDm: true,
+                isActivity: false,
+                isGroup: false,
+                participants,
               });
             }
+          } else {
+            setChatMeta({
+              isDm: true,
+              isActivity: false,
+              isGroup: false,
+              participants,
+            });
           }
         } else if (data?.activityId) {
           // Activity group chat
@@ -823,6 +899,21 @@ const ChatDetailScreen = () => {
           if (hasSetupRef.current) return;
           hasSetupRef.current = true;
 
+          // ========== LOAD FROM CACHE FIRST (instant UI) ==========
+          const cachedMessages = await loadMessagesFromCache(chatId);
+          if (cachedMessages && cachedMessages.length > 0) {
+            console.log('📦 Loaded messages from cache (instant UI)');
+            setMessages(cachedMessages as any);
+            setIsReady(true);
+            // Instantly appear at bottom without any scroll animation
+            requestAnimationFrame(() => {
+              if (flatListRef.current && cachedMessages.length > 0) {
+                flatListRef.current.scrollToEnd({ animated: false });
+              }
+              isAtBottomRef.current = true;
+            });
+          }
+
           try {
             const { messages: initial, lastSnapshot } = await fetchLatestMessagesPage(chatId, 20);
             oldestSnapRef.current = lastSnapshot;
@@ -831,9 +922,16 @@ const ChatDetailScreen = () => {
             setIsReady(true);
             noMoreOlderRef.current = !lastSnapshot || initial.length < 20;
 
-            setTimeout(() => {
-              flatListRef.current?.scrollToEnd({ animated: false });
-            }, 0);
+            // ========== SAVE TO CACHE ==========
+            await saveMessagesToCache(chatId, initial as any);
+
+            // Instantly appear at bottom without any scroll animation
+            requestAnimationFrame(() => {
+              if (flatListRef.current && initial.length > 0) {
+                flatListRef.current.scrollToEnd({ animated: false });
+              }
+              isAtBottomRef.current = true;
+            });
           } catch {}
 
           // Listen to latest messages
@@ -844,10 +942,18 @@ const ChatDetailScreen = () => {
               setMessages(latest as any);
               markChatRead(chatId);
 
+              // ========== UPDATE CACHE WITH NEW MESSAGES ==========
+              saveMessagesToCache(chatId, latest as any);
+
               if (latest.length > lastLengthRef.current) {
-                setTimeout(() => {
-                  flatListRef.current?.scrollToEnd({ animated: true });
-                }, 60);
+                // Only auto-scroll if user is at bottom
+                if (isAtBottomRef.current) {
+                  setTimeout(() => {
+                    if (flatListRef.current && latest.length > 0) {
+                      flatListRef.current.scrollToEnd({ animated: true });
+                    }
+                  }, 60);
+                }
               }
 
               lastLengthRef.current = latest.length;
@@ -908,11 +1014,27 @@ const ChatDetailScreen = () => {
   const handleScroll = useCallback(
     (e: any) => {
       const y = e?.nativeEvent?.contentOffset?.y || 0;
+      const layoutHeight = e?.nativeEvent?.layoutMeasurement?.height || 0;
+      const contentHeight = e?.nativeEvent?.contentSize?.height || 0;
+      
+      // Load older messages when scrolling near top
       if (y <= 40) {
         loadOlderMessages();
       }
+
+      // Calculate distance from bottom
+      const distanceFromBottom = contentHeight - layoutHeight - y;
+      
+      // Show scroll button if scrolled up more than 5 messages worth (~400px)
+      const shouldShow = distanceFromBottom > 400;
+      if (shouldShow !== showScrollButton) {
+        setShowScrollButton(shouldShow);
+      }
+
+      // Track if user is at bottom (within 50px)
+      isAtBottomRef.current = distanceFromBottom < 50;
     },
-    [loadOlderMessages]
+    [loadOlderMessages, showScrollButton]
   );
 
   // ========== FETCH PROFILES ==========
@@ -921,6 +1043,7 @@ const ChatDetailScreen = () => {
       const uniqueIds = Array.from(new Set([
         ...messages.map((m) => m.senderId),
         ...typingUsers,
+        ...chatMeta.participants,
       ]));
 
       if (!uniqueIds.length) return;
@@ -929,11 +1052,23 @@ const ChatDetailScreen = () => {
       if (!missing.length) return;
 
       const batch = await batchFetchProfiles(missing);
-      setProfiles((prev) => ({ ...prev, ...batch }));
+      
+      // Ensure all profiles have required fields
+      const validatedBatch: Record<string, Profile> = {};
+      Object.entries(batch).forEach(([uid, data]: [string, any]) => {
+        validatedBatch[uid] = {
+          uid,
+          username: data?.username || 'User',
+          photo: data?.photo || data?.photoURL || undefined,
+          photoURL: data?.photoURL || data?.photo || undefined,
+        };
+      });
+      
+      setProfiles((prev) => ({ ...prev, ...validatedBatch }));
     };
 
     fetchProfiles();
-  }, [messages, typingUsers]);
+  }, [messages, typingUsers, chatMeta.participants]);
 
   // ========== LISTEN TO REACTIONS ==========
   useEffect(() => {
@@ -1005,38 +1140,237 @@ const ChatDetailScreen = () => {
       setMessageText('');
 
       setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
+        scrollToBottom(true);
       }, 50);
     }
-  }, [chatId, messageText, selectedImages, replyTo]);
+  }, [chatId, messageText, selectedImages, replyTo, scrollToBottom]);
 
   // ========== AUDIO ==========
   const startRecording = useCallback(async () => {
+    if (isRecording) return; // Prevent double-start
+    
     try {
+      console.log('🎤 Starting recording...');
+      
+      // Request permission
       const { granted } = await AudioModule.requestRecordingPermissionsAsync();
       if (!granted) {
-        Alert.alert('Permission Denied', 'Please enable audio recording.');
+        Alert.alert('Permission Denied', 'Please enable microphone access in your device settings to record voice messages.');
         return;
       }
+
+      // Set audio mode for recording
+      await AudioModule.setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+      });
+
+      // Start recording
       await audioRecorder.record();
-    } catch {
-      Alert.alert('Recording Error', 'Could not start recording.');
+      console.log('🎤 Recording started successfully');
+      
+      setIsRecording(true);
+      setRecordingDuration(0);
+      
+      // Start animation
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(recordingAnimRef, {
+            toValue: 1,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+          Animated.timing(recordingAnimRef, {
+            toValue: 0,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+        ])
+      ).start();
+
+      // Start duration counter - update every second
+      const startTime = Date.now();
+      recordingTimerRef.current = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - startTime) / 1000);
+        setRecordingDuration(elapsed);
+      }, 100); // Check every 100ms for smoother updates
+
+    } catch (error) {
+      console.error('❌ Recording error:', error);
+      setIsRecording(false);
+      Alert.alert('Recording Error', 'Could not start recording. Please try again.');
     }
-  }, [audioRecorder]);
+  }, [audioRecorder, recordingAnimRef, isRecording]);
 
   const stopRecording = useCallback(async () => {
-    if (!audioRecorder.isRecording || !auth.currentUser) return;
+    if (!isRecording || !auth.currentUser) return;
+
+    let base64Audio: string | null = null;
 
     try {
-      const uri = audioRecorder.uri;
-      await audioRecorder.stop();
-      if (uri) {
-        await sendMessage(chatId, auth.currentUser.uid, uri, 'audio');
+      console.log('🎤 Stopping recording...');
+      
+      // Get the URI BEFORE stopping
+      const originalUri = audioRecorder.uri;
+      console.log('🎤 Got URI before stop:', originalUri);
+      
+      if (!originalUri || originalUri.trim() === '') {
+        console.error('❌ No URI from recording');
+        Alert.alert('Recording Error', 'No audio was recorded.');
+        
+        // Still need to clean up
+        if (recordingTimerRef.current) {
+          clearInterval(recordingTimerRef.current);
+          recordingTimerRef.current = null;
+        }
+        recordingAnimRef.stopAnimation();
+        recordingAnimRef.setValue(0);
+        setIsRecording(false);
+        await audioRecorder.stop();
+        await AudioModule.setAudioModeAsync({
+          allowsRecording: false,
+          playsInSilentMode: true,
+        });
+        return;
       }
-    } catch {
-      Alert.alert('Recording Error', 'Could not save recording.');
+
+      // Check minimum duration (at least 1 second)
+      if (recordingDuration < 1) {
+        console.log('⚠️ Recording too short');
+        Alert.alert('Too Short', 'Voice message must be at least 1 second long.');
+        
+        // Clean up
+        if (recordingTimerRef.current) {
+          clearInterval(recordingTimerRef.current);
+          recordingTimerRef.current = null;
+        }
+        recordingAnimRef.stopAnimation();
+        recordingAnimRef.setValue(0);
+        setIsRecording(false);
+        await audioRecorder.stop();
+        await AudioModule.setAudioModeAsync({
+          allowsRecording: false,
+          playsInSilentMode: true,
+        });
+        return;
+      }
+
+      // Pause first to keep file, then read, then stop
+      console.log('Pausing recorder...');
+      await audioRecorder.pause();
+      
+      console.log('Reading audio file...');
+      base64Audio = await FileSystem.readAsStringAsync(originalUri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      console.log('Audio file read successfully');
+      
+      // Now stop to clean up
+      await audioRecorder.stop();
+
+      // Clean up UI state
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+        recordingTimerRef.current = null;
+      }
+      recordingAnimRef.stopAnimation();
+      recordingAnimRef.setValue(0);
+      setIsRecording(false);
+
+      // Generate unique ID for this audio message
+      const audioId = `audio_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      
+      // Create a temporary file from base64
+      const tempUri = `${FileSystem.cacheDirectory}${audioId}.m4a`;
+      console.log('💾 Writing to temporary file:', tempUri);
+      await FileSystem.writeAsStringAsync(tempUri, base64Audio, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      
+      console.log('☁️ Uploading audio to Firebase Storage...');
+      console.log('📁 Audio ID:', audioId);
+      
+      // Upload to Firebase Storage
+      const downloadUrl = await uploadAudioMessage(tempUri, auth.currentUser.uid, audioId);
+      console.log('✅ Audio uploaded:', downloadUrl);
+
+      // Clean up the temporary file
+      try {
+        await FileSystem.deleteAsync(tempUri, { idempotent: true });
+        console.log('🗑️ Temporary file deleted');
+      } catch (deleteError) {
+        console.warn('⚠️ Could not delete temp file:', deleteError);
+      }
+
+      // Send message with the download URL
+      await sendMessage(chatId, auth.currentUser.uid, downloadUrl, 'audio');
+      console.log('✅ Audio message sent');
+
+      // Reset audio mode
+      await AudioModule.setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
+      });
+      
+      setRecordingDuration(0);
+    } catch (error) {
+      console.error('❌ Stop recording error:', error);
+      setIsRecording(false);
+      setRecordingDuration(0);
+      
+      // Try to clean up recording
+      try {
+        await audioRecorder.stop();
+      } catch (e) {
+        console.error('Error stopping recorder:', e);
+      }
+      
+      Alert.alert('Recording Error', 'Could not save recording. Please try again.');
+      
+      // Try to reset audio mode
+      try {
+        await AudioModule.setAudioModeAsync({
+          allowsRecording: false,
+          playsInSilentMode: true,
+        });
+      } catch (e) {
+        console.error('Error resetting audio mode:', e);
+      }
     }
-  }, [audioRecorder, chatId]);
+  }, [audioRecorder, chatId, recordingDuration, recordingAnimRef, isRecording]);
+
+  const cancelRecording = useCallback(async () => {
+    if (!isRecording) return;
+
+    try {
+      console.log('🎤 Cancelling recording...');
+      
+      // Clear timer and animation
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+        recordingTimerRef.current = null;
+      }
+      recordingAnimRef.stopAnimation();
+      recordingAnimRef.setValue(0);
+      setIsRecording(false);
+      setRecordingDuration(0);
+
+      // Stop and discard recording
+      await audioRecorder.stop();
+
+      // Reset audio mode
+      await AudioModule.setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
+      });
+
+      console.log('✅ Recording cancelled');
+    } catch (error) {
+      console.error('❌ Cancel recording error:', error);
+      setIsRecording(false);
+      setRecordingDuration(0);
+    }
+  }, [audioRecorder, recordingAnimRef, isRecording]);
 
   const handlePlayAudio = useCallback((uri: string, id: string) => {
     if (playingAudioId === id) {
@@ -1553,7 +1887,15 @@ const ChatDetailScreen = () => {
   const renderMessage = useCallback(({ item, index }: { item: Message; index: number }) => {
     const { isFirst, isLast } = getMessageClusterFlags(index);
     const isOwn = item.senderId === auth.currentUser?.uid;
-    const sender = profiles[item.senderId] || { uid: item.senderId, username: 'User' };
+    
+    // Ensure sender has all required fields with fallbacks
+    const senderProfile = profiles[item.senderId];
+    const sender: Profile = {
+      uid: item.senderId,
+      username: senderProfile?.username || 'User',
+      photo: senderProfile?.photo || senderProfile?.photoURL,
+      photoURL: senderProfile?.photoURL || senderProfile?.photo,
+    };
     
     const replyToMessage = item.replyToId 
       ? messages.find((m) => m.id === item.replyToId) 
@@ -1871,42 +2213,82 @@ const ChatDetailScreen = () => {
 
           {/* Input */}
           <View style={[styles.inputContainer, { paddingBottom: insets.bottom }]}>
-            <TouchableOpacity style={styles.inputButton} onPress={handleCamera}>
-              <Ionicons name="camera" size={22} color={theme.primary} />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.inputButton} onPress={handleGallery}>
-              <Ionicons name="image" size={22} color={theme.primary} />
-            </TouchableOpacity>
+            {/* Recording Overlay */}
+            {isRecording && (
+              <View style={styles.recordingOverlay}>
+                <Animated.View 
+                  style={[
+                    styles.recordingIndicator,
+                    {
+                      opacity: recordingAnimRef.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0.3, 1],
+                      }),
+                    },
+                  ]}
+                >
+                  <View style={styles.recordingDot} />
+                  <Text style={styles.recordingText}>
+                    {Math.floor(recordingDuration / 60)}:{(recordingDuration % 60).toString().padStart(2, '0')}
+                  </Text>
+                </Animated.View>
+                <View style={styles.recordingActions}>
+                  <TouchableOpacity onPress={cancelRecording} style={styles.cancelButton}>
+                    <Ionicons name="trash-outline" size={20} color="#fff" />
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={stopRecording} style={styles.sendVoiceButton}>
+                    <Ionicons name="send" size={20} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
+            {!isRecording && (
+              <>
+                <TouchableOpacity style={styles.inputButton} onPress={handleCamera}>
+                  <Ionicons name="camera" size={22} color={theme.primary} />
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.inputButton} onPress={handleGallery}>
+                  <Ionicons name="image" size={22} color={theme.primary} />
+                </TouchableOpacity>
+              </>
+            )}
+            
             <TouchableOpacity
-              style={styles.inputButton}
-              onPress={audioRecorder.isRecording ? stopRecording : startRecording}
+              style={[styles.inputButton, isRecording && styles.recordingButton]}
+              onPress={isRecording ? stopRecording : startRecording}
             >
               <Ionicons 
-                name={audioRecorder.isRecording ? 'stop' : 'mic'} 
+                name={isRecording ? 'stop' : 'mic'} 
                 size={22} 
-                color={audioRecorder.isRecording ? '#ff4444' : theme.primary} 
+                color={isRecording ? '#fff' : theme.primary} 
               />
             </TouchableOpacity>
-            <TextInput
-              style={styles.inputText}
-              placeholder="Message..."
-              placeholderTextColor={theme.muted}
-              value={messageText}
-              onChangeText={(text) => {
-                setMessageText(text);
-                pingTyping(chatId);
-              }}
-              autoCapitalize="sentences"
-              autoCorrect
-              returnKeyType="send"
-              onSubmitEditing={handleSend}
-              blurOnSubmit={false}
-              multiline
-              maxLength={2000}
-            />
-            <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
-              <Ionicons name="send" size={24} color="#fff" />
-            </TouchableOpacity>
+            
+            {!isRecording && (
+              <>
+                <TextInput
+                  style={styles.inputText}
+                  placeholder="Message..."
+                  placeholderTextColor={theme.muted}
+                  value={messageText}
+                  onChangeText={(text) => {
+                    setMessageText(text);
+                    pingTyping(chatId);
+                  }}
+                  autoCapitalize="sentences"
+                  autoCorrect
+                  returnKeyType="send"
+                  onSubmitEditing={handleSend}
+                  blurOnSubmit={false}
+                  multiline
+                  maxLength={2000}
+                />
+                <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
+                  <Ionicons name="send" size={24} color="#fff" />
+                </TouchableOpacity>
+              </>
+            )}
           </View>
 
           {/* Selected images */}
@@ -2360,6 +2742,51 @@ const ChatDetailScreen = () => {
           </Modal>
         </View>
 
+        {/* Scroll to Bottom Button */}
+        {showScrollButton && (
+          <Animated.View
+            style={{
+              position: 'absolute',
+              right: 16,
+              bottom: 80,
+              transform: [{
+                scale: scrollButtonAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0.3, 1],
+                }),
+              }, {
+                translateY: scrollButtonAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [20, 0],
+                }),
+              }],
+              opacity: scrollButtonAnim,
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.3,
+              shadowRadius: 4,
+              elevation: 5,
+            }}
+          >
+            <TouchableOpacity
+              onPress={() => scrollToBottom(true)}
+              style={{
+                width: 44,
+                height: 44,
+                borderRadius: 22,
+                backgroundColor: theme.primary,
+                justifyContent: 'center',
+                alignItems: 'center',
+                borderWidth: 2,
+                borderColor: theme.card,
+              }}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="chevron-down" size={24} color={theme.isDark ? '#111' : '#fff'} />
+            </TouchableOpacity>
+          </Animated.View>
+        )}
+
         {/* Toast */}
         <Toast message={toastMessage} visible={toastVisible} />
       </KeyboardAvoidingView>
@@ -2700,6 +3127,90 @@ const createStyles = (theme: any) => StyleSheet.create({
     borderRadius: 18,
     padding: 8,
     marginLeft: 4,
+  },
+
+  // Recording UI
+  recordingOverlay: {
+    position: 'absolute',
+    top: -60,
+    left: 10,
+    right: 10,
+    backgroundColor: theme.card,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 2,
+    borderColor: '#ff4444',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+    zIndex: 999,
+  },
+  recordingIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  recordingDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#ff4444',
+  },
+  recordingText: {
+    color: theme.text,
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  recordingActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  cancelButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#ff4444',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 3,
+  },
+  sendVoiceButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: theme.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 3,
+  },
+  cancelRecordingButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    backgroundColor: theme.background,
+  },
+  cancelRecordingText: {
+    color: '#ff4444',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  recordingButton: {
+    backgroundColor: '#ff4444',
+    borderColor: '#ff4444',
   },
 
   // Selected images

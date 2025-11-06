@@ -32,6 +32,14 @@ import { uploadChatImage } from '../utils/imageUtils';
 import { createCustomGroupChat } from '../utils/firestoreChats';
 import { acceptFriendRequest, declineFriendRequest } from '../utils/firestoreFriends';
 import {
+  saveChatListToCache,
+  loadChatListFromCache,
+  saveProfilesToCache,
+  loadProfilesFromCache,
+  updateProfileInCache,
+  clearAllChatCaches,
+} from '../utils/chatCache';
+import {
   doc,
   getDoc,
   collection,
@@ -221,6 +229,10 @@ const ChatsScreen = ({ navigation }: any) => {
         const data: any = snap.data();
         const profile = { username: data.username || 'User', photo: data.photo || data.photoURL || '' };
         profileCacheRef.current[uid] = { ...profile, timestamp: now };
+        
+        // Also save to AsyncStorage cache for persistence
+        await updateProfileInCache({ uid, ...profile });
+        
         return profile;
       }
     } catch {}
@@ -256,9 +268,33 @@ const ChatsScreen = ({ navigation }: any) => {
 
       if (!fbUser) {
         setChats([]); setNotifications([]); setNotificationCount(0); setIsReady(true);
+        // Clear all caches on logout
+        clearAllChatCaches();
         return;
       }
       const uid = fbUser.uid;
+
+      // ========== LOAD FROM CACHE FIRST (instant UI) ==========
+      (async () => {
+        const cachedChats = await loadChatListFromCache();
+        const cachedProfiles = await loadProfilesFromCache();
+        
+        if (cachedChats && cachedChats.length > 0) {
+          console.log('📦 Loaded chats from cache (instant UI)');
+          setChats(cachedChats as any);
+          setIsReady(true);
+        }
+        
+        // Store cached profiles in memory for faster lookups
+        if (cachedProfiles) {
+          Object.keys(cachedProfiles).forEach(profileUid => {
+            profileCacheRef.current[profileUid] = { 
+              ...cachedProfiles[profileUid], 
+              timestamp: Date.now() 
+            };
+          });
+        }
+      })();
 
       // Fetch my profile once
       (async () => {
@@ -414,6 +450,23 @@ const ChatsScreen = ({ navigation }: any) => {
           // Sort newest to oldest
           const sorted = shaped.sort((a: any, b: any) => (b.lastTsMillis || 0) - (a.lastTsMillis || 0));
           setChats(sorted);
+
+          // ========== SAVE TO CACHE (first 5 chats only) ==========
+          (async () => {
+            await saveChatListToCache(sorted.slice(0, 5) as any);
+            
+            // Save all profiles we've encountered to cache
+            const allProfiles: Record<string, any> = {};
+            Object.keys(profileCacheRef.current).forEach(uid => {
+              const cached = profileCacheRef.current[uid];
+              allProfiles[uid] = {
+                uid,
+                username: cached.username,
+                photo: cached.photo,
+              };
+            });
+            await saveProfilesToCache(allProfiles);
+          })();
 
           // Tab badge aggregate
           const totalUnread = shaped.reduce((acc: number, c: any) => acc + (c.unreadCount || 0), 0);
@@ -774,26 +827,21 @@ const ChatsScreen = ({ navigation }: any) => {
           <View />
         </View>
 
-        {/* Search */}
-        <View style={styles.searchContainer}>
-          <Ionicons name="search" size={18} color={theme.muted} />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search conversations"
-            placeholderTextColor={theme.muted}
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            returnKeyType="search"
-          />
-        </View>
-
         {/* Notifications entry card */}
         <TouchableOpacity
           style={styles.activityCard}
           activeOpacity={0.85}
-          onPress={() => setShowActivity((prev) => !prev)}
+          onPress={() => {
+            if (showActivity) {
+              setShowActivity(false);
+            } else {
+              setShowActivity(true);
+              setSearchQuery('');
+              Keyboard.dismiss();
+            }
+          }}
         >
-          <View style={styles.activityLeft}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
             <View style={styles.activityIconWrap}>
               <Ionicons name="notifications-outline" size={22} color={theme.primary} />
               {notificationCount > 0 && (
@@ -802,7 +850,7 @@ const ChatsScreen = ({ navigation }: any) => {
                 </View>
               )}
             </View>
-            <View>
+            <View style={{ flex: 1 }}>
               <Text style={styles.activityTitle}>Notifications</Text>
               {!!latestNotificationText && (
                 <Text style={styles.activitySubtitle} numberOfLines={1}>
@@ -811,8 +859,38 @@ const ChatsScreen = ({ navigation }: any) => {
               )}
             </View>
           </View>
-          <Ionicons name={showActivity ? 'chevron-down' : 'chevron-forward'} size={18} color={theme.primary} />
+          <Ionicons 
+            name={showActivity ? 'chevron-down' : 'chevron-forward'} 
+            size={18} 
+            color={theme.primary}
+          />
         </TouchableOpacity>
+
+        {/* Search */}
+        {!showActivity && (
+          <View style={styles.searchContainer}>
+            <Ionicons name="search" size={18} color={theme.primary} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search conversations"
+              placeholderTextColor={theme.muted}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              returnKeyType="search"
+            />
+            {searchQuery.length > 0 && (
+              <TouchableOpacity
+                onPress={() => {
+                  setSearchQuery('');
+                  Keyboard.dismiss();
+                }}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="close-circle" size={20} color={theme.primary} />
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
 
         {/* Body */}
         {showActivity ? (
@@ -986,11 +1064,11 @@ const ChatsScreen = ({ navigation }: any) => {
           <FlatList
             data={filteredChats}
             keyExtractor={(item) => item.id}
-            contentContainerStyle={styles.chatList}
+            contentContainerStyle={[styles.chatList, filteredChats.length === 0 && { flexGrow: 1 }]}
             renderItem={renderChatItem}
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.primary} />}
             ListEmptyComponent={
-              <View style={styles.activityEmpty}>
+              <View style={styles.emptyChatContainer}>
                 <Ionicons name="chatbubbles-outline" size={46} color={theme.primary} />
                 <Text style={styles.activityEmptyTitle}>No conversations yet</Text>
                 <Text style={styles.activityEmptyText}>Start a new chat or join an activity!</Text>
@@ -1168,6 +1246,7 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
   activitySubtitle: { color: t.muted, fontSize: 12, marginTop: 2, maxWidth: 220 },
   // center but nudge upward slightly to compensate for header/title above
   activityEmpty: { flex: 1, alignItems: 'center', justifyContent: 'center', transform: [{ translateY: -40 }] },
+  emptyChatContainer: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   activityEmptyTitle: { color: t.text, fontSize: 18, fontWeight: '800', marginTop: 8 },
   activityEmptyText: { color: t.muted, fontSize: 14, marginTop: 4 },
   chatList: { paddingBottom: 20 },

@@ -169,6 +169,55 @@ export async function uploadChatImage(uri: string, userId: string, imageId: stri
   }
 }
 
+export async function uploadAudioMessage(uri: string, userId: string, audioId: string) {
+  console.log("🎤 Starting audio upload for user:", userId);
+  
+  const filePath = `audioMessages/${userId}/${audioId}.m4a`;
+  const audioRef = ref(storage, filePath);
+
+  // A) Try base64 upload first (more reliable on iOS)
+  try {
+    console.log('📦 Attempting base64 upload...');
+    const base64 = await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    
+    await uploadString(
+      audioRef,
+      `data:audio/m4a;base64,${base64}`,
+      'data_url',
+      { contentType: 'audio/m4a', cacheControl: 'public,max-age=604800' }
+    );
+    
+    const url = await getDownloadURL(audioRef);
+    console.log('✅ Audio upload complete via base64');
+    return url;
+  } catch (e) {
+    console.warn('⚠️ Base64 audio upload failed, trying Blob:', (e as any)?.message || e);
+  }
+
+  // B) Fallback: Blob upload
+  try {
+    console.log('📦 Attempting blob upload...');
+    const blob = await getBlobFromUri(uri);
+    
+    await uploadBytes(audioRef, blob, {
+      contentType: 'audio/m4a',
+      cacheControl: 'public,max-age=604800',
+    });
+    
+    // Clean up blob if possible
+    (blob as any)?.close?.();
+    
+    const url = await getDownloadURL(audioRef);
+    console.log('✅ Audio upload complete via blob');
+    return url;
+  } catch (e) {
+    console.error('❌ Audio upload failed after both attempts:', (e as any)?.message || e);
+    throw e;
+  }
+}
+
 // Storage healthcheck utility
 export async function storageHealthcheck() {
   const user = auth.currentUser;

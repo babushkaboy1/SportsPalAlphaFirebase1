@@ -71,8 +71,17 @@ export async function getCachedProfile(userId: string) {
     const snap = await getDoc(doc(db, 'profiles', userId));
     if (snap.exists()) {
       const data = snap.data();
-      profileCache.set(userId, { data, timestamp: Date.now() });
-      return data;
+      // Normalize profile data
+      const normalizedData = {
+        uid: userId,
+        username: data.username || 'User',
+        photo: data.photo || data.photoURL,
+        photoURL: data.photoURL || data.photo,
+        bio: data.bio,
+        selectedSports: data.selectedSports,
+      };
+      profileCache.set(userId, { data: normalizedData, timestamp: Date.now() });
+      return normalizedData;
     }
   } catch {}
   return null;
@@ -661,8 +670,17 @@ export async function batchFetchProfiles(userIds: string[]) {
       const snap = await getDocs(q);
       snap.forEach((d) => {
         const data = d.data();
-        profiles[d.id] = data;
-        profileCache.set(d.id, { data, timestamp: Date.now() });
+        // Normalize profile data to ensure all fields exist
+        const normalizedData = {
+          uid: d.id,
+          username: data.username || 'User',
+          photo: data.photo || data.photoURL,
+          photoURL: data.photoURL || data.photo,
+          bio: data.bio,
+          selectedSports: data.selectedSports,
+        };
+        profiles[d.id] = normalizedData;
+        profileCache.set(d.id, { data: normalizedData, timestamp: Date.now() });
       });
     } catch {}
   }

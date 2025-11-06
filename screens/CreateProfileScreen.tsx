@@ -52,6 +52,7 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
   const styles = React.useMemo(() => createStyles(theme), [theme]);
   const isEdit = route?.params?.mode === 'edit';
   const profileData = route?.params?.profileData;
+  const emailLocked = profileData?.emailLocked || false; // Lock email for social sign-ins
 
   const [username, setUsername] = useState(profileData?.username || '');
   const [email, setEmail] = useState(profileData?.email || '');
@@ -635,6 +636,13 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
   const isGoogleUser = !!auth.currentUser?.providerData.find(
     (p) => p.providerId === 'google.com'
   );
+  const isFacebookUser = !!auth.currentUser?.providerData.find(
+    (p) => p.providerId === 'facebook.com'
+  );
+  const isAppleUser = !!auth.currentUser?.providerData.find(
+    (p) => p.providerId === 'apple.com'
+  );
+  const isSocialAuthUser = isGoogleUser || isFacebookUser || isAppleUser;
   const isPasswordUser = !!auth.currentUser?.providerData.find(
     (p) => p.providerId === 'password'
   );
@@ -703,13 +711,13 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
           onChangeText={setLocation}
         />
         <TextInput
-          style={[styles.input, (isEdit ? styles.inputDisabled : null)]}
+          style={[styles.input, ((isEdit || emailLocked || isSocialAuthUser) ? styles.inputDisabled : null)]}
           placeholder="Email"
           placeholderTextColor="#999"
           keyboardType="email-address"
           value={email}
           onChangeText={setEmail}
-          editable={!isEdit && !isGoogleUser}
+          editable={!isEdit && !isSocialAuthUser && !emailLocked}
         />
         {/* Email verification controls */}
         {!isEdit ? (
@@ -720,7 +728,9 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
                 <TouchableOpacity
                   style={[
                     styles.verifyActionButton,
-                    (sendCooldown > 0 || isSendingVerify) ? styles.verifyActionButtonDisabled : null,
+                    (sendCooldown > 0 || isSendingVerify) 
+                      ? { backgroundColor: theme.isDark ? '#009fa3' : theme.primaryStrong }
+                      : { backgroundColor: theme.isDark ? '#1ae9ef' : theme.primary },
                     { marginLeft: 0 },
                   ]}
                   onPress={handleSendVerificationEmail}
@@ -738,7 +748,9 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
                   style={[
                     styles.verifyActionButton,
                     { marginLeft: 8 },
-                    (isCheckingVerify || !sentVerification) ? styles.verifyActionButtonDisabled : null,
+                    sentVerification
+                      ? { backgroundColor: theme.isDark ? '#1ae9ef' : theme.primary }
+                      : { backgroundColor: theme.isDark ? '#009fa3' : theme.primaryStrong },
                   ]}
                   onPress={handleRefreshVerifyButton}
                   disabled={isCheckingVerify || !sentVerification}
@@ -808,7 +820,7 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
         ) : null}
         {/* Phone field removed */}
         {/* Password / Change Password Section */}
-        {!isGoogleUser ? (
+        {!isSocialAuthUser ? (
           isEdit ? (
             <>
               {!showChangePassword ? (

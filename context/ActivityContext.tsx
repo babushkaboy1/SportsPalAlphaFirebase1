@@ -1,5 +1,5 @@
 // context/ActivityContext.tsx
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { Activity } from '../data/activitiesData';
 import { getUserJoinedActivities, joinActivity, leaveActivity, fetchAllActivities, deleteActivity } from '../utils/firestoreActivities';
 import { onAuthStateChanged } from 'firebase/auth';
@@ -8,6 +8,12 @@ import { Alert } from 'react-native';
 import { doc, getDoc, onSnapshot, query, collection, where } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import { getOrCreateChatForActivity } from '../utils/firestoreChats';
+import { 
+  saveActivitiesToCache, 
+  loadActivitiesFromCache, 
+  updateActivityInCache,
+  clearActivityCache 
+} from '../utils/activityCache';
 
 type ActivityContextType = {
   joinedActivities: string[];
@@ -15,7 +21,7 @@ type ActivityContextType = {
   isActivityJoined: (activityId: string) => boolean;
   setJoinedActivities: React.Dispatch<React.SetStateAction<string[]>>;
   allActivities: Activity[];
-  reloadAllActivities: () => Promise<void>;
+  reloadAllActivities: (forceRefresh?: boolean) => Promise<void>;
   profile: any; // <-- Add this line
 };
 
@@ -72,17 +78,32 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     loadActivities();
   }, [user]);
 
-  // Load all activities from Firestore only
-  const reloadAllActivities = async () => {
+  // Load all activities from Firestore with smart caching
+  const reloadAllActivities = useCallback(async (forceRefresh = false) => {
     try {
       // Avoid fetching before auth; rules require request.auth != null
       if (!auth.currentUser) {
         setAllActivities([]);
         return;
       }
+
+      // Try loading from cache first (instant UI)
+      if (!forceRefresh) {
+        const cached = await loadActivitiesFromCache();
+        if (cached) {
+          console.log('📦 Loaded activities from cache');
+          setAllActivities(cached as Activity[]);
+          // Don't return - continue to fetch fresh data in background
+        }
+      }
+
+      // Fetch fresh data from Firestore
+      console.log('🔄 Fetching fresh activities from Firestore');
       const firestoreActivities = await fetchAllActivities();
+      
       // Fetch all unique creatorIds
       const creatorIds = Array.from(new Set(firestoreActivities.map(a => a.creatorId).filter((id): id is string => typeof id === 'string')));
+      
       // Fetch all creator profiles in parallel
       const profiles = await Promise.all(
         creatorIds.map(async (uid: string) => {
@@ -92,50 +113,41 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           return snap.exists() ? { uid, username: snap.data().username } : { uid, username: 'Unknown' };
         })
       );
+      
       // Map creatorId to username
       const idToUsername: Record<string, string> = {};
       profiles.forEach(p => { if (typeof p.uid === 'string') idToUsername[p.uid] = p.username; });
+      
       // Attach creatorUsername to each activity
       const activitiesWithUsernames = firestoreActivities.map(a => ({
-  ...a,
-  creatorUsername: a.creatorId && idToUsername[a.creatorId] ? idToUsername[a.creatorId] : a.creator,
+        ...a,
+        creatorUsername: a.creatorId && idToUsername[a.creatorId] ? idToUsername[a.creatorId] : a.creator,
       }));
+      
       setAllActivities(activitiesWithUsernames);
+      
+      // Save to cache for next time
+      await saveActivitiesToCache(activitiesWithUsernames as any);
+      console.log('💾 Activities saved to cache');
     } catch (e) {
       console.error('Error loading activities:', e);
       setAllActivities([]);
     }
-  };
+  }, []); // Empty deps - function doesn't depend on any props/state
 
   // Only load activities after user is authenticated
   useEffect(() => {
     if (user) {
       reloadAllActivities();
     } else {
-      // clear activities when signed out
+      // clear activities and cache when signed out
       setAllActivities([]);
+      clearActivityCache();
     }
-  }, [user]);
+  }, [user, reloadAllActivities]);
 
-  // Real-time subscription to all activities to keep UI in sync
-  useEffect(() => {
-    if (!user) return;
-    const unsubscribe = onSnapshot(
-      collection(db, 'activities'),
-      (snapshot) => {
-        const activities = snapshot.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Activity[];
-        setAllActivities(activities);
-      },
-      (error) => {
-        if ((error as any)?.code !== 'permission-denied') {
-          console.error('Activities subscription error:', error);
-        } else {
-          setAllActivities([]);
-        }
-      }
-    );
-    return unsubscribe;
-  }, [user]);
+  // REMOVED EXPENSIVE REAL-TIME SUBSCRIPTION
+  // Now using: Cache + Manual Pull-to-Refresh + Optimistic Updates
 
   // Sync joined activities with Firestore in real-time
   useEffect(() => {
@@ -200,16 +212,102 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         });
       }
 
+      // OPTIMISTIC UPDATE: Update UI immediately for instant feedback
+      console.log('⚡ Optimistic update:', isJoined ? 'leaving' : 'joining', activity.id);
+      
       if (isJoined) {
-        await leaveActivity(activity.id, user.uid);
+        // Immediately remove from joined activities
+        setJoinedActivities(prev => prev.filter(id => id !== activity.id));
+        
+        // Update allActivities state immediately (preserves creatorUsername!)
+        setAllActivities(prev => prev.map(a => 
+          a.id === activity.id 
+            ? {
+                ...a,
+                joinedCount: Math.max(0, (a.joinedCount || 1) - 1),
+                joinedUserIds: a.joinedUserIds?.filter(id => id !== user.uid) || [],
+              }
+            : a
+        ));
+        
+        // Update cache with decremented count
+        await updateActivityInCache(activity.id, {
+          joinedCount: Math.max(0, (activity.joinedCount || 1) - 1),
+          joinedUserIds: activity.joinedUserIds?.filter(id => id !== user.uid) || [],
+        });
       } else {
-        await joinActivity(activity.id, user.uid);
-        // --- ADD THIS: create the group chat if joining ---
-        await getOrCreateChatForActivity(activity.id, user.uid);
+        // Immediately add to joined activities
+        setJoinedActivities(prev => [...prev, activity.id]);
+        
+        // Update allActivities state immediately (preserves creatorUsername!)
+        setAllActivities(prev => prev.map(a => 
+          a.id === activity.id 
+            ? {
+                ...a,
+                joinedCount: (a.joinedCount || 0) + 1,
+                joinedUserIds: [...(a.joinedUserIds || []), user.uid],
+              }
+            : a
+        ));
+        
+        // Update cache with incremented count
+        await updateActivityInCache(activity.id, {
+          joinedCount: (activity.joinedCount || 0) + 1,
+          joinedUserIds: [...(activity.joinedUserIds || []), user.uid],
+        });
       }
-      await reloadAllActivities();
-      const joined = await getUserJoinedActivities();
-      setJoinedActivities(joined);
+
+      // ACTUAL UPDATE: Sync with Firestore in background (NO RELOAD - just sync!)
+      try {
+        if (isJoined) {
+          await leaveActivity(activity.id, user.uid);
+          console.log('✅ Successfully left activity in Firestore');
+        } else {
+          await joinActivity(activity.id, user.uid);
+          // Create the group chat if joining
+          await getOrCreateChatForActivity(activity.id, user.uid);
+          console.log('✅ Successfully joined activity in Firestore');
+        }
+        // NO RELOAD HERE - optimistic update already handled it!
+        // Only sync joined activities list
+        const joined = await getUserJoinedActivities();
+        setJoinedActivities(joined);
+      } catch (error) {
+        // ROLLBACK: If sync fails, revert optimistic update
+        console.error('❌ Failed to sync with Firestore, rolling back:', error);
+        if (isJoined) {
+          setJoinedActivities(prev => [...prev, activity.id]);
+          setAllActivities(prev => prev.map(a => 
+            a.id === activity.id 
+              ? {
+                  ...a,
+                  joinedCount: (a.joinedCount || 0) + 1,
+                  joinedUserIds: [...(a.joinedUserIds || []), user.uid],
+                }
+              : a
+          ));
+          await updateActivityInCache(activity.id, {
+            joinedCount: (activity.joinedCount || 0) + 1,
+            joinedUserIds: [...(activity.joinedUserIds || []), user.uid],
+          });
+        } else {
+          setJoinedActivities(prev => prev.filter(id => id !== activity.id));
+          setAllActivities(prev => prev.map(a => 
+            a.id === activity.id 
+              ? {
+                  ...a,
+                  joinedCount: Math.max(0, (a.joinedCount || 1) - 1),
+                  joinedUserIds: a.joinedUserIds?.filter(id => id !== user.uid) || [],
+                }
+              : a
+          ));
+          await updateActivityInCache(activity.id, {
+            joinedCount: Math.max(0, (activity.joinedCount || 1) - 1),
+            joinedUserIds: activity.joinedUserIds?.filter(id => id !== user.uid) || [],
+          });
+        }
+        throw error; // Re-throw to show error alert
+      }
     } catch (error: any) {
       // Swallow expected permission-denied cases (e.g., chat participants updates blocked by rules)
       if (error?.code !== 'permission-denied') {
