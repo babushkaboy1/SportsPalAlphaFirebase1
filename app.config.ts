@@ -7,18 +7,26 @@ export default ({ config }: { config: any }) => ({
   scheme: "sportspal", // 👈 Add this line
   version: "1.0.0",
   orientation: "portrait",
-  icon: "./assets/logo.png",
+  // Updated app icon to new turquoise orb asset
+  icon: "./assets/app-icon.png",
   userInterfaceStyle: "dark",
   newArchEnabled: true,
+  // Splash screen shown during app launch
   splash: {
-    image: "./assets/logo.png",
+    image: "./assets/splash-logo.png",
     resizeMode: "contain",
-    backgroundColor: "#121212"
+    backgroundColor: "#000000"
   },
   ios: {
     supportsTablet: true,
     bundleIdentifier: "com.sportspal",
     associatedDomains: ["applinks:sportspal-1b468.web.app"],
+    // Ensure iOS uses the same splash image explicitly
+    splash: {
+      image: "./assets/splash-logo.png",
+      resizeMode: "contain",
+      backgroundColor: "#000000"
+    },
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false,
       NSCameraUsageDescription: "This app uses the camera to allow you to take and upload profile pictures and share photos with friends.",
