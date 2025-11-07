@@ -12,10 +12,23 @@ import {
   Platform,
   Linking,
   Alert,
+  TextInput,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { auth, db } from '../firebaseConfig';
 import { doc, getDoc } from 'firebase/firestore';
+import { 
+  linkWithCredential,
+  GoogleAuthProvider,
+  FacebookAuthProvider,
+  OAuthProvider,
+  EmailAuthProvider,
+} from 'firebase/auth';
+import * as Google from 'expo-auth-session/providers/google';
+import * as Facebook from 'expo-auth-session/providers/facebook';
+import * as AppleAuthentication from 'expo-apple-authentication';
+import * as Crypto from 'expo-crypto';
+import { GOOGLE_ANDROID_CLIENT_ID, GOOGLE_IOS_CLIENT_ID, GOOGLE_WEB_CLIENT_ID, FACEBOOK_APP_ID } from '@env';
 import { removeSavedTokenAndUnregister } from '../utils/notifications';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -47,12 +60,28 @@ const SettingsScreen: React.FC = () => {
   const [termsModalVisible, setTermsModalVisible] = useState(false);
   const [privacyModalVisible, setPrivacyModalVisible] = useState(false);
   const [linkedAccountsVisible, setLinkedAccountsVisible] = useState(false);
+  // Linking UI state
+  const [linking, setLinking] = useState<{ google: boolean; facebook: boolean; apple: boolean; password: boolean }>({ google: false, facebook: false, apple: false, password: false });
+  const [passwordModalVisible, setPasswordModalVisible] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
 
   // Linked accounts state
   const [hasGoogle, setHasGoogle] = useState(false);
   const [hasFacebook, setHasFacebook] = useState(false);
   const [hasApple, setHasApple] = useState(false);
   const [hasPassword, setHasPassword] = useState(false);
+
+  // AuthSession hooks for Google/Facebook
+  const [gRequest, gResponse, gPromptAsync] = Google.useAuthRequest({
+    androidClientId: GOOGLE_ANDROID_CLIENT_ID || '',
+    iosClientId: GOOGLE_IOS_CLIENT_ID || '',
+    webClientId: GOOGLE_WEB_CLIENT_ID || '',
+  });
+  const [fbRequest, fbResponse, fbPromptAsync] = Facebook.useAuthRequest({
+    clientId: FACEBOOK_APP_ID || '',
+    scopes: ['public_profile', 'email'],
+  });
 
   const styles = useMemo(() => createStyles(theme), [theme]);
   const themeModeLabel = themeMode === 'dark' ? 'Dark' : 'Light';
@@ -88,6 +117,140 @@ const SettingsScreen: React.FC = () => {
     
     checkLinkedAccounts();
   }, []);
+
+  // Handle Google link response
+  useEffect(() => {
+    (async () => {
+      if (gResponse?.type === 'success') {
+        try {
+          setLinking(l => ({ ...l, google: true }));
+          const { id_token } = gResponse.params as any;
+          const cred = GoogleAuthProvider.credential(id_token);
+          if (!auth.currentUser) throw new Error('No user is signed in.');
+          await linkWithCredential(auth.currentUser, cred);
+          await auth.currentUser.reload();
+          const providers = auth.currentUser.providerData.map(p => p.providerId);
+          setHasGoogle(providers.includes('google.com'));
+          Alert.alert('Linked', 'Google account linked to your profile.');
+        } catch (e: any) {
+          const msg = e?.code === 'auth/credential-already-in-use' ? 'This Google account is already linked to another user.' : (e?.message || 'Could not link Google.');
+          Alert.alert('Link failed', msg);
+        } finally {
+          setLinking(l => ({ ...l, google: false }));
+        }
+      }
+    })();
+  }, [gResponse]);
+
+  // Handle Facebook link response
+  useEffect(() => {
+    (async () => {
+      if (fbResponse?.type === 'success') {
+        try {
+          setLinking(l => ({ ...l, facebook: true }));
+          const { access_token } = fbResponse.params as any;
+          const cred = FacebookAuthProvider.credential(access_token);
+          if (!auth.currentUser) throw new Error('No user is signed in.');
+          await linkWithCredential(auth.currentUser, cred);
+          await auth.currentUser.reload();
+          const providers = auth.currentUser.providerData.map(p => p.providerId);
+          setHasFacebook(providers.includes('facebook.com'));
+          Alert.alert('Linked', 'Facebook account linked to your profile.');
+        } catch (e: any) {
+          const msg = e?.code === 'auth/credential-already-in-use' ? 'This Facebook account is already linked to another user.' : (e?.message || 'Could not link Facebook.');
+          Alert.alert('Link failed', msg);
+        } finally {
+          setLinking(l => ({ ...l, facebook: false }));
+        }
+      }
+    })();
+  }, [fbResponse]);
+
+  const startLinkGoogle = async () => {
+    try {
+      if (!auth.currentUser) return Alert.alert('Not signed in', 'Sign in first.');
+      await gPromptAsync();
+    } catch (e: any) {
+      Alert.alert('Google link failed', e?.message || 'Could not start Google linking.');
+    }
+  };
+
+  const startLinkFacebook = async () => {
+    try {
+      if (!auth.currentUser) return Alert.alert('Not signed in', 'Sign in first.');
+      await fbPromptAsync();
+    } catch (e: any) {
+      Alert.alert('Facebook link failed', e?.message || 'Could not start Facebook linking.');
+    }
+  };
+
+  const startLinkApple = async () => {
+    try {
+      if (Platform.OS !== 'ios') return;
+      if (!auth.currentUser) return Alert.alert('Not signed in', 'Sign in first.');
+      setLinking(l => ({ ...l, apple: true }));
+      const rawNonce = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+      const hashedNonce = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, rawNonce);
+      const res = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+        nonce: hashedNonce,
+      });
+      if (!res.identityToken) throw new Error('No identity token from Apple.');
+      const provider = new OAuthProvider('apple.com');
+      const cred = provider.credential({ idToken: res.identityToken, rawNonce });
+      await linkWithCredential(auth.currentUser, cred);
+      await auth.currentUser.reload();
+      const providers = auth.currentUser.providerData.map(p => p.providerId);
+      setHasApple(providers.includes('apple.com'));
+      Alert.alert('Linked', 'Apple ID linked to your profile.');
+    } catch (e: any) {
+      if (e?.code === 'ERR_CANCELED') return;
+      const msg = e?.code === 'auth/credential-already-in-use' ? 'This Apple ID is already linked to another user.' : (e?.message || 'Could not link Apple ID.');
+      Alert.alert('Link failed', msg);
+    } finally {
+      setLinking(l => ({ ...l, apple: false }));
+    }
+  };
+
+  const openPasswordLinkModal = () => {
+    if (!auth.currentUser?.email) {
+      Alert.alert('No email on account', 'We need an email to set up an email/password login.');
+      return;
+    }
+    setNewPassword('');
+    setConfirmNewPassword('');
+    setPasswordModalVisible(true);
+  };
+
+  const submitPasswordLink = async () => {
+    try {
+      if (!auth.currentUser?.email) return;
+      if (newPassword.length < 8) {
+        Alert.alert('Weak password', 'Use at least 8 characters.');
+        return;
+      }
+      if (newPassword !== confirmNewPassword) {
+        Alert.alert('Password mismatch', 'Passwords do not match.');
+        return;
+      }
+      setLinking(l => ({ ...l, password: true }));
+      const cred = EmailAuthProvider.credential(auth.currentUser.email, newPassword);
+      await linkWithCredential(auth.currentUser, cred);
+      await auth.currentUser.reload();
+      const providers = auth.currentUser.providerData.map(p => p.providerId);
+      setHasPassword(providers.includes('password'));
+      setPasswordModalVisible(false);
+      Alert.alert('Linked', 'Email & password sign-in has been set.');
+    } catch (e: any) {
+      const msg = e?.message || 'Could not link email/password.';
+      Alert.alert('Link failed', msg);
+    } finally {
+      setLinking(l => ({ ...l, password: false }));
+    }
+  };
 
   // Save discovery range to storage
   const saveDiscoveryRange = async (range: number) => {
@@ -558,8 +721,12 @@ const SettingsScreen: React.FC = () => {
                     <Text style={styles.linkedAccountStatus}>{hasGoogle ? 'Connected' : 'Not connected'}</Text>
                   </View>
                 </View>
-                {hasGoogle && (
+                {hasGoogle ? (
                   <Ionicons name="checkmark-circle" size={22} color={theme.primary} />
+                ) : (
+                  <TouchableOpacity onPress={startLinkGoogle} disabled={linking.google} style={[styles.rangeButton, { borderColor: theme.primary }]}>
+                    <Text style={[styles.rangeButtonText, { color: theme.primary }]}>{linking.google ? 'Linking…' : 'Link'}</Text>
+                  </TouchableOpacity>
                 )}
               </View>
 
@@ -572,8 +739,12 @@ const SettingsScreen: React.FC = () => {
                     <Text style={styles.linkedAccountStatus}>{hasFacebook ? 'Connected' : 'Not connected'}</Text>
                   </View>
                 </View>
-                {hasFacebook && (
+                {hasFacebook ? (
                   <Ionicons name="checkmark-circle" size={22} color={theme.primary} />
+                ) : (
+                  <TouchableOpacity onPress={startLinkFacebook} disabled={linking.facebook} style={[styles.rangeButton, { borderColor: theme.primary }]}>
+                    <Text style={[styles.rangeButtonText, { color: theme.primary }]}>{linking.facebook ? 'Linking…' : 'Link'}</Text>
+                  </TouchableOpacity>
                 )}
               </View>
 
@@ -587,8 +758,12 @@ const SettingsScreen: React.FC = () => {
                       <Text style={styles.linkedAccountStatus}>{hasApple ? 'Connected' : 'Not connected'}</Text>
                     </View>
                   </View>
-                  {hasApple && (
+                  {hasApple ? (
                     <Ionicons name="checkmark-circle" size={22} color={theme.primary} />
+                  ) : (
+                    <TouchableOpacity onPress={startLinkApple} disabled={linking.apple} style={[styles.rangeButton, { borderColor: theme.primary }]}>
+                      <Text style={[styles.rangeButtonText, { color: theme.primary }]}>{linking.apple ? 'Linking…' : 'Link'}</Text>
+                    </TouchableOpacity>
                   )}
                 </View>
               )}
@@ -602,15 +777,19 @@ const SettingsScreen: React.FC = () => {
                     <Text style={styles.linkedAccountStatus}>{hasPassword ? 'Set up' : 'Not set up'}</Text>
                   </View>
                 </View>
-                {hasPassword && (
+                {hasPassword ? (
                   <Ionicons name="checkmark-circle" size={22} color={theme.primary} />
+                ) : (
+                  <TouchableOpacity onPress={openPasswordLinkModal} disabled={linking.password} style={[styles.rangeButton, { borderColor: theme.primary }]}>
+                    <Text style={[styles.rangeButtonText, { color: theme.primary }]}>{linking.password ? 'Linking…' : 'Set password'}</Text>
+                  </TouchableOpacity>
                 )}
               </View>
             </View>
 
             <View style={{ width: '100%', marginTop: 20, paddingHorizontal: 12 }}>
               <Text style={[styles.modalText, { fontSize: 12, marginBottom: 0 }]}>
-                To link additional accounts, sign in with your email and password, then use the social login buttons on the login screen.
+                Link any account above to your current login so you can sign in with any of them. For Email & Password, set a password to enable sign-in with your email. If you see a message about an account already existing, use that method to sign in first and then link here.
               </Text>
             </View>
 
@@ -631,6 +810,65 @@ const SettingsScreen: React.FC = () => {
             >
               <Text style={[styles.modalBtnText, { color: theme.isDark ? '#111' : '#fff' }]}>Done</Text>
             </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Password Link Modal */}
+      <Modal transparent visible={passwordModalVisible} onRequestClose={() => setPasswordModalVisible(false)} animationType="fade">
+        <Pressable style={styles.modalBackdrop} onPress={() => setPasswordModalVisible(false)}>
+          <Pressable style={[styles.modalCard, { width: '90%' }]}
+            onStartShouldSetResponder={() => true}
+          >
+            <Ionicons name="key-outline" size={26} color={theme.primary} style={{ marginBottom: 8 }} />
+            <Text style={styles.modalTitle}>Set a password</Text>
+            <Text style={styles.modalText}>Create a password to enable email sign-in for your account.</Text>
+            <View style={{ width: '100%', gap: 10 }}>
+              <Text style={[styles.rowSub, { marginTop: 0 }]}>Password (min 8 characters)</Text>
+              <TextInput
+                value={newPassword}
+                onChangeText={setNewPassword}
+                secureTextEntry
+                placeholder="New password"
+                placeholderTextColor={theme.muted}
+                style={{
+                  width: '100%',
+                  paddingVertical: 12,
+                  paddingHorizontal: 12,
+                  borderRadius: 10,
+                  borderWidth: StyleSheet.hairlineWidth,
+                  borderColor: theme.border,
+                  color: theme.text,
+                  backgroundColor: theme.background,
+                }}
+              />
+              <TextInput
+                value={confirmNewPassword}
+                onChangeText={setConfirmNewPassword}
+                secureTextEntry
+                placeholder="Confirm password"
+                placeholderTextColor={theme.muted}
+                style={{
+                  width: '100%',
+                  paddingVertical: 12,
+                  paddingHorizontal: 12,
+                  borderRadius: 10,
+                  borderWidth: StyleSheet.hairlineWidth,
+                  borderColor: theme.border,
+                  color: theme.text,
+                  backgroundColor: theme.background,
+                }}
+              />
+            </View>
+            {/* Simplified actionable buttons */}
+            <View style={{ width: '100%', flexDirection: 'row', gap: 10, marginTop: 12 }}>
+              <TouchableOpacity style={[styles.modalBtn, styles.modalCancel]} onPress={() => setPasswordModalVisible(false)}>
+                <Text style={[styles.modalBtnText, { color: theme.text }]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.modalBtn, { backgroundColor: theme.primary }]} onPress={submitPasswordLink} disabled={linking.password}>
+                <Text style={[styles.modalBtnText, { color: theme.isDark ? '#111' : '#fff' }]}>{linking.password ? 'Linking…' : 'Save & Link'}</Text>
+              </TouchableOpacity>
+            </View>
           </Pressable>
         </Pressable>
       </Modal>
