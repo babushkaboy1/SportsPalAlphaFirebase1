@@ -9,7 +9,8 @@ import { enableScreens } from 'react-native-screens';
 import { StatusBar } from 'expo-status-bar';
 import * as Location from 'expo-location';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { auth } from './firebaseConfig';
+import { auth, db } from './firebaseConfig';
+import { doc, getDoc } from 'firebase/firestore';
 import * as NavigationBar from 'expo-navigation-bar';
 import * as SystemUI from 'expo-system-ui';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -193,6 +194,8 @@ const MainTabs = () => {
 function AppInner() {
   const [user, setUser] = useState<User | null>(null);
   const [initializing, setInitializing] = useState(true);
+  // Track whether the signed-in user has a profile document
+  const [hasProfile, setHasProfile] = useState<boolean | null>(null);
   const { theme, navTheme } = useTheme();
   const { currentNotification, dismissNotification, showNotification } = useInAppNotification();
 
@@ -223,6 +226,27 @@ function AppInner() {
     });
     return unsubscribe;
   }, []);
+
+  // On auth changes, check for a profile doc to gate initial navigation
+  useEffect(() => {
+    let cancelled = false;
+    const checkProfile = async () => {
+      if (!user) {
+        if (!cancelled) setHasProfile(null);
+        return;
+      }
+      try {
+        const snap = await getDoc(doc(db, 'profiles', user.uid));
+        if (!cancelled) setHasProfile(snap.exists());
+      } catch (e) {
+        // If we can't determine, default to allowing app but log
+        console.warn('Profile check failed', e);
+        if (!cancelled) setHasProfile(true);
+      }
+    };
+    checkProfile();
+    return () => { cancelled = true; };
+  }, [user]);
 
   useEffect(() => {
     if (user) {
@@ -300,9 +324,9 @@ function AppInner() {
             </View>
           ) : (
           <Stack.Navigator
-          // Key forces navigator to remount when auth state changes, ensuring correct initial route
-          key={user ? 'app' : 'auth'}
-          initialRouteName={user ? "MainTabs" : "Login"}
+          // Key forces navigator to remount when auth/profile state changes, ensuring correct initial route
+          key={user ? `app-${hasProfile === false ? 'noprof' : 'hasprof'}` : 'auth'}
+          initialRouteName={!user ? 'Login' : (hasProfile === false ? 'CreateProfile' : 'MainTabs')}
           screenOptions={{
             headerShown: false,
             animation: 'slide_from_right',

@@ -82,10 +82,33 @@ const LoginScreen = ({ navigation }: any) => {
     }).start();
   }, []);
 
-  // If already signed in, redirect to MainTabs when this screen appears
+  // If already signed in, redirect based on profile existence
   useEffect(() => {
-    const checkAndRedirect = () => {
-      if (auth.currentUser) {
+    const checkAndRedirect = async () => {
+      const user = auth.currentUser;
+      if (!user) return;
+      try {
+        const profileDoc = await getDoc(doc(db, 'profiles', user.uid));
+        if (profileDoc.exists()) {
+          navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
+        } else {
+          navigation.dispatch(
+            CommonActions.reset({
+              index: 0,
+              routes: [
+                {
+                  name: 'CreateProfile',
+                  params: {
+                    mode: 'create',
+                    profileData: { email: user.email || '', emailLocked: true },
+                  },
+                },
+              ],
+            })
+          );
+        }
+      } catch (e) {
+        // On error, default to MainTabs to avoid blocking
         navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
       }
     };
