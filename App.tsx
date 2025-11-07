@@ -7,6 +7,8 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import { enableScreens } from 'react-native-screens';
 import { StatusBar } from 'expo-status-bar';
+import * as SplashScreen from 'expo-splash-screen';
+import { useActivityContext } from './context/ActivityContext';
 import * as Location from 'expo-location';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth, db } from './firebaseConfig';
@@ -42,6 +44,9 @@ import { decode as atob } from 'base-64';
 
 enableScreens(true);
 import { ThemeProvider, useTheme } from './context/ThemeContext';
+
+// Keep the native splash screen visible while we initialize
+try { SplashScreen.preventAutoHideAsync(); } catch {}
 
 const Stack = createStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<TabParamList>();
@@ -196,6 +201,8 @@ function AppInner() {
   const [initializing, setInitializing] = useState(true);
   // Track whether the signed-in user has a profile document
   const [hasProfile, setHasProfile] = useState<boolean | null>(null);
+  const [navReady, setNavReady] = useState(false);
+  const splashHiddenRef = React.useRef(false);
   const { theme, navTheme } = useTheme();
   const { currentNotification, dismissNotification, showNotification } = useInAppNotification();
 
@@ -260,6 +267,8 @@ function AppInner() {
     }
   }, [user]);
 
+  // (splash hiding logic is handled by SplashHider component mounted below)
+
   // Register push notifications and handle taps to navigate
   useEffect(() => {
     let unsubscribeResponses: (() => void) | undefined;
@@ -316,7 +325,7 @@ function AppInner() {
       <SafeAreaProvider>
         <ActivityProvider>
           <InboxBadgeProvider>
-          <NavigationContainer ref={navRef} theme={navTheme}>
+          <NavigationContainer ref={navRef} theme={navTheme} onReady={() => setNavReady(true)}>
           <StatusBar style={theme.isDark ? 'light' : 'dark'} backgroundColor={theme.background} />
           {initializing ? (
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#121212' }}>
@@ -354,6 +363,14 @@ function AppInner() {
           />
           </NavigationContainer>
           </InboxBadgeProvider>
+          {/* Splash hiding logic mounted within providers to access context */}
+          <SplashHider
+            navReady={navReady}
+            initializing={initializing}
+            user={user}
+            hasProfile={hasProfile}
+            splashHiddenRef={splashHiddenRef}
+          />
         </ActivityProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
@@ -401,3 +418,38 @@ export default function App() {
     </ThemeProvider>
   );
 }
+
+// Helper mounted inside providers to consume ActivityContext
+const SplashHider: React.FC<{ navReady: boolean; initializing: boolean; user: User | null; hasProfile: boolean | null; splashHiddenRef: React.MutableRefObject<boolean>; }> = ({ navReady, initializing, user, hasProfile, splashHiddenRef }) => {
+  const { initialActivitiesLoaded } = useActivityContext();
+
+  useEffect(() => {
+    if (splashHiddenRef.current) return;
+    const shouldHide = () => {
+      if (!navReady || initializing) return false;
+      if (!user) return true; // login screen is ready
+      if (hasProfile === false) return true; // create profile flow
+      // user has profile -> wait for activities initial load
+      return initialActivitiesLoaded;
+    };
+
+    if (shouldHide()) {
+      SplashScreen.hideAsync().catch(() => {});
+      splashHiddenRef.current = true;
+    }
+  }, [navReady, initializing, user, hasProfile, initialActivitiesLoaded]);
+
+  // Fallback: hide after 8s max
+  useEffect(() => {
+    if (splashHiddenRef.current) return;
+    const t = setTimeout(() => {
+      if (!splashHiddenRef.current) {
+        SplashScreen.hideAsync().catch(() => {});
+        splashHiddenRef.current = true;
+      }
+    }, 8000);
+    return () => clearTimeout(t);
+  }, []);
+
+  return null;
+};

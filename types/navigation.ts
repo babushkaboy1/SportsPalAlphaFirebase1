@@ -49,4 +49,5 @@ export type RootStackParamList = {
   Profile: { userId?: string };
   UserProfile: { userId: string };
   Settings: undefined; // Ensure this is defined
+  LegalDocument: { documentId: string };
 };

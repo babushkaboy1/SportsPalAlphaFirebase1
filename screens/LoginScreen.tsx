@@ -108,8 +108,21 @@ const LoginScreen = ({ navigation }: any) => {
           );
         }
       } catch (e) {
-        // On error, default to MainTabs to avoid blocking
-        navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
+        // On error, default to profile creation to avoid entering app without profile
+        navigation.dispatch(
+          CommonActions.reset({
+            index: 0,
+            routes: [
+              {
+                name: 'CreateProfile',
+                params: {
+                  mode: 'create',
+                  profileData: { email: user.email || '', emailLocked: true },
+                },
+              },
+            ],
+          })
+        );
       }
     };
     // Check immediately

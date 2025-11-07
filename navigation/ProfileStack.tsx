@@ -4,6 +4,7 @@ import ProfileScreen from '../screens/ProfileScreen';
 import ActivityDetailsScreen from '../screens/ActivityDetailsScreen';
 import UserProfileScreen from '../screens/UserProfileScreen';
 import SettingsScreen from '../screens/SettingsScreen';
+import LegalDocumentScreen from '../screens/LegalDocumentScreen';
 
 const Stack = createStackNavigator();
 
@@ -19,6 +20,7 @@ export default function ProfileStack() {
       <Stack.Screen name="ActivityDetails" component={ActivityDetailsScreen} />
       <Stack.Screen name="UserProfile" component={UserProfileScreen} />
       <Stack.Screen name="Settings" component={SettingsScreen} />
+      <Stack.Screen name="LegalDocument" component={LegalDocumentScreen} />
     </Stack.Navigator>
   );
 }

@@ -24,6 +24,7 @@ type ActivityContextType = {
   allActivities: Activity[];
   reloadAllActivities: (forceRefresh?: boolean) => Promise<void>;
   profile: any;
+  initialActivitiesLoaded: boolean;
 };
 
 const ActivityContext = createContext<ActivityContextType | undefined>(undefined);
@@ -41,6 +42,8 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [allActivities, setAllActivities] = useState<Activity[]>([]);
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<any>(null);
+  // Track when the first meaningful activities load (after initial Firestore fetch)
+  const [initialActivitiesLoaded, setInitialActivitiesLoaded] = useState(false);
 
   // Modal state
   const [modalVisible, setModalVisible] = useState(false);
@@ -111,6 +114,7 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       // Avoid fetching before auth; rules require request.auth != null
       if (!auth.currentUser) {
         setAllActivities([]);
+        setInitialActivitiesLoaded(false);
         return;
       }
 
@@ -152,6 +156,8 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }));
       
       setAllActivities(activitiesWithUsernames);
+  // Mark initial load complete after first successful Firestore fetch
+  if (!initialActivitiesLoaded) setInitialActivitiesLoaded(true);
       
       // Save to cache for next time
       await saveActivitiesToCache(activitiesWithUsernames as any);
@@ -159,8 +165,10 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } catch (e) {
       console.error('Error loading activities:', e);
       setAllActivities([]);
+      // Fail-safe: don't block splash forever if fetch fails
+      if (!initialActivitiesLoaded) setInitialActivitiesLoaded(true);
     }
-  }, []); // Empty deps - function doesn't depend on any props/state
+  }, [initialActivitiesLoaded]); // depend so we can set flag once
 
   // Only load activities after user is authenticated
   useEffect(() => {
@@ -170,6 +178,7 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       // clear activities and cache when signed out
       setAllActivities([]);
       clearActivityCache();
+      setInitialActivitiesLoaded(false);
     }
   }, [user, reloadAllActivities]);
 
@@ -365,7 +374,8 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setJoinedActivities,
         allActivities,
         reloadAllActivities,
-        profile, // <-- Add this line
+        profile,
+        initialActivitiesLoaded,
       }}
     >
       {children}

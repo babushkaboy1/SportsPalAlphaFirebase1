@@ -103,6 +103,13 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
     return () => clearTimeout(timeout);
   }, []);
 
+  // If navigated without an email (e.g., from App initial route), prefill from auth user for social flows
+  useEffect(() => {
+    if (!email && auth.currentUser?.email) {
+      setEmail(auth.currentUser.email);
+    }
+  }, []);
+
   // Username policy (Instagram-like): 1–30 chars, letters/numbers/periods/underscores only, case-insensitive unique
   const validateUsername = (name: string): string | null => {
     const trimmed = name.trim();
@@ -397,11 +404,14 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
       return;
     }
 
-    // Detect if the current user is a Google user
-    const isGoogleUserLocal = !!auth.currentUser?.providerData.find((p) => p.providerId === 'google.com');
+  // Detect if the current user is a social auth user (Google, Facebook, Apple)
+  const isGoogleUserLocal = !!auth.currentUser?.providerData.find((p) => p.providerId === 'google.com');
+  const isFacebookUserLocal = !!auth.currentUser?.providerData.find((p) => p.providerId === 'facebook.com');
+  const isAppleUserLocal = !!auth.currentUser?.providerData.find((p) => p.providerId === 'apple.com');
+  const isSocialUserLocal = isGoogleUserLocal || isFacebookUserLocal || isAppleUserLocal;
 
-    // In create mode for non-Google users, validate password and confirm
-    if (!isEdit && !isGoogleUserLocal) {
+    // In create mode for non-social users, validate password and confirm
+    if (!isEdit && !isSocialUserLocal) {
       const checks = getPasswordChecks(password);
       if (!(checks.len && checks.upper && checks.number && checks.symbol)) {
         setPasswordError('Password must be at least 8 characters and include an uppercase letter, a number, and a symbol.');
@@ -471,6 +481,70 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
         navigation.goBack();
       } else {
         // CREATE MODE
+        // Handle social auth users separately: no password creation or email verification flow
+        if (isSocialUserLocal) {
+          // Must have an authenticated user
+          const current = auth.currentUser;
+          if (!current) {
+            Alert.alert('Error', 'No user is logged in.');
+            setIsLoading(false);
+            return;
+          }
+
+          userId = current.uid;
+
+          // Username uniqueness (case-insensitive)
+          if (username) {
+            const profilesCol = collection(db, 'profiles');
+            const q = query(profilesCol, where('username_lower', '==', username.toLowerCase()));
+            const snap = await getDocs(q);
+            if (!snap.empty) {
+              setUsernameError('This username is already in use.');
+              Alert.alert('Username Taken', 'Please choose a different username.');
+              setIsLoading(false);
+              return;
+            }
+          }
+
+          // Upload photo if provided
+          if (photo) {
+            try {
+              const compressedUri = await compressImage(photo);
+              photoURL = await uploadProfileImage(compressedUri, userId);
+            } catch (e) {
+              console.warn('Photo upload failed (social create)', e);
+            }
+          }
+
+          const profileDataSocial = {
+            username,
+            email: email || current.email || '',
+            location,
+            photo: photoURL,
+            sportsPreferences: selectedSports,
+            username_lower: username ? username.toLowerCase() : null,
+            uid: userId,
+            emailVerified: !!current.emailVerified,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          };
+
+          try {
+            await setDoc(doc(db, 'profiles', userId), profileDataSocial);
+          } catch (err: any) {
+            console.error('Profile write failed (social create)', err);
+            Alert.alert('Error', err?.message || 'Failed to create profile. Please try again.');
+            setIsLoading(false);
+            return;
+          }
+
+          Alert.alert('Success', 'Your profile has been created!');
+          navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
+          setIsLoading(false);
+          return;
+        }
+
+        // Non-social users below: password + email verification path
         // If logged in to a different email, auto sign out to proceed with creating the new account
         if (auth.currentUser && auth.currentUser.email && auth.currentUser.email !== email) {
           try {
@@ -719,8 +793,8 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
           onChangeText={setEmail}
           editable={!isEdit && !isSocialAuthUser && !emailLocked}
         />
-        {/* Email verification controls */}
-        {!isEdit ? (
+        {/* Email verification controls (only for non-social flows) */}
+        {!isEdit && !isSocialAuthUser ? (
           // Create mode: show actions until verified; show green badge after
           <View style={styles.emailVerifyRow}>
             {!isEmailVerified ? (
@@ -812,7 +886,7 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
             </View>
           ) : null
         )}
-        {!isEdit && awaitingEmailVerification ? (
+        {!isEdit && !isSocialAuthUser && awaitingEmailVerification ? (
           <View style={[styles.requirementsBox, { marginTop: 6 }]}> 
             <Text style={styles.requirementsTitle}>Verify your email to continue</Text>
             <Text style={styles.requirementItem}>We sent a verification link to {email}. Open it, then tap "I verified — Refresh" above.</Text>
@@ -934,7 +1008,7 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
           )
         ) : (
           <Text style={{ color: '#aaa', marginBottom: 10 }}>
-            You signed up with Google. Log in with Google anytime.
+            {isGoogleUser ? 'You signed up with Google.' : isFacebookUser ? 'You signed up with Facebook.' : 'You signed up with Apple.'} No password needed.
           </Text>
         )}
       </View>
@@ -967,10 +1041,10 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
       <TouchableOpacity
         style={[
           styles.continueButton,
-          (!isEdit && auth.currentUser && !isEmailVerified) ? { opacity: 0.6 } : null,
+          (!isEdit && !isSocialAuthUser && auth.currentUser && !isEmailVerified) ? { opacity: 0.6 } : null,
         ]}
         onPress={handleContinue}
-        disabled={!isEdit && auth.currentUser != null && !isEmailVerified}
+        disabled={!isEdit && !isSocialAuthUser && auth.currentUser != null && !isEmailVerified}
       >
         <Text style={styles.continueButtonText}>{mainCtaLabel}</Text>
       </TouchableOpacity>
