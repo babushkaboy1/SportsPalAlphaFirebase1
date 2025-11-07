@@ -171,50 +171,82 @@ export async function uploadChatImage(uri: string, userId: string, imageId: stri
 
 export async function uploadAudioMessage(uri: string, userId: string, audioId: string) {
   console.log("🎤 Starting audio upload for user:", userId);
-  
+
   const filePath = `audioMessages/${userId}/${audioId}.m4a`;
   const audioRef = ref(storage, filePath);
 
-  // A) Try base64 upload first (more reliable on iOS)
+  // Strategy A: Try fetch -> Blob (works in many cases on iOS/Android)
   try {
-    console.log('📦 Attempting base64 upload...');
-    const base64 = await FileSystem.readAsStringAsync(uri, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
-    
-    await uploadString(
-      audioRef,
-      `data:audio/m4a;base64,${base64}`,
-      'data_url',
-      { contentType: 'audio/m4a', cacheControl: 'public,max-age=604800' }
-    );
-    
-    const url = await getDownloadURL(audioRef);
-    console.log('✅ Audio upload complete via base64');
-    return url;
-  } catch (e) {
-    console.warn('⚠️ Base64 audio upload failed, trying Blob:', (e as any)?.message || e);
-  }
-
-  // B) Fallback: Blob upload
-  try {
-    console.log('📦 Attempting blob upload...');
+    console.log('📦 Attempting blob upload (fetch)...');
     const blob = await getBlobFromUri(uri);
-    
     await uploadBytes(audioRef, blob, {
       contentType: 'audio/m4a',
       cacheControl: 'public,max-age=604800',
     });
-    
-    // Clean up blob if possible
     (blob as any)?.close?.();
-    
     const url = await getDownloadURL(audioRef);
-    console.log('✅ Audio upload complete via blob');
+    console.log('✅ Audio upload complete via fetch->blob');
     return url;
-  } catch (e) {
-    console.error('❌ Audio upload failed after both attempts:', (e as any)?.message || e);
-    throw e;
+  } catch (firstErr) {
+    console.warn('⚠️ blob upload (fetch) failed, trying XHR fallback', firstErr);
+  }
+
+  // Strategy B: XHR to get a Blob
+  try {
+    console.log('📦 Attempting blob upload (XHR)...');
+    if (!uri) throw new Error('Empty audio uri');
+    const blobFromXhr = await new Promise<Blob>((resolve, reject) => {
+      try {
+        const xhr = new XMLHttpRequest();
+        xhr.onerror = () => reject(new Error('XHR failed'));
+        xhr.onreadystatechange = () => {
+          if (xhr.readyState === 4) {
+            if (xhr.status === 200 || xhr.response) {
+              resolve(xhr.response);
+            } else {
+              reject(new Error('XHR status ' + xhr.status));
+            }
+          }
+        };
+        xhr.open('GET', uri, true);
+        // @ts-ignore
+        xhr.responseType = 'blob';
+        xhr.send(null);
+      } catch (e) {
+        reject(e);
+      }
+    });
+    await uploadBytes(audioRef, blobFromXhr as any, {
+      contentType: 'audio/m4a',
+      cacheControl: 'public,max-age=604800',
+    });
+    const url = await getDownloadURL(audioRef);
+    console.log('✅ Audio upload complete via XHR blob');
+    return url;
+  } catch (xhrErr) {
+    console.warn('⚠️ XHR blob upload failed, trying FileSystem base64 fallback', xhrErr);
+  }
+
+  // Strategy C: Base64 via pre-imported FileSystem (no dynamic import to avoid Metro issues)
+  try {
+    console.log('📦 Attempting base64 upload (FileSystem fallback)...');
+    if (!FileSystem || typeof FileSystem.readAsStringAsync !== 'function') {
+      throw new Error('expo-file-system readAsStringAsync unavailable');
+    }
+    const enc = (FileSystem as any).EncodingType?.Base64 || (FileSystem as any).EncodingTypeBase64 || 'base64';
+    const b64 = await FileSystem.readAsStringAsync(uri, { encoding: enc as any });
+    await uploadString(
+      audioRef,
+      `data:audio/m4a;base64,${b64}`,
+      'data_url',
+      { contentType: 'audio/m4a', cacheControl: 'public,max-age=604800' }
+    );
+    const url = await getDownloadURL(audioRef);
+    console.log('✅ Audio upload complete via base64 (FS fallback)');
+    return url;
+  } catch (fsErr) {
+    console.error('❌ Audio upload failed after all strategies:', fsErr);
+    throw fsErr;
   }
 }
 

@@ -14,7 +14,9 @@ export const ActivityIcon = ({
   size = 32,
   color = "#1ae9ef",
 }: ActivityIconProps) => {
-  switch(activity.toLowerCase()) {
+  const activityLower = String(activity || '').toLowerCase().trim();
+  
+  switch(activityLower) {
     case "basketball":
       return <Ionicons name="basketball-outline" size={size} color={color} />;
     case "running":
@@ -28,7 +30,8 @@ export const ActivityIcon = ({
     case "calisthenics":
       return <MaterialCommunityIcons name="weight-lifter" size={size} color={color} />;
     case "padel":
-      return <Ionicons name="tennisball-outline" size={size} color={color} />;
+      // Use racquetball icon for Padel to differentiate from tennis
+      return <MaterialCommunityIcons name="racquetball" size={size} color={color} />;
     case "tennis":
       return <Ionicons name="tennisball-outline" size={size} color={color} />;
     case "cycling":

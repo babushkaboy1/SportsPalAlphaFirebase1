@@ -18,7 +18,7 @@ export default ({ config }: { config: any }) => ({
   ios: {
     supportsTablet: true,
     bundleIdentifier: "com.sportspal",
-    associatedDomains: ["applinks:sportspal.web.app"],
+    associatedDomains: ["applinks:sportspal-1b468.web.app"],
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false,
       NSCameraUsageDescription: "This app uses the camera to allow you to take and upload profile pictures and share photos with friends.",
@@ -46,17 +46,17 @@ export default ({ config }: { config: any }) => ({
         data: [
           {
             scheme: "https",
-            host: "sportspal.web.app",
+            host: "sportspal-1b468.web.app",
             pathPrefix: "/activity"
           },
           {
             scheme: "https",
-            host: "sportspal.web.app",
+            host: "sportspal-1b468.web.app",
             pathPrefix: "/profile"
           },
           {
             scheme: "https",
-            host: "sportspal.web.app",
+            host: "sportspal-1b468.web.app",
             pathPrefix: "/chat"
           }
         ],

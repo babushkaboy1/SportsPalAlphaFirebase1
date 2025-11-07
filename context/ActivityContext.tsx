@@ -14,15 +14,16 @@ import {
   updateActivityInCache,
   clearActivityCache 
 } from '../utils/activityCache';
+import { ActivityJoinLeaveModal } from '../components/ActivityJoinLeaveModal';
 
 type ActivityContextType = {
   joinedActivities: string[];
-  toggleJoinActivity: (activity: Activity) => Promise<void>;
+  toggleJoinActivity: (activity: Activity, onDeleteNavigate?: () => void) => Promise<void>;
   isActivityJoined: (activityId: string) => boolean;
   setJoinedActivities: React.Dispatch<React.SetStateAction<string[]>>;
   allActivities: Activity[];
   reloadAllActivities: (forceRefresh?: boolean) => Promise<void>;
-  profile: any; // <-- Add this line
+  profile: any;
 };
 
 const ActivityContext = createContext<ActivityContextType | undefined>(undefined);
@@ -40,6 +41,32 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [allActivities, setAllActivities] = useState<Activity[]>([]);
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<any>(null);
+
+  // Modal state
+  const [modalVisible, setModalVisible] = useState(false);
+  const [modalMode, setModalMode] = useState<'join' | 'leave'>('join');
+  const [pendingActivity, setPendingActivity] = useState<Activity | null>(null);
+  const [modalResolve, setModalResolve] = useState<((value: boolean) => void) | null>(null);
+
+  // Show modal and wait for user decision
+  const showJoinLeaveModal = (activity: Activity, mode: 'join' | 'leave'): Promise<boolean> => {
+    return new Promise((resolve) => {
+      setPendingActivity(activity);
+      setModalMode(mode);
+      setModalResolve(() => resolve);
+      setModalVisible(true);
+    });
+  };
+
+  const handleModalConfirm = () => {
+    setModalVisible(false);
+    modalResolve?.(true);
+  };
+
+  const handleModalCancel = () => {
+    setModalVisible(false);
+    modalResolve?.(false);
+  };
 
   // Listen for auth state changes
   useEffect(() => {
@@ -169,11 +196,15 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return unsubscribe;
   }, [user?.uid]);
 
-  const toggleJoinActivity = async (activity: Activity): Promise<void> => {
+  const toggleJoinActivity = async (activity: Activity, onDeleteNavigate?: () => void): Promise<void> => {
     try {
       if (!user) return;
       const isJoined = joinedActivities.includes(activity.id);
       const joinedCount = activity.joinedUserIds?.length || 0;
+
+      // Show modal and wait for user confirmation
+      const confirmed = await showJoinLeaveModal(activity, isJoined ? 'leave' : 'join');
+      if (!confirmed) return; // User cancelled
 
       // If user is last participant
       if (isJoined && joinedCount === 1 && activity.joinedUserIds?.includes(user.uid)) {
@@ -187,6 +218,11 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             [
               { text: "Stay", style: "cancel", onPress: () => resolve() },
               { text: isCreator ? "Leave & Delete" : "Leave & Delete", style: "destructive", onPress: async () => {
+                  // NAVIGATE IMMEDIATELY BEFORE DELETION
+                  if (onDeleteNavigate) {
+                    onDeleteNavigate();
+                  }
+                  
                   try {
                     // Delete chat first while we still have permission (we are a participant)
                     const { deleteActivityChat } = await import('../utils/firestoreChats');
@@ -333,6 +369,13 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }}
     >
       {children}
+      <ActivityJoinLeaveModal
+        visible={modalVisible}
+        mode={modalMode}
+        activityName={pendingActivity?.activity || ''}
+        onConfirm={handleModalConfirm}
+        onCancel={handleModalCancel}
+      />
     </ActivityContext.Provider>
   );
 };

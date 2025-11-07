@@ -1,4 +1,46 @@
 {
+  "hosting": {
+    "public": "public",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "/activity/**",
+        "function": "handleDeepLink"
+      },
+      {
+        "source": "/profile/**",
+        "function": "handleDeepLink"
+      },
+      {
+        "source": "/chat/**",
+        "function": "handleDeepLink"
+      }
+    ],
+    "headers": [
+      {
+        "source": "/.well-known/assetlinks.json",
+        "headers": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ]
+      },
+      {
+        "source": "/.well-known/apple-app-site-association",
+        "headers": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ]
+      }
+    ]
+  },
   "functions": [
     {
       "source": "functions",

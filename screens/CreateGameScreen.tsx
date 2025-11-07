@@ -66,6 +66,434 @@ const darkMapStyle = [
   { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#000000' }] },
 ];
 
+// SuccessModal Component with animations
+interface SuccessModalProps {
+  visible: boolean;
+  sport: string;
+  friendProfiles: any[];
+  selectedFriendIds: Record<string, boolean>;
+  invitedFriendIds: string[];
+  createdActivityId: string | null;
+  noSelectionHintVisible: boolean;
+  invitedState: boolean;
+  onSelectFriend: (friendId: string) => void;
+  onInviteFriends: () => void;
+  onGoToDetails: () => void;
+  onClose: () => void;
+}
+
+const SuccessModal: React.FC<SuccessModalProps> = ({
+  visible,
+  sport,
+  friendProfiles,
+  selectedFriendIds,
+  invitedFriendIds,
+  createdActivityId,
+  noSelectionHintVisible,
+  invitedState,
+  onSelectFriend,
+  onInviteFriends,
+  onGoToDetails,
+  onClose,
+}) => {
+  const { theme } = useTheme();
+  
+  const overlayOpacity = useRef(new Animated.Value(0)).current;
+  const scaleAnim = useRef(new Animated.Value(0.7)).current;
+  const slideAnim = useRef(new Animated.Value(50)).current;
+  const iconScale = useRef(new Animated.Value(0)).current;
+  const iconRotate = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (visible) {
+      // Trigger haptic feedback
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      
+      // Staggered entrance animation
+      Animated.parallel([
+        Animated.timing(overlayOpacity, {
+          toValue: 1,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+        Animated.spring(scaleAnim, {
+          toValue: 1,
+          tension: 50,
+          friction: 7,
+          useNativeDriver: true,
+        }),
+        Animated.timing(slideAnim, {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+      ]).start();
+
+      // Delayed icon animation
+      setTimeout(() => {
+        Animated.parallel([
+          Animated.spring(iconScale, {
+            toValue: 1,
+            tension: 100,
+            friction: 5,
+            useNativeDriver: true,
+          }),
+          Animated.timing(iconRotate, {
+            toValue: 1,
+            duration: 600,
+            useNativeDriver: true,
+          }),
+        ]).start();
+      }, 200);
+    } else {
+      overlayOpacity.setValue(0);
+      scaleAnim.setValue(0.7);
+      slideAnim.setValue(50);
+      iconScale.setValue(0);
+      iconRotate.setValue(0);
+    }
+  }, [visible]);
+
+  const iconRotation = iconRotate.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
+
+  if (!visible) return null;
+
+  const styles = StyleSheet.create({
+    overlay: {
+      flex: 1,
+      backgroundColor: 'rgba(0, 0, 0, 0.7)',
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: 20,
+    },
+    modalCard: {
+      width: '100%',
+      maxWidth: 500,
+      backgroundColor: theme.card,
+      borderRadius: 24,
+      padding: 24,
+      borderWidth: 1,
+      borderColor: theme.border,
+      ...Platform.select({
+        ios: {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 8 },
+          shadowOpacity: 0.3,
+          shadowRadius: 16,
+        },
+        android: {
+          elevation: 12,
+        },
+      }),
+    },
+    iconContainer: {
+      width: 90,
+      height: 90,
+      borderRadius: 45,
+      backgroundColor: theme.background,
+      justifyContent: 'center',
+      alignItems: 'center',
+      alignSelf: 'center',
+      marginBottom: 20,
+      borderWidth: 3,
+      borderColor: theme.primary,
+    },
+    title: {
+      fontSize: 26,
+      fontWeight: 'bold',
+      color: theme.primary,
+      marginBottom: 8,
+      textAlign: 'center',
+    },
+    subtitle: {
+      fontSize: 14,
+      color: theme.muted,
+      textAlign: 'center',
+      marginBottom: 20,
+      lineHeight: 20,
+    },
+    sectionTitle: {
+      fontSize: 15,
+      fontWeight: '700',
+      color: theme.text,
+      marginBottom: 12,
+      marginTop: 8,
+    },
+    friendsList: {
+      maxHeight: 260,
+      marginBottom: 16,
+    },
+    friendRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 12,
+      paddingHorizontal: 8,
+      borderRadius: 12,
+      marginBottom: 8,
+      backgroundColor: theme.background,
+    },
+    friendRowInvited: {
+      opacity: 0.5,
+    },
+    friendLeft: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      flex: 1,
+    },
+    friendAvatar: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      marginRight: 12,
+      borderWidth: 2,
+      borderColor: theme.primary,
+    },
+    friendInfo: {
+      flex: 1,
+    },
+    friendName: {
+      color: theme.text,
+      fontWeight: '600',
+      fontSize: 15,
+    },
+    friendBio: {
+      color: theme.muted,
+      fontSize: 12,
+      marginTop: 2,
+    },
+    checkbox: {
+      width: 24,
+      height: 24,
+      borderRadius: 8,
+      borderWidth: 2,
+      borderColor: theme.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    checkboxSelected: {
+      backgroundColor: theme.primary,
+    },
+    noFriends: {
+      fontSize: 14,
+      color: theme.muted,
+      textAlign: 'center',
+      marginVertical: 20,
+    },
+    buttonContainer: {
+      gap: 12,
+      marginTop: 4,
+    },
+    button: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: 16,
+      paddingHorizontal: 20,
+      borderRadius: 12,
+      gap: 10,
+    },
+    primaryButton: {
+      backgroundColor: theme.primary,
+    },
+    primaryButtonDisabled: {
+      backgroundColor: theme.primaryStrong,
+    },
+    secondaryButton: {
+      backgroundColor: 'transparent',
+      borderWidth: 2,
+      borderColor: theme.primary,
+    },
+    buttonText: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: '#fff', // Always white for primary buttons
+    },
+    primaryButtonText: {
+      color: '#fff', // Always white
+    },
+    secondaryButtonText: {
+      color: theme.primary,
+    },
+    toast: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 20,
+      alignItems: 'center',
+    },
+    toastText: {
+      backgroundColor: 'rgba(26, 233, 239, 0.2)',
+      color: theme.text,
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      borderRadius: 16,
+      fontWeight: '600',
+      overflow: 'hidden',
+    },
+  });
+
+  const hasSelectedFriends = Object.keys(selectedFriendIds).some(
+    id => selectedFriendIds[id] && !invitedFriendIds.includes(id)
+  );
+
+  return (
+    <Animated.View style={[styles.overlay, { opacity: overlayOpacity }]}>
+      <Animated.View
+        style={[
+          styles.modalCard,
+          {
+            transform: [
+              { scale: scaleAnim },
+              { translateY: slideAnim },
+            ],
+          },
+        ]}
+      >
+        {/* Animated Activity Icon */}
+        <Animated.View
+          style={[
+            styles.iconContainer,
+            {
+              transform: [
+                { scale: iconScale },
+                { rotate: iconRotation },
+              ],
+            },
+          ]}
+        >
+          <ActivityIcon activity={sport} size={56} color={theme.primary} />
+        </Animated.View>
+
+        {/* Title & Subtitle */}
+        <Text style={styles.title}>🎉 Activity Created!</Text>
+        <Text style={styles.subtitle}>
+          Your {sport} activity is live! Friends can now discover and join from their feed.
+        </Text>
+
+        {/* Friends List */}
+        {friendProfiles.length > 0 ? (
+          <>
+            <Text style={styles.sectionTitle}>
+              Invite friends to join this activity:
+            </Text>
+            <ScrollView style={styles.friendsList} showsVerticalScrollIndicator={false}>
+              {friendProfiles.map((friend: any) => {
+                const invited = invitedFriendIds.includes(friend.uid);
+                const selected = !!selectedFriendIds[friend.uid];
+                return (
+                  <TouchableOpacity
+                    key={friend.uid}
+                    style={[
+                      styles.friendRow,
+                      invited && styles.friendRowInvited,
+                    ]}
+                    onPress={() => onSelectFriend(friend.uid)}
+                    activeOpacity={invited ? 1 : 0.7}
+                    disabled={invited}
+                  >
+                    <View style={styles.friendLeft}>
+                      <Image
+                        source={{
+                          uri: friend.photo || friend.photoURL || 
+                            `https://ui-avatars.com/api/?name=${encodeURIComponent(friend.username || 'User')}`
+                        }}
+                        style={styles.friendAvatar}
+                      />
+                      <View style={styles.friendInfo}>
+                        <Text style={styles.friendName}>
+                          {friend.username || 'User'}
+                        </Text>
+                        {friend.bio ? (
+                          <Text style={styles.friendBio} numberOfLines={1}>
+                            {friend.bio}
+                          </Text>
+                        ) : null}
+                      </View>
+                    </View>
+                    <View
+                      style={[
+                        styles.checkbox,
+                        (selected || invited) && styles.checkboxSelected,
+                      ]}
+                    >
+                      {(selected || invited) && (
+                        <Ionicons
+                          name="checkmark"
+                          size={16}
+                          color={theme.isDark ? '#111' : '#fff'}
+                        />
+                      )}
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+
+            {/* Invite Button */}
+            <TouchableOpacity
+              style={[
+                styles.button,
+                hasSelectedFriends ? styles.primaryButton : styles.primaryButtonDisabled,
+              ]}
+              onPress={onInviteFriends}
+              disabled={!hasSelectedFriends}
+            >
+              <Ionicons
+                name="send"
+                size={20}
+                color="#fff"
+              />
+              <Text style={styles.buttonText}>
+                {invitedState && !hasSelectedFriends
+                  ? 'Friends Invited!'
+                  : 'Send Invites'}
+              </Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <Text style={styles.noFriends}>
+            No friends to invite yet. Add friends to invite them to your activities!
+          </Text>
+        )}
+
+        {/* Action Buttons */}
+        <View style={styles.buttonContainer}>
+          <TouchableOpacity
+            style={[styles.button, styles.primaryButton]}
+            onPress={onGoToDetails}
+          >
+            <Ionicons name="information-circle" size={20} color="#fff" />
+            <Text style={styles.buttonText}>
+              View Activity Details
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.button, styles.secondaryButton]}
+            onPress={onClose}
+          >
+            <Ionicons name="checkmark-circle" size={20} color={theme.primary} />
+            <Text style={[styles.buttonText, styles.secondaryButtonText]}>
+              Done
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Toast */}
+        {noSelectionHintVisible && (
+          <View style={styles.toast} pointerEvents="none">
+            <Text style={styles.toastText}>Please select friends to invite</Text>
+          </View>
+        )}
+      </Animated.View>
+    </Animated.View>
+  );
+};
+
 const CreateGameScreen = () => {
   const navigation = useNavigation<NavigationProp>();
   const { theme } = useTheme();
@@ -362,15 +790,21 @@ const CreateGameScreen = () => {
         await getOrCreateChatForActivity(newId, uid);
       } catch {}
 
+      // Save the sport type BEFORE resetting form
+      const createdSport = sport;
       resetForm();
       setCreatedActivityId(newId);
+      // Restore sport temporarily for the success modal
+      setSport(createdSport);
       setShowSuccessModal(true);
-      // Load friends for modal
+      // Load friends for modal (exclude self)
       const myFriendIds: string[] = Array.isArray(profile?.friends) ? profile.friends : [];
       if (myFriendIds.length) {
         try {
           const users = await import('../utils/firestoreFriends').then(mod => mod.fetchUsersByIds(myFriendIds));
-          setFriendProfiles(users);
+          // Filter out current user from friends list
+          const filteredUsers = users.filter((u: any) => u.uid !== uid);
+          setFriendProfiles(filteredUsers);
         } catch {
           setFriendProfiles([]);
         }
@@ -514,149 +948,80 @@ const CreateGameScreen = () => {
         <Modal
           visible={showSuccessModal}
           transparent
-          animationType="fade"
+          animationType="none"
           onRequestClose={() => setShowSuccessModal(false)}
         >
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalCard}>
-              <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>Activity Created!</Text>
-              </View>
-              <Text style={styles.modalSubtitle}>
-                Your activity has been successfully created. You can now invite your friends and let people discover this activity from their Discover page.
-              </Text>
-              {friendProfiles.length > 0 ? (
-                <>
-                  <Text style={styles.modalSubtitle}>Select friends to invite to this activity:</Text>
-                  <ScrollView style={{ maxHeight: 260 }}>
-                    {friendProfiles.map((f: any) => {
-                      const invited = invitedFriendIds.includes(f.uid);
-                      const selected = !!selectedFriendIds[f.uid];
-                      return (
-                        <TouchableOpacity
-                          key={f.uid}
-                          style={[styles.friendRow, invited && { opacity: 0.5 }]} // blur if invited
-                          onPress={() => {
-                            if (!invited) {
-                              setSelectedFriendIds(prev => ({ ...prev, [f.uid]: !prev[f.uid] }));
-                            }
-                          }}
-                          activeOpacity={invited ? 1 : 0.7}
-                          disabled={invited}
-                        >
-                          <View style={styles.friendLeft}>
-                            <Image
-                              source={{ uri: f.photo || f.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(f.username || 'User')}` }}
-                              style={styles.friendAvatar}
-                            />
-                            <View>
-                              <Text style={styles.friendName}>{f.username || 'User'}</Text>
-                              {f.bio ? <Text style={styles.friendMeta}>{f.bio}</Text> : null}
-                            </View>
-                          </View>
-                          <View style={[styles.checkbox, (selected || invited) && styles.checkboxSelected]}>
-                            {(selected || invited) && <Ionicons name="checkmark" size={16} color={theme.isDark ? '#111' : '#fff'} />}
-                          </View>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </ScrollView>
-                  <View style={styles.modalActions}>
-                    <TouchableOpacity
-                      style={[styles.modalConfirm,
-                        // Button color logic
-                        Object.keys(selectedFriendIds).some(id => selectedFriendIds[id] && !invitedFriendIds.includes(id))
-                          ? { backgroundColor: theme.primary }
-                          : { backgroundColor: theme.primaryStrong }
-                      ]}
-                      onPress={async () => {
-                        // Invite logic
-                        const selected = Object.keys(selectedFriendIds).filter(id => selectedFriendIds[id] && !invitedFriendIds.includes(id));
-                        if (selected.length === 0) {
-                          setNoSelectionHintVisible(true);
-                          if (noSelectionTimerRef.current) clearTimeout(noSelectionTimerRef.current);
-                          noSelectionTimerRef.current = setTimeout(() => setNoSelectionHintVisible(false), 1800);
-                          return;
-                        }
-                        let sent = 0;
-                        let skipped = 0;
-                        if (!createdActivityId) return;
-                        const newlyInvited: string[] = [];
-                        for (const friendId of selected) {
-                          try {
-                            const res = await import('../utils/firestoreInvites').then(mod => mod.sendActivityInvites(friendId, [createdActivityId as string]));
-                            if ((res?.sentIds || []).length > 0) {
-                              sent += 1;
-                              newlyInvited.push(friendId);
-                            } else {
-                              skipped += 1;
-                            }
-                          } catch {
-                            skipped += 1;
-                          }
-                        }
-                        setInvitedFriendIds(prev => Array.from(new Set([...prev, ...newlyInvited])));
-                        setInvitedState(true);
-                        // Unselect all after sending
-                        setSelectedFriendIds({});
-                        Alert.alert('Invites',
-                          sent > 0
-                            ? `Sent invites to ${sent} friend${sent === 1 ? '' : 's'}${skipped ? ` (skipped ${skipped} already joined)` : ''}.`
-                            : `No invites sent. ${skipped} skipped (already joined).`
-                        );
-                      }}
-                      disabled={
-                        !Object.keys(selectedFriendIds).some(
-                          id => selectedFriendIds[id] && !invitedFriendIds.includes(id)
-                        )
-                      }
-                    >
-                      <Text
-                        style={[styles.modalConfirmText,
-                          Object.keys(selectedFriendIds).some(id => selectedFriendIds[id] && !invitedFriendIds.includes(id))
-                            ? { color: theme.isDark ? '#111' : '#fff' }
-                            : { color: '#fff' }
-                        ]}
-                      >
-                        {Object.keys(selectedFriendIds).some(id => selectedFriendIds[id] && !invitedFriendIds.includes(id))
-                          ? 'Invite Selected Friends'
-                          : invitedState
-                            ? 'Selected friends invited'
-                            : 'Invite Selected Friends'}
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                </>
-              ) : (
-                <Text style={styles.modalSubtitle}>You have no friends to invite yet.</Text>
-              )}
-              <View style={styles.modalActions}>
-                <TouchableOpacity
-                  style={styles.modalConfirm}
-                  onPress={() => {
-                    if (createdActivityId) {
-                      setShowSuccessModal(false);
-                      navigation.navigate('ActivityDetails', { activityId: createdActivityId });
-                    }
-                  }}
-                >
-                  <Text style={styles.modalConfirmText}>Go to Activity Details</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.modalCancel}
-                  onPress={() => setShowSuccessModal(false)}
-                >
-                  <Text style={styles.modalCancelText}>Close</Text>
-                </TouchableOpacity>
-              </View>
-              {noSelectionHintVisible && (
-                <View style={styles.bottomToast} pointerEvents="none">
-                  <Text style={styles.bottomToastText}>No friends selected</Text>
-                </View>
-              )}
-            </View>
-          </View>
+          {/* Pass sport with fallback to prevent empty/undefined issues */}
+          <SuccessModal
+            visible={showSuccessModal}
+            sport={sport || 'Soccer'}
+            friendProfiles={friendProfiles}
+            selectedFriendIds={selectedFriendIds}
+            invitedFriendIds={invitedFriendIds}
+            createdActivityId={createdActivityId}
+            noSelectionHintVisible={noSelectionHintVisible}
+            invitedState={invitedState}
+            onSelectFriend={(friendId: string) => {
+              if (!invitedFriendIds.includes(friendId)) {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setSelectedFriendIds(prev => ({ ...prev, [friendId]: !prev[friendId] }));
+              }
+            }}
+            onInviteFriends={async () => {
+              const selected = Object.keys(selectedFriendIds).filter(id => selectedFriendIds[id] && !invitedFriendIds.includes(id));
+              if (selected.length === 0) {
+                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                setNoSelectionHintVisible(true);
+                if (noSelectionTimerRef.current) clearTimeout(noSelectionTimerRef.current);
+                noSelectionTimerRef.current = setTimeout(() => setNoSelectionHintVisible(false), 1800);
+                return;
+              }
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              let sent = 0;
+              let skipped = 0;
+              if (!createdActivityId) return;
+              const newlyInvited: string[] = [];
+              for (const friendId of selected) {
+                try {
+                  const res = await import('../utils/firestoreInvites').then(mod => mod.sendActivityInvites(friendId, [createdActivityId as string]));
+                  if ((res?.sentIds || []).length > 0) {
+                    sent += 1;
+                    newlyInvited.push(friendId);
+                  } else {
+                    skipped += 1;
+                  }
+                } catch {
+                  skipped += 1;
+                }
+              }
+              setInvitedFriendIds(prev => Array.from(new Set([...prev, ...newlyInvited])));
+              setInvitedState(true);
+              setSelectedFriendIds({});
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              Alert.alert('Invites',
+                sent > 0
+                  ? `Sent invites to ${sent} friend${sent === 1 ? '' : 's'}${skipped ? ` (skipped ${skipped} already joined)` : ''}.`
+                  : `No invites sent. ${skipped} skipped (already joined).`
+              );
+            }}
+            onGoToDetails={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              if (createdActivityId) {
+                setShowSuccessModal(false);
+                // Clear sport after navigating since form was already reset
+                setSport('');
+                navigation.navigate('ActivityDetails', { activityId: createdActivityId });
+              }
+            }}
+            onClose={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              setShowSuccessModal(false);
+              // Clear sport after modal closes since form was already reset
+              setSport('');
+            }}
+          />
         </Modal>
+
         <View style={styles.header}>
           <Text style={styles.headerTitle}>Create Activity</Text>
         </View>

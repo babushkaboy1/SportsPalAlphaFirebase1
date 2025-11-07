@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SportsPal - Find Your Game, Play Together</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(180deg, #0a0a0a 0%, #1a1a1a 100%);
+            min-height: 100vh;
+            color: #ffffff;
+            overflow-x: hidden;
+        }
+        
+        .background-gradient {
+            position: fixed;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle at 50% 50%, rgba(26, 233, 239, 0.15) 0%, transparent 50%);
+            animation: pulse 8s ease-in-out infinite;
+            pointer-events: none;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 0.3; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.1); }
+        }
+        
+        .container {
+            position: relative;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 40px 24px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 48px;
+            animation: fadeInUp 0.8s ease-out;
+        }
+        
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .logo-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        
+        .logo {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, #1ae9ef 0%, #15b8bd 100%);
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 40px;
+            box-shadow: 0 8px 32px rgba(26, 233, 239, 0.3);
+        }
+        
+        h1 {
+            font-size: 48px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #1ae9ef 0%, #ffffff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 16px;
+            letter-spacing: -1px;
+        }
+        
+        .tagline {
+            font-size: 20px;
+            color: #9ca3af;
+            font-weight: 500;
+            margin-bottom: 32px;
+        }
+        
+        .description {
+            font-size: 18px;
+            color: #d1d5db;
+            line-height: 1.7;
+            max-width: 600px;
+            margin: 0 auto 48px;
+        }
+        
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 24px;
+            width: 100%;
+            max-width: 900px;
+            margin-bottom: 64px;
+            animation: fadeInUp 0.8s ease-out 0.2s both;
+        }
+        
+        .feature-card {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            padding: 32px 24px;
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+        
+        .feature-card:hover {
+            transform: translateY(-8px);
+            background: rgba(26, 233, 239, 0.1);
+            border-color: rgba(26, 233, 239, 0.3);
+            box-shadow: 0 16px 48px rgba(26, 233, 239, 0.2);
+        }
+        
+        .feature-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+            display: block;
+        }
+        
+        .feature-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #ffffff;
+            margin-bottom: 8px;
+        }
+        
+        .feature-desc {
+            font-size: 14px;
+            color: #9ca3af;
+            line-height: 1.5;
+        }
+        
+        .download-section {
+            text-align: center;
+            animation: fadeInUp 0.8s ease-out 0.4s both;
+        }
+        
+        .download-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: #ffffff;
+            margin-bottom: 24px;
+        }
+        
+        .store-buttons {
+            display: flex;
+            gap: 16px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        
+        .store-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 12px;
+            padding: 16px 32px;
+            text-decoration: none;
+            border-radius: 16px;
+            font-weight: 600;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            border: 2px solid transparent;
+        }
+        
+        .store-button.ios {
+            background: #ffffff;
+            color: #000000;
+        }
+        
+        .store-button.ios:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 40px rgba(255, 255, 255, 0.3);
+        }
+        
+        .store-button.android {
+            background: #1ae9ef;
+            color: #000000;
+        }
+        
+        .store-button.android:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 40px rgba(26, 233, 239, 0.4);
+        }
+        
+        .store-icon {
+            width: 24px;
+            height: 24px;
+        }
+        
+        .activity-icons {
+            display: flex;
+            gap: 16px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin: 64px 0 32px;
+            animation: fadeInUp 0.8s ease-out 0.6s both;
+        }
+        
+        .activity-icon {
+            width: 56px;
+            height: 56px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 28px;
+            transition: all 0.3s ease;
+        }
+        
+        .activity-icon:hover {
+            transform: scale(1.1) rotate(5deg);
+            background: rgba(26, 233, 239, 0.15);
+            border-color: rgba(26, 233, 239, 0.3);
+        }
+        
+        .footer {
+            margin-top: auto;
+            padding-top: 48px;
+            text-align: center;
+            color: #6b7280;
+            font-size: 14px;
+        }
+        
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 36px;
+            }
+            
+            .tagline {
+                font-size: 18px;
+            }
+            
+            .description {
+                font-size: 16px;
+            }
+            
+            .features {
+                grid-template-columns: 1fr;
+            }
+            
+            .logo {
+                width: 64px;
+                height: 64px;
+                font-size: 32px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="background-gradient"></div>
+    
+    <div class="container">
+        <div class="header">
+            <div class="logo-container">
+                <div class="logo"></div>
+            </div>
+            <h1>SportsPal</h1>
+            <p class="tagline">Find Your Game, Play Together</p>
+            <p class="description">
+                Discover local sports activities, connect with athletes in your area, and never miss a game. 
+                From pickup basketball to trail running, find your next adventure.
+            </p>
+        </div>
+        
+        <div class="features">
+            <div class="feature-card">
+                <span class="feature-icon">📍</span>
+                <div class="feature-title">Discover Nearby</div>
+                <p class="feature-desc">Find activities and games happening around you in real-time</p>
+            </div>
+            
+            <div class="feature-card">
+                <span class="feature-icon">👥</span>
+                <div class="feature-title">Join & Connect</div>
+                <p class="feature-desc">Meet like-minded athletes and build your sports community</p>
+            </div>
+            
+            <div class="feature-card">
+                <span class="feature-icon">💬</span>
+                <div class="feature-title">Group Chat</div>
+                <p class="feature-desc">Coordinate with your team and stay in touch with your crew</p>
+            </div>
+            
+            <div class="feature-card">
+                <span class="feature-icon">📅</span>
+                <div class="feature-title">Easy Planning</div>
+                <p class="feature-desc">Create events, invite friends, and manage your sports schedule</p>
+            </div>
+        </div>
+        
+        <div class="activity-icons">
+            <div class="activity-icon">⚽</div>
+            <div class="activity-icon">🏀</div>
+            <div class="activity-icon">🎾</div>
+            <div class="activity-icon">🏃</div>
+            <div class="activity-icon">🚴</div>
+            <div class="activity-icon">🏋️</div>
+            <div class="activity-icon">⛰️</div>
+            <div class="activity-icon">🏐</div>
+        </div>
+        
+        <div class="download-section">
+            <h2 class="download-title">Get Started Today</h2>
+            <div class="store-buttons">
+                <a href="https://apps.apple.com/app/sportspal" class="store-button ios">
+                    <svg class="store-icon" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/>
+                    </svg>
+                    <span>Download on App Store</span>
+                </a>
+                <a href="https://play.google.com/store/apps/details?id=com.sportspal.app" class="store-button android">
+                    <svg class="store-icon" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M3,20.5V3.5C3,2.91 3.34,2.39 3.84,2.15L13.69,12L3.84,21.85C3.34,21.6 3,21.09 3,20.5M16.81,15.12L6.05,21.34L14.54,12.85L16.81,15.12M20.16,10.81C20.5,11.08 20.75,11.5 20.75,12C20.75,12.5 20.53,12.9 20.18,13.18L17.89,14.5L15.39,12L17.89,9.5L20.16,10.81M6.05,2.66L16.81,8.88L14.54,11.15L6.05,2.66Z"/>
+                    </svg>
+                    <span>Get it on Google Play</span>
+                </a>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>© 2025 SportsPal. Find your game, play together.</p>
+        </div>
+    </div>
+    
+    <script>
+        // Detect deep link and redirect to app
+        const path = window.location.pathname;
+        const isDeepLink = path.startsWith('/activity/') || 
+                          path.startsWith('/profile/') || 
+                          path.startsWith('/chat/');
+        
+        if (isDeepLink) {
+            // Try to open in app
+            const appScheme = `sportspal:/${path}`;
+            
+            // Try app scheme first
+            window.location.href = appScheme;
+            
+            // If app doesn't open in 2.5 seconds, redirect to stores
+            setTimeout(() => {
+                const userAgent = navigator.userAgent.toLowerCase();
+                if (userAgent.includes('iphone') || userAgent.includes('ipad')) {
+                    window.location.href = 'https://apps.apple.com/app/sportspal';
+                } else if (userAgent.includes('android')) {
+                    window.location.href = 'https://play.google.com/store/apps/details?id=com.sportspal.app';
+                }
+            }, 2500);
+        }
+    </script>
+</body>
+</html>

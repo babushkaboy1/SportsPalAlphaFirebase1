@@ -6,7 +6,7 @@ import * as Linking from 'expo-linking';
 import { Platform, Share, Clipboard } from 'react-native';
 
 // Your app's domain (will be yourapp.web.app or custom domain)
-const APP_DOMAIN = 'sportspal.web.app'; // TODO: Replace with your actual Firebase Hosting domain
+const APP_DOMAIN = 'sportspal-1b468.web.app'; // Your Firebase Hosting domain
 
 /**
  * Generate a deep link URL for an activity

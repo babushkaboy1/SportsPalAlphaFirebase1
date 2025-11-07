@@ -150,11 +150,14 @@ export const handleDeepLink = onRequest(async (request, response) => {
   const isIOS = /iPhone|iPad|iPod/i.test(userAgent);
   const isAndroid = /Android/i.test(userAgent);
 
-  // App Store URLs (REPLACE WITH YOUR ACTUAL URLs)
-  const appStoreUrl = "https://apps.apple.com/app/sportspal/id123456789"; // Replace with actual App Store URL
-  const playStoreUrl = "https://play.google.com/store/apps/details?id=com.yourusername.sportspal"; // Replace with actual package name
+  // App Store URLs (REPLACE WITH YOUR ACTUAL URLs WHEN PUBLISHED)
+  const appStoreUrl = "https://apps.apple.com/app/sportspal/id123456789"; // TODO: Replace when app is published
+  const playStoreUrl = "https://play.google.com/store/apps/details?id=com.babushkaboy1.sportspal"; // Update with your actual package name
 
-  // Generate fallback HTML page
+  // App scheme for direct opening
+  const appScheme = `sportspal://${type}/${id}`;
+
+  // Generate fallback HTML page with auto-redirect attempt
   const fallbackHtml = `
     <!DOCTYPE html>
     <html lang="en">
@@ -210,13 +213,30 @@ export const handleDeepLink = onRequest(async (request, response) => {
           font-size: 4em;
           margin-bottom: 0.5em;
         }
+        #status {
+          margin-top: 20px;
+          font-size: 0.9em;
+          opacity: 0.8;
+        }
       </style>
+      <script>
+        // Try to open the app automatically
+        setTimeout(() => {
+          window.location.href = '${appScheme}';
+        }, 100);
+
+        // If app doesn't open in 2.5 seconds, user will see the download buttons
+        setTimeout(() => {
+          document.getElementById('status').innerHTML = 'App not installed? Download below:';
+        }, 2500);
+      </script>
     </head>
     <body>
       <div class="container">
         <div class="app-icon">🏀</div>
         <h1>SportsPal</h1>
-        <p>Open this ${type} in the SportsPal app</p>
+        <p>Opening ${type} in the SportsPal app...</p>
+        <div id="status">Please wait...</div>
         <div class="buttons">
           ${isIOS ? `<a href="${appStoreUrl}">Download on App Store</a>` : ""}
           ${isAndroid ? `<a href="${playStoreUrl}">Download on Google Play</a>` : ""}

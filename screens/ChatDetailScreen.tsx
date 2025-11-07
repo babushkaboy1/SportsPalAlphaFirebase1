@@ -65,6 +65,7 @@ import {
   fetchOlderMessagesPage,
   listenToLatestMessages,
   listenToReactions,
+  getCachedProfile,
 } from '../utils/firestoreChats';
 import { sendActivityInvites } from '../utils/firestoreInvites';
 import {
@@ -637,6 +638,8 @@ const ChatDetailScreen = () => {
   const audioPlayer = useAudioPlayer();
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
   const [playbackRate, setPlaybackRate] = useState(1.0);
+  const [audioTick, setAudioTick] = useState(0); // drives progress UI updates
+  const prevPlayingRef = useRef(false);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
   const recordingTimerRef = useRef<any>(null);
@@ -1070,6 +1073,51 @@ const ChatDetailScreen = () => {
     fetchProfiles();
   }, [messages, typingUsers, chatMeta.participants]);
 
+  // Retry fetch for profiles missing a photo (handles race where initial profile exists but photo added shortly after)
+  useEffect(() => {
+    const missingPhotoIds = Object.entries(profiles)
+      .filter(([_, p]) => !p.photo && !p.photoURL && p.uid !== 'system')
+      .map(([uid]) => uid);
+    if (!missingPhotoIds.length) return;
+    let cancelled = false;
+    (async () => {
+      for (const uid of missingPhotoIds) {
+        try {
+          const fresh = await getCachedProfile(uid);
+          if (!cancelled && fresh && (fresh.photo || fresh.photoURL)) {
+            setProfiles(prev => ({
+              ...prev,
+              [uid]: {
+                uid,
+                username: fresh.username || prev[uid]?.username || 'User',
+                photo: fresh.photo || fresh.photoURL,
+                photoURL: fresh.photoURL || fresh.photo,
+              }
+            }));
+          }
+        } catch {}
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [profiles]);
+
+  // Ensure auto-scroll for new messages even if user is near (but not exactly at) bottom (< 120px)
+  useEffect(() => {
+    if (!messages.length) return;
+  // Removed direct contentSize access (not typed) – rely on length diff and bottom proximity flags instead
+    // Fallback: if lastLengthRef smaller than current, treat as new messages
+    const added = messages.length - lastLengthRef.current;
+    if (added > 0) {
+      // If user near bottom OR the new messages are mine, scroll
+      const lastMsg = messages[messages.length - 1];
+      const isMine = lastMsg.senderId === auth.currentUser?.uid;
+      if (isAtBottomRef.current || isMine) {
+        requestAnimationFrame(() => scrollToBottom(true));
+      }
+      lastLengthRef.current = messages.length;
+    }
+  }, [messages, scrollToBottom]);
+
   // ========== LISTEN TO REACTIONS ==========
   useEffect(() => {
     const limit = 60;
@@ -1204,42 +1252,12 @@ const ChatDetailScreen = () => {
 
   const stopRecording = useCallback(async () => {
     if (!isRecording || !auth.currentUser) return;
-
-    let base64Audio: string | null = null;
-
     try {
-      console.log('🎤 Stopping recording...');
-      
-      // Get the URI BEFORE stopping
-      const originalUri = audioRecorder.uri;
-      console.log('🎤 Got URI before stop:', originalUri);
-      
-      if (!originalUri || originalUri.trim() === '') {
-        console.error('❌ No URI from recording');
-        Alert.alert('Recording Error', 'No audio was recorded.');
-        
-        // Still need to clean up
-        if (recordingTimerRef.current) {
-          clearInterval(recordingTimerRef.current);
-          recordingTimerRef.current = null;
-        }
-        recordingAnimRef.stopAnimation();
-        recordingAnimRef.setValue(0);
-        setIsRecording(false);
-        await audioRecorder.stop();
-        await AudioModule.setAudioModeAsync({
-          allowsRecording: false,
-          playsInSilentMode: true,
-        });
-        return;
-      }
+      console.log('🎤 Stopping recording (robust)...');
 
-      // Check minimum duration (at least 1 second)
+      // Minimum duration guard
       if (recordingDuration < 1) {
-        console.log('⚠️ Recording too short');
         Alert.alert('Too Short', 'Voice message must be at least 1 second long.');
-        
-        // Clean up
         if (recordingTimerRef.current) {
           clearInterval(recordingTimerRef.current);
           recordingTimerRef.current = null;
@@ -1247,28 +1265,125 @@ const ChatDetailScreen = () => {
         recordingAnimRef.stopAnimation();
         recordingAnimRef.setValue(0);
         setIsRecording(false);
-        await audioRecorder.stop();
-        await AudioModule.setAudioModeAsync({
-          allowsRecording: false,
-          playsInSilentMode: true,
-        });
+        try { await audioRecorder.stop(); } catch {}
+        await AudioModule.setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+        setRecordingDuration(0);
         return;
       }
 
-      // Pause first to keep file, then read, then stop
-      console.log('Pausing recorder...');
-      await audioRecorder.pause();
-      
-      console.log('Reading audio file...');
-      base64Audio = await FileSystem.readAsStringAsync(originalUri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      console.log('Audio file read successfully');
-      
-      // Now stop to clean up
-      await audioRecorder.stop();
+      // Stop first; capture return value if provided
+      let stoppedResult: any = null;
+      try {
+        stoppedResult = await audioRecorder.stop();
+      } catch (e) {
+        console.warn('⚠️ stop() threw, continuing with URI property', e);
+      }
+      try { console.log('🧪 stoppedResult:', JSON.stringify(stoppedResult)); } catch {}
+      const candidateUris = [
+        stoppedResult?.uri,
+        stoppedResult?.fileUri,
+        stoppedResult?.path,
+        stoppedResult?.recording?.getURI?.(),
+        stoppedResult?.recording?.uri,
+        audioRecorder.uri,
+        (audioRecorder as any)?.fileUri,
+        (audioRecorder as any)?.path,
+        (audioRecorder as any)?.recording?.getURI?.(),
+        (audioRecorder as any)?.recording?.uri,
+      ].filter(Boolean);
 
-      // Clean up UI state
+      let finalUri: string | null = null;
+      if (candidateUris.length) {
+        // Try each candidate until one exists
+        for (const u of candidateUris) {
+          let info = await FileSystem.getInfoAsync(u).catch(() => ({ exists: false } as any));
+          let attempts = 0;
+          while (!info.exists && attempts < 6) {
+            await new Promise(r => setTimeout(r, 140));
+            info = await FileSystem.getInfoAsync(u).catch(() => ({ exists: false } as any));
+            attempts++;
+          }
+          if (info.exists) {
+            finalUri = u;
+            break;
+          }
+        }
+      }
+
+      // Directory fallback: scan sibling dir then cache root for latest .m4a
+      if (!finalUri && candidateUris[0]) {
+        const dir = candidateUris[0].split('/').slice(0, -1).join('/') + '/';
+        try {
+          const listing = await (FileSystem as any).readDirectoryAsync?.(dir);
+          if (Array.isArray(listing)) {
+            const recs = listing.filter((n: string) => n.startsWith('recording-') && n.endsWith('.m4a'));
+            if (recs.length) {
+              // Pick the longest name (heuristic for most recent) – could also stat each
+              const pick = recs.sort((a,b) => b.localeCompare(a))[0];
+              finalUri = dir + pick;
+              console.log('🔄 Fallback picked file:', finalUri);
+            }
+          }
+        } catch (e) {
+          console.warn('Fallback directory scan failed', e);
+        }
+      }
+
+      if (!finalUri) {
+        // Android-specific scan of cacheDirectory for latest .m4a
+        try {
+          const cacheDir = (FileSystem as any).cacheDirectory || '';
+          if (cacheDir) {
+            const listing = await (FileSystem as any).readDirectoryAsync?.(cacheDir);
+            if (Array.isArray(listing)) {
+              const m4as = listing.filter((n: string) => n.endsWith('.m4a'));
+              if (m4as.length) {
+                let chosen = m4as[0];
+                let chosenMtime = 0;
+                for (const f of m4as) {
+                  try {
+                    const info = await FileSystem.getInfoAsync(cacheDir + f);
+                    const mt = (info as any)?.modificationTime || 0;
+                    if (mt > chosenMtime) { chosenMtime = mt; chosen = f; }
+                  } catch {}
+                }
+                finalUri = cacheDir + chosen;
+                console.log('📂 Android cache root selected:', finalUri);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('Android cache scan failed', e);
+        }
+      }
+      if (!finalUri) {
+        // Fallback: use first candidate even if not confirmed
+        finalUri = candidateUris[0];
+        console.warn('⚠️ Using candidate URI without getInfoAsync confirmation:', finalUri);
+      }
+      console.log('🎤 Final recording URI:', finalUri);
+
+      // Last-chance fetch test (some iOS URIs readable via fetch but not infoAsync immediately)
+      const assuredUri = finalUri as string; // ensured above
+      let ensureExists = await FileSystem.getInfoAsync(assuredUri).catch(() => ({ exists: false } as any));
+      if (!ensureExists.exists) {
+        try {
+          const resp = await fetch(assuredUri);
+          if (!resp.ok) throw new Error('fetch not ok');
+          console.log('🌐 fetch() succeeded for audio file');
+        } catch (ef) {
+          console.warn('fetch() could not read audio file', ef);
+        }
+      }
+
+      const audioId = `audio_${Date.now()}_${Math.random().toString(36).slice(2,9)}`;
+      console.log('☁️ Uploading audio...');
+  const downloadUrl = await uploadAudioMessage(assuredUri, auth.currentUser.uid, audioId);
+      console.log('✅ Audio uploaded:', downloadUrl);
+      await sendMessage(chatId, auth.currentUser.uid, downloadUrl, 'audio');
+      console.log('✅ Audio message sent');
+
+      // Cleanup UI state
       if (recordingTimerRef.current) {
         clearInterval(recordingTimerRef.current);
         recordingTimerRef.current = null;
@@ -1276,68 +1391,23 @@ const ChatDetailScreen = () => {
       recordingAnimRef.stopAnimation();
       recordingAnimRef.setValue(0);
       setIsRecording(false);
-
-      // Generate unique ID for this audio message
-      const audioId = `audio_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      
-      // Create a temporary file from base64
-      const tempUri = `${FileSystem.cacheDirectory}${audioId}.m4a`;
-      console.log('💾 Writing to temporary file:', tempUri);
-      await FileSystem.writeAsStringAsync(tempUri, base64Audio, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      
-      console.log('☁️ Uploading audio to Firebase Storage...');
-      console.log('📁 Audio ID:', audioId);
-      
-      // Upload to Firebase Storage
-      const downloadUrl = await uploadAudioMessage(tempUri, auth.currentUser.uid, audioId);
-      console.log('✅ Audio uploaded:', downloadUrl);
-
-      // Clean up the temporary file
-      try {
-        await FileSystem.deleteAsync(tempUri, { idempotent: true });
-        console.log('🗑️ Temporary file deleted');
-      } catch (deleteError) {
-        console.warn('⚠️ Could not delete temp file:', deleteError);
-      }
-
-      // Send message with the download URL
-      await sendMessage(chatId, auth.currentUser.uid, downloadUrl, 'audio');
-      console.log('✅ Audio message sent');
-
-      // Reset audio mode
-      await AudioModule.setAudioModeAsync({
-        allowsRecording: false,
-        playsInSilentMode: true,
-      });
-      
       setRecordingDuration(0);
-    } catch (error) {
-      console.error('❌ Stop recording error:', error);
+      await AudioModule.setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+    } catch (error: any) {
+      console.error('❌ Stop recording error (robust):', error);
+      Alert.alert('Recording Error', error?.message || 'Could not save recording.');
+      try { await audioRecorder.stop(); } catch {}
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+        recordingTimerRef.current = null;
+      }
+      recordingAnimRef.stopAnimation();
+      recordingAnimRef.setValue(0);
       setIsRecording(false);
       setRecordingDuration(0);
-      
-      // Try to clean up recording
-      try {
-        await audioRecorder.stop();
-      } catch (e) {
-        console.error('Error stopping recorder:', e);
-      }
-      
-      Alert.alert('Recording Error', 'Could not save recording. Please try again.');
-      
-      // Try to reset audio mode
-      try {
-        await AudioModule.setAudioModeAsync({
-          allowsRecording: false,
-          playsInSilentMode: true,
-        });
-      } catch (e) {
-        console.error('Error resetting audio mode:', e);
-      }
+      try { await AudioModule.setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }); } catch {}
     }
-  }, [audioRecorder, chatId, recordingDuration, recordingAnimRef, isRecording]);
+  }, [audioRecorder, chatId, isRecording, recordingDuration, recordingAnimRef]);
 
   const cancelRecording = useCallback(async () => {
     if (!isRecording) return;
@@ -1372,26 +1442,73 @@ const ChatDetailScreen = () => {
     }
   }, [audioRecorder, recordingAnimRef, isRecording]);
 
-  const handlePlayAudio = useCallback((uri: string, id: string) => {
-    if (playingAudioId === id) {
-      if (audioPlayer.playing) {
-        audioPlayer.pause();
+  // Helper to set playback rate across platforms/APIs
+  const setPlayerRate = useCallback(async (rate: number) => {
+    try {
+      const anyPlayer: any = audioPlayer as any;
+      if (typeof anyPlayer.setPlaybackRateAsync === 'function') {
+        await anyPlayer.setPlaybackRateAsync(rate);
+      } else if (typeof anyPlayer.setPlaybackRate === 'function') {
+        await anyPlayer.setPlaybackRate(rate);
+      } else if (typeof anyPlayer.setRateAsync === 'function') {
+        await anyPlayer.setRateAsync(rate, true);
       } else {
-        audioPlayer.play();
+        // property setter not allowed; skip silently
       }
-      return;
+    } catch (e) {
+      console.warn('setPlayerRate error', e);
     }
+  }, [audioPlayer]);
 
-    setPlayingAudioId(id);
-    audioPlayer.replace(uri);
-    audioPlayer.play();
-  }, [playingAudioId, audioPlayer]);
+  const handlePlayAudio = useCallback((uri: string, id: string) => {
+    (async () => {
+      try {
+        if (playingAudioId === id) {
+          if (audioPlayer.playing) {
+            await audioPlayer.pause();
+          } else {
+            await setPlayerRate(playbackRate);
+            await audioPlayer.play();
+          }
+          return;
+        }
+        setPlayingAudioId(id);
+        await audioPlayer.replace(uri);
+        await setPlayerRate(playbackRate);
+        await audioPlayer.play();
+      } catch (e) {
+        console.warn('Audio play error', e);
+        setPlayingAudioId(null);
+      }
+    })();
+  }, [playingAudioId, audioPlayer, playbackRate, setPlayerRate]);
 
   const handleSpeedChange = useCallback(() => {
     const newRate = playbackRate === 1 ? 1.5 : playbackRate === 1.5 ? 2 : 1;
     setPlaybackRate(newRate);
-    audioPlayer.playbackRate = newRate;
-  }, [playbackRate, audioPlayer]);
+    setPlayerRate(newRate);
+  }, [playbackRate, setPlayerRate]);
+
+  // Periodic progress updates and end detection
+  useEffect(() => {
+    let interval: any;
+    if (audioPlayer.playing) {
+      interval = setInterval(() => {
+        setAudioTick(Date.now());
+        // detect end transitions
+        if (prevPlayingRef.current && !audioPlayer.playing) {
+          setPlayingAudioId(null);
+        }
+        prevPlayingRef.current = audioPlayer.playing;
+      }, 250);
+    } else {
+      if (prevPlayingRef.current && !audioPlayer.playing) {
+        setPlayingAudioId(null);
+      }
+      prevPlayingRef.current = audioPlayer.playing;
+    }
+    return () => interval && clearInterval(interval);
+  }, [audioPlayer.playing, playingAudioId]);
 
   // ========== IMAGES ==========
   const handleCamera = useCallback(async () => {
@@ -1986,9 +2103,10 @@ const ChatDetailScreen = () => {
     myReactions,
     reactionPickerId,
     playingAudioId,
-    audioPlayer.playing,
-    audioPlayer.currentTime,
-    audioPlayer.duration,
+  audioPlayer.playing,
+  audioPlayer.currentTime,
+  audioPlayer.duration,
+  audioTick,
     playbackRate,
     handleReaction,
     handlePlayAudio,

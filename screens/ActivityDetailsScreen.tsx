@@ -68,73 +68,14 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
   const styles = useMemo(() => createStyles(theme), [theme]);
   const { allActivities, isActivityJoined, toggleJoinActivity, profile } = useActivityContext();
 
-  const activity = allActivities.find(a => a.id === activityId);
-  const gpxSupported = activity ? ['hiking', 'running', 'cycling'].includes(String((activity as any).activity || '').toLowerCase()) : false;
-  if (activity && (gpxSupported && (activity as any).gpx)) {
-    try { console.log('[ActivityDetails] GPX debug for', activity.id, (activity as any).gpx); } catch {}
-  }
-
+  // ALL STATE HOOKS MUST BE BEFORE ANY CONDITIONAL RETURNS
   const [creatorUsername, setCreatorUsername] = useState<string>('');
   const [userLocation, setUserLocation] = useState<{ latitude: number, longitude: number } | null>(null);
   const [joinedUsers, setJoinedUsers] = useState<any[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshLocked, setRefreshLocked] = useState(false);
-
-  useEffect(() => {
-    if (!activity) return;
-    const fetchUsername = async () => {
-      const username = await getDisplayCreatorUsername(activity.creatorId, activity.creator);
-      setCreatorUsername(username);
-    };
-    fetchUsername();
-  }, [activity]);
-
-  useEffect(() => {
-    if (!activity) {
-      // If activity is deleted or user leaves and deletes, go back if possible, else go to Discover
-      if (navigation.canGoBack()) {
-        navigation.goBack();
-      } else {
-        navigation.navigate('DiscoverGames');
-      }
-    }
-  }, [activity, navigation]);
-
-  if (!activity) {
-    // Show friendly not found message and a back button in header position
-    return (
-      <SafeAreaView style={styles.safeArea} edges={['top']}>
-        <View style={styles.header}>
-          <TouchableOpacity
-            style={[styles.backButton, { left: 16, position: 'absolute', zIndex: 10 }]}
-            onPress={() => navigation.goBack()}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Ionicons name="arrow-back" size={28} color={theme.primary} />
-          </TouchableOpacity>
-          <View style={styles.headerTitleContainer}>
-            <Text style={styles.headerTitle}>Activity Not Found</Text>
-          </View>
-        </View>
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 }}>
-          <Text style={{ color: theme.text, fontSize: 20, fontWeight: 'bold', marginBottom: 12, textAlign: 'center' }}>
-            Activity not found.
-          </Text>
-          <Text style={{ color: theme.muted, fontSize: 16, textAlign: 'center', marginBottom: 18 }}>
-            This activity may have been deleted or is no longer available.
-          </Text>
-          <TouchableOpacity
-            onPress={() => navigation.goBack()}
-            style={{ paddingVertical: 14, paddingHorizontal: 36, borderRadius: 24, backgroundColor: theme.primary, marginTop: 10 }}
-            activeOpacity={0.85}
-          >
-            <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 16 }}>Go Back</Text>
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
-    );
-  }
   const [isAddedToCalendar, setIsAddedToCalendar] = useState(false);
+  
   // GPX viewer modal state
   const [showGpxModal, setShowGpxModal] = useState(false);
   const [gpxLoading, setGpxLoading] = useState(false);
@@ -153,6 +94,9 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const mapRef = useRef<MapView>(null);
 
+  const activity = allActivities.find(a => a.id === activityId);
+  const gpxSupported = activity ? ['hiking', 'running', 'cycling'].includes(String((activity as any).activity || '').toLowerCase()) : false;
+  
   // Fade in on mount
   useEffect(() => {
     Animated.timing(fadeAnim, {
@@ -176,8 +120,18 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
     })();
   }, []);
 
+  useEffect(() => {
+    if (!activity) return;
+    const fetchUsername = async () => {
+      const username = await getDisplayCreatorUsername(activity.creatorId, activity.creator);
+      setCreatorUsername(username);
+    };
+    fetchUsername();
+  }, [activity]);
+
   // Helper: fetch latest joined users & added-to-calendar state
   const fetchAndSetJoinedUsers = async () => {
+    if (!activity) return;
     try {
       const activityRef = doc(db, 'activities', activity.id);
       const activitySnap = await getDoc(activityRef);
@@ -215,20 +169,35 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
 
   // Initial load only - NO real-time updates
   useEffect(() => {
-    fetchAndSetJoinedUsers();
+    if (activity) {
+      fetchAndSetJoinedUsers();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activity.id]);
+  }, [activity?.id]);
 
   // Pre-create chat if already joined
   useEffect(() => {
     const setup = async () => {
-      if (auth.currentUser && isActivityJoined(activityId)) {
+      if (auth.currentUser && activity && isActivityJoined(activityId)) {
         await getOrCreateChatForActivity(activityId, auth.currentUser.uid);
       }
     };
     setup();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activityId]);
+  }, [activityId, activity]);
+
+  // Early return with loading state if activity is null to prevent rendering errors
+  if (!activity) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: theme.background, justifyContent: 'center', alignItems: 'center' }} edges={['top']}>
+        <ActivityIndicator size="large" color={theme.primary} />
+      </SafeAreaView>
+    );
+  }
+
+  if (gpxSupported && (activity as any).gpx) {
+    try { console.log('[ActivityDetails] GPX debug for', activity.id, (activity as any).gpx); } catch {}
+  }
 
   // Calculate distance in km
   const getDistance = () => {
@@ -260,7 +229,10 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
       try {
         if (myFriendIds.length) {
           const users = await fetchUsersByIds(myFriendIds);
-          setFriendProfiles(users);
+          // Filter out current user from friends list
+          const currentUserId = auth.currentUser?.uid;
+          const filteredUsers = currentUserId ? users.filter((u: any) => u.uid !== currentUserId) : users;
+          setFriendProfiles(filteredUsers);
         } else {
           setFriendProfiles([]);
         }
@@ -376,19 +348,25 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
         }
       }
       
-      // Sync with Firestore (this updates ActivityContext state optimistically too)
-      await toggleJoinActivity(activity);
+      let didNavigate = false;
       
-      // Only refetch if activity was deleted (which navigates back anyway)
-      await fetchAndSetJoinedUsers(); // This will navigate back if activity was deleted
+      // Sync with Firestore with navigation callback for deletion
+      await toggleJoinActivity(activity, () => {
+        // Navigate back immediately when activity is deleted
+        didNavigate = true;
+        if (navigation.canGoBack()) {
+          navigation.goBack();
+        } else {
+          navigation.navigate('DiscoverGames');
+        }
+      });
+      
+      // Only refetch if we didn't navigate (activity wasn't deleted)
+      if (!didNavigate) {
+        await fetchAndSetJoinedUsers();
+      }
     } catch (error) {
       console.warn('Error in handleJoinLeave:', error);
-      // If activity was deleted during the operation, navigate back
-      if (navigation.canGoBack()) {
-        navigation.goBack();
-      } else {
-        navigation.navigate('DiscoverGames');
-      }
     }
   };
 
@@ -465,7 +443,14 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
 
   const joinAndOpenChat = async () => {
     try {
-      await toggleJoinActivity(activity);
+      await toggleJoinActivity(activity, () => {
+        // Navigate back if deletion happens
+        if (navigation.canGoBack()) {
+          navigation.goBack();
+        } else {
+          navigation.navigate('DiscoverGames');
+        }
+      });
       if (auth.currentUser) {
         try { await waitUntilJoinedToActivity(activity.id, auth.currentUser.uid); } catch {}
         const chatId = await getOrCreateChatForActivity(activity.id, auth.currentUser.uid);
@@ -486,7 +471,17 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
         'You need to join this activity before adding it to your calendar.',
         [
           { text: 'Cancel', style: 'cancel' },
-          { text: 'Join Activity', onPress: async () => { await toggleJoinActivity(activity); setTimeout(() => { addToCalendar(); }, 500); } },
+          { text: 'Join Activity', onPress: async () => { 
+              await toggleJoinActivity(activity, () => {
+                if (navigation.canGoBack()) {
+                  navigation.goBack();
+                } else {
+                  navigation.navigate('DiscoverGames');
+                }
+              }); 
+              setTimeout(() => { addToCalendar(); }, 500); 
+            } 
+          },
         ],
         { cancelable: true }
       );
