@@ -30,22 +30,20 @@ import {
   Modal,
   Pressable,
 } from 'react-native';
-import { Ionicons, MaterialIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
 import { PanGestureHandler, State as GestureState } from 'react-native-gesture-handler';
-import { useAudioRecorder, useAudioPlayer, AudioModule, RecordingPresets } from 'expo-audio';
 import * as NavigationBar from 'expo-navigation-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
-import * as FileSystem from 'expo-file-system/legacy';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { doc, getDoc, onSnapshot, collection, query, where, getDocs, updateDoc, arrayUnion } from 'firebase/firestore';
 import { db, auth } from '../firebaseConfig';
 import { ActivityIcon } from '../components/ActivityIcons';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../types/navigation';
-import { uploadChatImage, uploadAudioMessage } from '../utils/imageUtils';
+import { uploadChatImage } from '../utils/imageUtils';
 import { sendFriendRequest, cancelFriendRequest } from '../utils/firestoreFriends';
 import { useTheme } from '../context/ThemeContext';
 import { useActivityContext } from '../context/ActivityContext';
@@ -80,7 +78,7 @@ type Message = {
   id: string;
   senderId: string;
   text: string;
-  type: 'text' | 'image' | 'audio' | 'system';
+  type: 'text' | 'image' | 'system';
   timestamp?: any;
   replyToId?: string;
 };
@@ -224,16 +222,10 @@ const MessageBubble = React.memo<{
   reactions: Array<{ userId: string; emoji: string }>;
   myReaction?: string;
   showReactionPicker: boolean;
-  isPlaying: boolean;
-  audioProgress: number;
-  audioDuration: number;
-  playbackRate: number;
   onLongPress: () => void;
   onSwipeReply: () => void;
   onReact: (emoji: string) => void;
   onCopy: () => void;
-  onPlayAudio: () => void;
-  onSpeedChange: () => void;
   onImagePress: () => void;
   onUserPress: (uid: string) => void;
   theme: any;
@@ -249,16 +241,10 @@ const MessageBubble = React.memo<{
   reactions,
   myReaction,
   showReactionPicker,
-  isPlaying,
-  audioProgress,
-  audioDuration,
-  playbackRate,
   onLongPress,
   onSwipeReply,
   onReact,
   onCopy,
-  onPlayAudio,
-  onSpeedChange,
   onImagePress,
   onUserPress,
   theme,
@@ -313,11 +299,13 @@ const MessageBubble = React.memo<{
   const avatarUrl = sender.photo || sender.photoURL || 
     `https://ui-avatars.com/api/?name=${encodeURIComponent(sender.username || 'User')}`;
 
-  // Aggregate reactions
-  const reactionCounts = reactions.reduce((acc, r) => {
-    acc[r.emoji] = (acc[r.emoji] || 0) + 1;
-    return acc;
-  }, {} as Record<string, number>);
+  // Aggregate reactions (filter out empty emojis)
+  const reactionCounts = reactions
+    .filter(r => r.emoji && r.emoji.trim())
+    .reduce((acc, r) => {
+      acc[r.emoji] = (acc[r.emoji] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
 
   return (
     <View style={[
@@ -432,8 +420,6 @@ const MessageBubble = React.memo<{
                         ? replyToMessage.text 
                         : replyToMessage.type === 'image' 
                         ? 'Photo' 
-                        : replyToMessage.type === 'audio'
-                        ? 'Voice message'
                         : replyToMessage.text}
                     </Text>
                   </View>
@@ -447,48 +433,6 @@ const MessageBubble = React.memo<{
                   ]}>
                     {message.text}
                   </Text>
-                )}
-
-                {/* Audio message */}
-                {message.type === 'audio' && (
-                  <View style={styles.audioContainer}>
-                    <TouchableOpacity
-                      onPress={onPlayAudio}
-                      style={styles.audioPlayButton}
-                      activeOpacity={0.7}
-                    >
-                      <MaterialIcons
-                        name={isPlaying ? 'pause' : 'play-arrow'}
-                        size={20}
-                        color="#fff"
-                      />
-                    </TouchableOpacity>
-                    
-                    <View style={styles.audioWaveform}>
-                      <View style={[
-                        styles.audioWaveformFill,
-                        { 
-                          width: audioDuration > 0 
-                            ? `${(audioProgress / audioDuration) * 100}%` 
-                            : '0%' 
-                        },
-                      ]} />
-                    </View>
-
-                    <Text style={styles.audioDuration}>
-                      {audioDuration > 0 ? audioDuration.toFixed(1) : '0.0'}s
-                    </Text>
-
-                    <TouchableOpacity
-                      onPress={onSpeedChange}
-                      style={styles.audioSpeedButton}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={styles.audioSpeedText}>
-                        {playbackRate}x
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
                 )}
 
                 {/* Image message */}
@@ -540,23 +484,29 @@ const MessageBubble = React.memo<{
                 styles.reactionPicker,
                 {
                   position: 'absolute',
-                  top: -8,
-                  left: isOwn ? undefined : '100%',
-                  right: isOwn ? '100%' : undefined,
+                  top: -56,
+                  left: isOwn ? undefined : 0,
+                  right: isOwn ? 0 : undefined,
                   transform: [{ scale: reactionAnim }],
                   opacity: reactionAnim,
                 },
               ]}
             >
-              {['❤️', '👍', '🔥', '😂', '👏', '😮'].map((emoji) => (
-                <TouchableOpacity
-                  key={emoji}
-                  onPress={() => onReact(emoji)}
-                  style={styles.reactionButton}
-                >
-                  <Text style={styles.reactionEmoji}>{emoji}</Text>
-                </TouchableOpacity>
-              ))}
+              {['❤️', '👍', '🔥', '😂', '👏', '😮'].map((emoji) => {
+                const isSelected = myReaction === emoji;
+                return (
+                  <TouchableOpacity
+                    key={emoji}
+                    onPress={() => onReact(emoji)}
+                    style={[styles.reactionButton, { alignItems: 'center' }]}
+                  >
+                    <Text style={styles.reactionEmoji}>{emoji}</Text>
+                    {isSelected && (
+                      <View style={styles.reactionDot} />
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
               <TouchableOpacity
                 onPress={onSwipeReply}
                 style={[styles.reactionButton, { paddingHorizontal: 8 }]}
@@ -584,7 +534,6 @@ const MessageBubble = React.memo<{
     prevProps.message.text === nextProps.message.text &&
     prevProps.isOwn === nextProps.isOwn &&
     prevProps.showReactionPicker === nextProps.showReactionPicker &&
-    prevProps.isPlaying === nextProps.isPlaying &&
     prevProps.myReaction === nextProps.myReaction &&
     JSON.stringify(prevProps.reactions) === JSON.stringify(nextProps.reactions)
   );
@@ -606,6 +555,13 @@ const ChatDetailScreen = () => {
     setCurrentChatId(chatId);
     return () => setCurrentChatId(null);
   }, [chatId, setCurrentChatId]);
+
+  useEffect(() => {
+    initialScrollDoneRef.current = false;
+    pendingScrollRestoreRef.current = null;
+    scrollOffsetRef.current = 0;
+    contentHeightRef.current = 0;
+  }, [chatId]);
 
   // ========== STATE ==========
   const [messages, setMessages] = useState<Message[]>([]);
@@ -633,18 +589,6 @@ const ChatDetailScreen = () => {
   const [toastVisible, setToastVisible] = useState(false);
   const [showScrollButton, setShowScrollButton] = useState(false);
 
-  // Audio
-  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
-  const audioPlayer = useAudioPlayer();
-  const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
-  const [playbackRate, setPlaybackRate] = useState(1.0);
-  const [audioTick, setAudioTick] = useState(0); // drives progress UI updates
-  const prevPlayingRef = useRef(false);
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordingDuration, setRecordingDuration] = useState(0);
-  const recordingTimerRef = useRef<any>(null);
-  const recordingAnimRef = useRef(new Animated.Value(0)).current;
-
   // Refs
   const flatListRef = useRef<FlatList>(null);
   const oldestSnapRef = useRef<any>(null);
@@ -657,7 +601,11 @@ const ChatDetailScreen = () => {
   const toastTimeoutRef = useRef<any>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scrollButtonAnim = useRef(new Animated.Value(0)).current;
+  const scrollOffsetRef = useRef(0);
+  const contentHeightRef = useRef(0);
   const isAtBottomRef = useRef(true);
+  const pendingScrollRestoreRef = useRef<{ prevHeight: number; prevOffset: number } | null>(null);
+  const initialScrollDoneRef = useRef(false);
 
   // ========== TOAST ==========
   const showToast = useCallback((msg: string) => {
@@ -733,12 +681,6 @@ const ChatDetailScreen = () => {
   useEffect(() => {
     return () => {
       clearTyping(chatId);
-      
-      // Clean up recording timer if still active
-      if (recordingTimerRef.current) {
-        clearInterval(recordingTimerRef.current);
-        recordingTimerRef.current = null;
-      }
     };
   }, [chatId]);
 
@@ -908,6 +850,28 @@ const ChatDetailScreen = () => {
             console.log('📦 Loaded messages from cache (instant UI)');
             setMessages(cachedMessages as any);
             setIsReady(true);
+            
+            // ========== FETCH PROFILES FOR CACHED MESSAGES ==========
+            const senderIds = Array.from(new Set(cachedMessages.map((m: any) => m.senderId)));
+            const missing = senderIds.filter((id) => !profiles[id]);
+            if (missing.length > 0) {
+              try {
+                const batch = await batchFetchProfiles(missing);
+                const validatedBatch: Record<string, Profile> = {};
+                Object.entries(batch).forEach(([uid, data]: [string, any]) => {
+                  validatedBatch[uid] = {
+                    uid,
+                    username: data?.username || 'User',
+                    photo: data?.photo || data?.photoURL || undefined,
+                    photoURL: data?.photoURL || data?.photo || undefined,
+                  };
+                });
+                setProfiles((prev) => ({ ...prev, ...validatedBatch }));
+              } catch (err) {
+                console.error('Error fetching profiles for cached messages:', err);
+              }
+            }
+            
             // Instantly appear at bottom without any scroll animation
             requestAnimationFrame(() => {
               if (flatListRef.current && cachedMessages.length > 0) {
@@ -928,6 +892,27 @@ const ChatDetailScreen = () => {
             // ========== SAVE TO CACHE ==========
             await saveMessagesToCache(chatId, initial as any);
 
+            // ========== FETCH PROFILES FOR INITIAL MESSAGES ==========
+            const senderIds = Array.from(new Set(initial.map((m: any) => m.senderId)));
+            const missing = senderIds.filter((id) => !profiles[id]);
+            if (missing.length > 0) {
+              try {
+                const batch = await batchFetchProfiles(missing);
+                const validatedBatch: Record<string, Profile> = {};
+                Object.entries(batch).forEach(([uid, data]: [string, any]) => {
+                  validatedBatch[uid] = {
+                    uid,
+                    username: data?.username || 'User',
+                    photo: data?.photo || data?.photoURL || undefined,
+                    photoURL: data?.photoURL || data?.photo || undefined,
+                  };
+                });
+                setProfiles((prev) => ({ ...prev, ...validatedBatch }));
+              } catch (err) {
+                console.error('Error fetching profiles for initial messages:', err);
+              }
+            }
+
             // Instantly appear at bottom without any scroll animation
             requestAnimationFrame(() => {
               if (flatListRef.current && initial.length > 0) {
@@ -941,12 +926,33 @@ const ChatDetailScreen = () => {
           unsubLatestRef.current = listenToLatestMessages(
             chatId,
             20,
-            (latest) => {
+            async (latest) => {
               setMessages(latest as any);
               markChatRead(chatId);
 
               // ========== UPDATE CACHE WITH NEW MESSAGES ==========
               saveMessagesToCache(chatId, latest as any);
+
+              // ========== FETCH PROFILES IMMEDIATELY ==========
+              const senderIds = Array.from(new Set(latest.map((m: any) => m.senderId)));
+              const missing = senderIds.filter((id) => !profiles[id]);
+              if (missing.length > 0) {
+                try {
+                  const batch = await batchFetchProfiles(missing);
+                  const validatedBatch: Record<string, Profile> = {};
+                  Object.entries(batch).forEach(([uid, data]: [string, any]) => {
+                    validatedBatch[uid] = {
+                      uid,
+                      username: data?.username || 'User',
+                      photo: data?.photo || data?.photoURL || undefined,
+                      photoURL: data?.photoURL || data?.photo || undefined,
+                    };
+                  });
+                  setProfiles((prev) => ({ ...prev, ...validatedBatch }));
+                } catch (err) {
+                  console.error('Error fetching profiles in listener:', err);
+                }
+              }
 
               if (latest.length > lastLengthRef.current) {
                 // Only auto-scroll if user is at bottom
@@ -993,6 +999,11 @@ const ChatDetailScreen = () => {
     if (isLoadingOlder || noMoreOlderRef.current || !oldestSnapRef.current) return;
 
     setIsLoadingOlder(true);
+    
+    // Store current scroll position and content height
+    const previousContentHeight = contentHeightRef.current;
+    const previousOffset = scrollOffsetRef.current;
+    
     try {
       const { messages: older, lastSnapshot } = await fetchOlderMessagesPage(
         chatId,
@@ -1002,11 +1013,20 @@ const ChatDetailScreen = () => {
 
       if (older.length) {
         oldestSnapRef.current = lastSnapshot || oldestSnapRef.current;
+        pendingScrollRestoreRef.current = {
+          prevHeight: previousContentHeight,
+          prevOffset: previousOffset,
+        };
+        
+        // Update messages
         setMessages((prev) => {
           const map = new Map<string, Message>();
           [...older, ...prev].forEach((m: any) => map.set(m.id, m));
           return Array.from(map.values()) as any;
         });
+        
+        // Don't auto-scroll to bottom
+        isAtBottomRef.current = false;
       } else {
         noMoreOlderRef.current = true;
       }
@@ -1019,6 +1039,10 @@ const ChatDetailScreen = () => {
       const y = e?.nativeEvent?.contentOffset?.y || 0;
       const layoutHeight = e?.nativeEvent?.layoutMeasurement?.height || 0;
       const contentHeight = e?.nativeEvent?.contentSize?.height || 0;
+      
+      // Store current scroll position and content height
+      scrollOffsetRef.current = y;
+      contentHeightRef.current = contentHeight;
       
       // Load older messages when scrolling near top
       if (y <= 40) {
@@ -1038,6 +1062,38 @@ const ChatDetailScreen = () => {
       isAtBottomRef.current = distanceFromBottom < 50;
     },
     [loadOlderMessages, showScrollButton]
+  );
+
+  const handleContentSizeChange = useCallback(
+    (_: number, height: number) => {
+      const previousHeight = contentHeightRef.current;
+      contentHeightRef.current = height;
+
+      const pendingRestore = pendingScrollRestoreRef.current;
+      if (pendingRestore) {
+        const delta = Math.max(height - (pendingRestore.prevHeight || 0), 0);
+        const nextOffset = Math.max((pendingRestore.prevOffset || 0) + delta, 0);
+        pendingScrollRestoreRef.current = null;
+        requestAnimationFrame(() => {
+          flatListRef.current?.scrollToOffset({
+            offset: nextOffset,
+            animated: false,
+          });
+        });
+        return;
+      }
+
+      if (!initialScrollDoneRef.current && isReady && height > 0) {
+        initialScrollDoneRef.current = true;
+        requestAnimationFrame(() => scrollToBottom(false));
+        return;
+      }
+
+      if (isAtBottomRef.current && height > previousHeight) {
+        requestAnimationFrame(() => scrollToBottom(true));
+      }
+    },
+    [isReady, scrollToBottom]
   );
 
   // ========== FETCH PROFILES ==========
@@ -1193,323 +1249,6 @@ const ChatDetailScreen = () => {
     }
   }, [chatId, messageText, selectedImages, replyTo, scrollToBottom]);
 
-  // ========== AUDIO ==========
-  const startRecording = useCallback(async () => {
-    if (isRecording) return; // Prevent double-start
-    
-    try {
-      console.log('🎤 Starting recording...');
-      
-      // Request permission
-      const { granted } = await AudioModule.requestRecordingPermissionsAsync();
-      if (!granted) {
-        Alert.alert('Permission Denied', 'Please enable microphone access in your device settings to record voice messages.');
-        return;
-      }
-
-      // Set audio mode for recording
-      await AudioModule.setAudioModeAsync({
-        allowsRecording: true,
-        playsInSilentMode: true,
-      });
-
-      // Start recording
-      await audioRecorder.record();
-      console.log('🎤 Recording started successfully');
-      
-      setIsRecording(true);
-      setRecordingDuration(0);
-      
-      // Start animation
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(recordingAnimRef, {
-            toValue: 1,
-            duration: 1000,
-            useNativeDriver: true,
-          }),
-          Animated.timing(recordingAnimRef, {
-            toValue: 0,
-            duration: 1000,
-            useNativeDriver: true,
-          }),
-        ])
-      ).start();
-
-      // Start duration counter - update every second
-      const startTime = Date.now();
-      recordingTimerRef.current = setInterval(() => {
-        const elapsed = Math.floor((Date.now() - startTime) / 1000);
-        setRecordingDuration(elapsed);
-      }, 100); // Check every 100ms for smoother updates
-
-    } catch (error) {
-      console.error('❌ Recording error:', error);
-      setIsRecording(false);
-      Alert.alert('Recording Error', 'Could not start recording. Please try again.');
-    }
-  }, [audioRecorder, recordingAnimRef, isRecording]);
-
-  const stopRecording = useCallback(async () => {
-    if (!isRecording || !auth.currentUser) return;
-    try {
-      console.log('🎤 Stopping recording (robust)...');
-
-      // Minimum duration guard
-      if (recordingDuration < 1) {
-        Alert.alert('Too Short', 'Voice message must be at least 1 second long.');
-        if (recordingTimerRef.current) {
-          clearInterval(recordingTimerRef.current);
-          recordingTimerRef.current = null;
-        }
-        recordingAnimRef.stopAnimation();
-        recordingAnimRef.setValue(0);
-        setIsRecording(false);
-        try { await audioRecorder.stop(); } catch {}
-        await AudioModule.setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
-        setRecordingDuration(0);
-        return;
-      }
-
-      // Stop first; capture return value if provided
-      let stoppedResult: any = null;
-      try {
-        stoppedResult = await audioRecorder.stop();
-      } catch (e) {
-        console.warn('⚠️ stop() threw, continuing with URI property', e);
-      }
-      try { console.log('🧪 stoppedResult:', JSON.stringify(stoppedResult)); } catch {}
-      const candidateUris = [
-        stoppedResult?.uri,
-        stoppedResult?.fileUri,
-        stoppedResult?.path,
-        stoppedResult?.recording?.getURI?.(),
-        stoppedResult?.recording?.uri,
-        audioRecorder.uri,
-        (audioRecorder as any)?.fileUri,
-        (audioRecorder as any)?.path,
-        (audioRecorder as any)?.recording?.getURI?.(),
-        (audioRecorder as any)?.recording?.uri,
-      ].filter(Boolean);
-
-      let finalUri: string | null = null;
-      if (candidateUris.length) {
-        // Try each candidate until one exists
-        for (const u of candidateUris) {
-          let info = await FileSystem.getInfoAsync(u).catch(() => ({ exists: false } as any));
-          let attempts = 0;
-          while (!info.exists && attempts < 6) {
-            await new Promise(r => setTimeout(r, 140));
-            info = await FileSystem.getInfoAsync(u).catch(() => ({ exists: false } as any));
-            attempts++;
-          }
-          if (info.exists) {
-            finalUri = u;
-            break;
-          }
-        }
-      }
-
-      // Directory fallback: scan sibling dir then cache root for latest .m4a
-      if (!finalUri && candidateUris[0]) {
-        const dir = candidateUris[0].split('/').slice(0, -1).join('/') + '/';
-        try {
-          const listing = await (FileSystem as any).readDirectoryAsync?.(dir);
-          if (Array.isArray(listing)) {
-            const recs = listing.filter((n: string) => n.startsWith('recording-') && n.endsWith('.m4a'));
-            if (recs.length) {
-              // Pick the longest name (heuristic for most recent) – could also stat each
-              const pick = recs.sort((a,b) => b.localeCompare(a))[0];
-              finalUri = dir + pick;
-              console.log('🔄 Fallback picked file:', finalUri);
-            }
-          }
-        } catch (e) {
-          console.warn('Fallback directory scan failed', e);
-        }
-      }
-
-      if (!finalUri) {
-        // Android-specific scan of cacheDirectory for latest .m4a
-        try {
-          const cacheDir = (FileSystem as any).cacheDirectory || '';
-          if (cacheDir) {
-            const listing = await (FileSystem as any).readDirectoryAsync?.(cacheDir);
-            if (Array.isArray(listing)) {
-              const m4as = listing.filter((n: string) => n.endsWith('.m4a'));
-              if (m4as.length) {
-                let chosen = m4as[0];
-                let chosenMtime = 0;
-                for (const f of m4as) {
-                  try {
-                    const info = await FileSystem.getInfoAsync(cacheDir + f);
-                    const mt = (info as any)?.modificationTime || 0;
-                    if (mt > chosenMtime) { chosenMtime = mt; chosen = f; }
-                  } catch {}
-                }
-                finalUri = cacheDir + chosen;
-                console.log('📂 Android cache root selected:', finalUri);
-              }
-            }
-          }
-        } catch (e) {
-          console.warn('Android cache scan failed', e);
-        }
-      }
-      if (!finalUri) {
-        // Fallback: use first candidate even if not confirmed
-        finalUri = candidateUris[0];
-        console.warn('⚠️ Using candidate URI without getInfoAsync confirmation:', finalUri);
-      }
-      console.log('🎤 Final recording URI:', finalUri);
-
-      // Last-chance fetch test (some iOS URIs readable via fetch but not infoAsync immediately)
-      const assuredUri = finalUri as string; // ensured above
-      let ensureExists = await FileSystem.getInfoAsync(assuredUri).catch(() => ({ exists: false } as any));
-      if (!ensureExists.exists) {
-        try {
-          const resp = await fetch(assuredUri);
-          if (!resp.ok) throw new Error('fetch not ok');
-          console.log('🌐 fetch() succeeded for audio file');
-        } catch (ef) {
-          console.warn('fetch() could not read audio file', ef);
-        }
-      }
-
-      const audioId = `audio_${Date.now()}_${Math.random().toString(36).slice(2,9)}`;
-      console.log('☁️ Uploading audio...');
-  const downloadUrl = await uploadAudioMessage(assuredUri, auth.currentUser.uid, audioId);
-      console.log('✅ Audio uploaded:', downloadUrl);
-      await sendMessage(chatId, auth.currentUser.uid, downloadUrl, 'audio');
-      console.log('✅ Audio message sent');
-
-      // Cleanup UI state
-      if (recordingTimerRef.current) {
-        clearInterval(recordingTimerRef.current);
-        recordingTimerRef.current = null;
-      }
-      recordingAnimRef.stopAnimation();
-      recordingAnimRef.setValue(0);
-      setIsRecording(false);
-      setRecordingDuration(0);
-      await AudioModule.setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
-    } catch (error: any) {
-      console.error('❌ Stop recording error (robust):', error);
-      Alert.alert('Recording Error', error?.message || 'Could not save recording.');
-      try { await audioRecorder.stop(); } catch {}
-      if (recordingTimerRef.current) {
-        clearInterval(recordingTimerRef.current);
-        recordingTimerRef.current = null;
-      }
-      recordingAnimRef.stopAnimation();
-      recordingAnimRef.setValue(0);
-      setIsRecording(false);
-      setRecordingDuration(0);
-      try { await AudioModule.setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }); } catch {}
-    }
-  }, [audioRecorder, chatId, isRecording, recordingDuration, recordingAnimRef]);
-
-  const cancelRecording = useCallback(async () => {
-    if (!isRecording) return;
-
-    try {
-      console.log('🎤 Cancelling recording...');
-      
-      // Clear timer and animation
-      if (recordingTimerRef.current) {
-        clearInterval(recordingTimerRef.current);
-        recordingTimerRef.current = null;
-      }
-      recordingAnimRef.stopAnimation();
-      recordingAnimRef.setValue(0);
-      setIsRecording(false);
-      setRecordingDuration(0);
-
-      // Stop and discard recording
-      await audioRecorder.stop();
-
-      // Reset audio mode
-      await AudioModule.setAudioModeAsync({
-        allowsRecording: false,
-        playsInSilentMode: true,
-      });
-
-      console.log('✅ Recording cancelled');
-    } catch (error) {
-      console.error('❌ Cancel recording error:', error);
-      setIsRecording(false);
-      setRecordingDuration(0);
-    }
-  }, [audioRecorder, recordingAnimRef, isRecording]);
-
-  // Helper to set playback rate across platforms/APIs
-  const setPlayerRate = useCallback(async (rate: number) => {
-    try {
-      const anyPlayer: any = audioPlayer as any;
-      if (typeof anyPlayer.setPlaybackRateAsync === 'function') {
-        await anyPlayer.setPlaybackRateAsync(rate);
-      } else if (typeof anyPlayer.setPlaybackRate === 'function') {
-        await anyPlayer.setPlaybackRate(rate);
-      } else if (typeof anyPlayer.setRateAsync === 'function') {
-        await anyPlayer.setRateAsync(rate, true);
-      } else {
-        // property setter not allowed; skip silently
-      }
-    } catch (e) {
-      console.warn('setPlayerRate error', e);
-    }
-  }, [audioPlayer]);
-
-  const handlePlayAudio = useCallback((uri: string, id: string) => {
-    (async () => {
-      try {
-        if (playingAudioId === id) {
-          if (audioPlayer.playing) {
-            await audioPlayer.pause();
-          } else {
-            await setPlayerRate(playbackRate);
-            await audioPlayer.play();
-          }
-          return;
-        }
-        setPlayingAudioId(id);
-        await audioPlayer.replace(uri);
-        await setPlayerRate(playbackRate);
-        await audioPlayer.play();
-      } catch (e) {
-        console.warn('Audio play error', e);
-        setPlayingAudioId(null);
-      }
-    })();
-  }, [playingAudioId, audioPlayer, playbackRate, setPlayerRate]);
-
-  const handleSpeedChange = useCallback(() => {
-    const newRate = playbackRate === 1 ? 1.5 : playbackRate === 1.5 ? 2 : 1;
-    setPlaybackRate(newRate);
-    setPlayerRate(newRate);
-  }, [playbackRate, setPlayerRate]);
-
-  // Periodic progress updates and end detection
-  useEffect(() => {
-    let interval: any;
-    if (audioPlayer.playing) {
-      interval = setInterval(() => {
-        setAudioTick(Date.now());
-        // detect end transitions
-        if (prevPlayingRef.current && !audioPlayer.playing) {
-          setPlayingAudioId(null);
-        }
-        prevPlayingRef.current = audioPlayer.playing;
-      }, 250);
-    } else {
-      if (prevPlayingRef.current && !audioPlayer.playing) {
-        setPlayingAudioId(null);
-      }
-      prevPlayingRef.current = audioPlayer.playing;
-    }
-    return () => interval && clearInterval(interval);
-  }, [audioPlayer.playing, playingAudioId]);
-
   // ========== IMAGES ==========
   const handleCamera = useCallback(async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
@@ -1565,17 +1304,36 @@ const ChatDetailScreen = () => {
   // ========== REACTIONS ==========
   const handleReaction = useCallback(async (messageId: string, emoji: string) => {
     try {
-      await addReaction(chatId, messageId, emoji);
-      setMyReactions((prev) => ({ ...prev, [messageId]: emoji }));
-      setReactionsMap((prev) => {
-        const arr = prev[messageId] || [];
-        const me = auth.currentUser?.uid || '';
-        const others = arr.filter((r) => r.userId !== me);
-        return { ...prev, [messageId]: [...others, { userId: me, emoji }] };
-      });
+      const currentReaction = myReactions[messageId];
+      
+      // If clicking the same emoji, remove the reaction
+      if (currentReaction === emoji) {
+        await addReaction(chatId, messageId, ''); // Empty string removes reaction
+        setMyReactions((prev) => {
+          const next = { ...prev };
+          delete next[messageId];
+          return next;
+        });
+        setReactionsMap((prev) => {
+          const arr = prev[messageId] || [];
+          const me = auth.currentUser?.uid || '';
+          const others = arr.filter((r) => r.userId !== me);
+          return { ...prev, [messageId]: others };
+        });
+      } else {
+        // Otherwise, add or change the reaction
+        await addReaction(chatId, messageId, emoji);
+        setMyReactions((prev) => ({ ...prev, [messageId]: emoji }));
+        setReactionsMap((prev) => {
+          const arr = prev[messageId] || [];
+          const me = auth.currentUser?.uid || '';
+          const others = arr.filter((r) => r.userId !== me);
+          return { ...prev, [messageId]: [...others, { userId: me, emoji }] };
+        });
+      }
       setReactionPickerId(null);
     } catch {}
-  }, [chatId]);
+  }, [chatId, myReactions]);
 
   // ========== ADDITIONAL STATE FOR MODALS ==========
   const [friends, setFriends] = useState<Profile[]>([]);
@@ -2054,11 +1812,24 @@ const ChatDetailScreen = () => {
           reactions={reactionsMap[item.id] || []}
           myReaction={myReactions[item.id]}
           showReactionPicker={reactionPickerId === item.id}
-          isPlaying={playingAudioId === item.id && audioPlayer.playing}
-          audioProgress={playingAudioId === item.id ? audioPlayer.currentTime : 0}
-          audioDuration={playingAudioId === item.id ? audioPlayer.duration : 0}
-          playbackRate={playbackRate}
-          onLongPress={() => {
+          onLongPress={async () => {
+            // Refresh profile if missing photo or has generic username
+            if (item.senderId && (!sender.photo || sender.username === 'User')) {
+              try {
+                const fresh = await getCachedProfile(item.senderId);
+                if (fresh && (fresh.photo || fresh.photoURL)) {
+                  setProfiles(prev => ({
+                    ...prev,
+                    [item.senderId]: {
+                      uid: item.senderId,
+                      username: fresh.username || sender.username,
+                      photo: fresh.photo || fresh.photoURL,
+                      photoURL: fresh.photoURL || fresh.photo,
+                    }
+                  }));
+                }
+              } catch {}
+            }
             setReactionPickerId((prev) => (prev === item.id ? null : item.id));
           }}
           onSwipeReply={() => {
@@ -2073,8 +1844,6 @@ const ChatDetailScreen = () => {
             } catch {}
             setReactionPickerId(null);
           }}
-          onPlayAudio={() => handlePlayAudio(item.text, item.id)}
-          onSpeedChange={handleSpeedChange}
           onImagePress={() => setViewerUri(item.text)}
           onUserPress={(uid) => navigation.navigate('UserProfile', { userId: uid })}
           theme={theme}
@@ -2102,15 +1871,7 @@ const ChatDetailScreen = () => {
     reactionsMap,
     myReactions,
     reactionPickerId,
-    playingAudioId,
-  audioPlayer.playing,
-  audioPlayer.currentTime,
-  audioPlayer.duration,
-  audioTick,
-    playbackRate,
     handleReaction,
-    handlePlayAudio,
-    handleSpeedChange,
     showToast,
     theme,
     navigation,
@@ -2271,14 +2032,14 @@ const ChatDetailScreen = () => {
                 renderItem={renderMessage}
                 contentContainerStyle={styles.messageList}
                 onScroll={handleScroll}
+                onContentSizeChange={handleContentSizeChange}
                 scrollEventThrottle={32}
                 keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
                 keyboardShouldPersistTaps="handled"
                 initialNumToRender={15}
                 maxToRenderPerBatch={10}
                 windowSize={5}
-                removeClippedSubviews
-                maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+                removeClippedSubviews={Platform.OS === 'android'}
                 ListHeaderComponent={
                   isLoadingOlder ? (
                     <View style={{ paddingVertical: 8 }}>
@@ -2331,82 +2092,33 @@ const ChatDetailScreen = () => {
 
           {/* Input */}
           <View style={[styles.inputContainer, { paddingBottom: insets.bottom }]}>
-            {/* Recording Overlay */}
-            {isRecording && (
-              <View style={styles.recordingOverlay}>
-                <Animated.View 
-                  style={[
-                    styles.recordingIndicator,
-                    {
-                      opacity: recordingAnimRef.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [0.3, 1],
-                      }),
-                    },
-                  ]}
-                >
-                  <View style={styles.recordingDot} />
-                  <Text style={styles.recordingText}>
-                    {Math.floor(recordingDuration / 60)}:{(recordingDuration % 60).toString().padStart(2, '0')}
-                  </Text>
-                </Animated.View>
-                <View style={styles.recordingActions}>
-                  <TouchableOpacity onPress={cancelRecording} style={styles.cancelButton}>
-                    <Ionicons name="trash-outline" size={20} color="#fff" />
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={stopRecording} style={styles.sendVoiceButton}>
-                    <Ionicons name="send" size={20} color="#fff" />
-                  </TouchableOpacity>
-                </View>
-              </View>
-            )}
-
-            {!isRecording && (
-              <>
-                <TouchableOpacity style={styles.inputButton} onPress={handleCamera}>
-                  <Ionicons name="camera" size={22} color={theme.primary} />
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.inputButton} onPress={handleGallery}>
-                  <Ionicons name="image" size={22} color={theme.primary} />
-                </TouchableOpacity>
-              </>
-            )}
-            
-            <TouchableOpacity
-              style={[styles.inputButton, isRecording && styles.recordingButton]}
-              onPress={isRecording ? stopRecording : startRecording}
-            >
-              <Ionicons 
-                name={isRecording ? 'stop' : 'mic'} 
-                size={22} 
-                color={isRecording ? '#fff' : theme.primary} 
-              />
+            <TouchableOpacity style={styles.inputButton} onPress={handleCamera}>
+              <Ionicons name="camera" size={22} color={theme.primary} />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.inputButton} onPress={handleGallery}>
+              <Ionicons name="image" size={22} color={theme.primary} />
             </TouchableOpacity>
             
-            {!isRecording && (
-              <>
-                <TextInput
-                  style={styles.inputText}
-                  placeholder="Message..."
-                  placeholderTextColor={theme.muted}
-                  value={messageText}
-                  onChangeText={(text) => {
-                    setMessageText(text);
-                    pingTyping(chatId);
-                  }}
-                  autoCapitalize="sentences"
-                  autoCorrect
-                  returnKeyType="send"
-                  onSubmitEditing={handleSend}
-                  blurOnSubmit={false}
-                  multiline
-                  maxLength={2000}
-                />
-                <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
-                  <Ionicons name="send" size={24} color="#fff" />
-                </TouchableOpacity>
-              </>
-            )}
+            <TextInput
+              style={styles.inputText}
+              placeholder="Message..."
+              placeholderTextColor={theme.muted}
+              value={messageText}
+              onChangeText={(text) => {
+                setMessageText(text);
+                pingTyping(chatId);
+              }}
+              autoCapitalize="sentences"
+              autoCorrect
+              returnKeyType="send"
+              onSubmitEditing={handleSend}
+              blurOnSubmit={false}
+              multiline
+              maxLength={2000}
+            />
+            <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
+              <Ionicons name="send" size={24} color="#fff" />
+            </TouchableOpacity>
           </View>
 
           {/* Selected images */}
@@ -2519,6 +2231,30 @@ const ChatDetailScreen = () => {
                       <View style={styles.optionsDivider} />
 
                       <TouchableOpacity
+                        style={styles.optionItem}
+                        onPress={() => {
+                          setOptionsVisible(false);
+                          Alert.alert(
+                            'Report',
+                            'Why are you reporting this group chat?',
+                            [
+                              { text: 'Inappropriate content', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
+                              { text: 'Spam or harassment', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
+                              { text: 'Suspicious activity', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
+                              { text: 'Cancel', style: 'cancel' },
+                            ]
+                          );
+                        }}
+                      >
+                        <View style={[styles.optionIconCircle, { backgroundColor: '#331111' }]}>
+                          <Ionicons name="flag-outline" size={20} color="#ff4d4f" />
+                        </View>
+                        <Text style={[styles.optionItemText, { color: '#ff4d4f' }]}>Report</Text>
+                      </TouchableOpacity>
+
+                      <View style={styles.optionsDivider} />
+
+                      <TouchableOpacity
                         style={styles.optionItemDanger}
                         onPress={() => {
                           setOptionsVisible(false);
@@ -2562,6 +2298,30 @@ const ChatDetailScreen = () => {
                           <Ionicons name="chevron-forward" size={18} color={theme.muted} style={{ marginLeft: 'auto' }} />
                         </TouchableOpacity>
                       )}
+
+                      <View style={styles.optionsDivider} />
+
+                      <TouchableOpacity
+                        style={styles.optionItem}
+                        onPress={() => {
+                          setOptionsVisible(false);
+                          Alert.alert(
+                            'Report',
+                            'Why are you reporting this chat?',
+                            [
+                              { text: 'Inappropriate content', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
+                              { text: 'Spam or harassment', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
+                              { text: 'Suspicious activity', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
+                              { text: 'Cancel', style: 'cancel' },
+                            ]
+                          );
+                        }}
+                      >
+                        <View style={[styles.optionIconCircle, { backgroundColor: '#331111' }]}>
+                          <Ionicons name="flag-outline" size={20} color="#ff4d4f" />
+                        </View>
+                        <Text style={[styles.optionItemText, { color: '#ff4d4f' }]}>Report</Text>
+                      </TouchableOpacity>
                     </>
                   )}
                 </View>
@@ -3061,57 +2821,6 @@ const createStyles = (theme: any) => StyleSheet.create({
     color: 'rgba(255, 255, 255, 0.7)',
   },
 
-  // Audio
-  audioContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 4,
-    paddingHorizontal: 6,
-    minWidth: 180,
-  },
-  audioPlayButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: theme.primaryStrong,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 8,
-  },
-  audioWaveform: {
-    flex: 1,
-    height: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.3)',
-    borderRadius: 2,
-    overflow: 'hidden',
-    marginRight: 8,
-  },
-  audioWaveformFill: {
-    height: 4,
-    backgroundColor: theme.primaryStrong,
-    borderRadius: 2,
-  },
-  audioDuration: {
-    color: theme.primaryStrong,
-    fontWeight: '600',
-    fontSize: 11,
-    minWidth: 30,
-  },
-  audioSpeedButton: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: theme.primaryStrong,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginLeft: 4,
-  },
-  audioSpeedText: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 11,
-  },
-
   // Image
   messageImage: {
     width: 240,
@@ -3159,6 +2868,13 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   reactionEmoji: {
     fontSize: 20,
+  },
+  reactionDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: theme.primary,
+    marginTop: 2,
   },
   myReaction: {
     backgroundColor: theme.card,
@@ -3245,90 +2961,6 @@ const createStyles = (theme: any) => StyleSheet.create({
     borderRadius: 18,
     padding: 8,
     marginLeft: 4,
-  },
-
-  // Recording UI
-  recordingOverlay: {
-    position: 'absolute',
-    top: -60,
-    left: 10,
-    right: 10,
-    backgroundColor: theme.card,
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderWidth: 2,
-    borderColor: '#ff4444',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 5,
-    zIndex: 999,
-  },
-  recordingIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  recordingDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#ff4444',
-  },
-  recordingText: {
-    color: theme.text,
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  recordingActions: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  cancelButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#ff4444',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
-    elevation: 3,
-  },
-  sendVoiceButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: theme.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
-    elevation: 3,
-  },
-  cancelRecordingButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
-    backgroundColor: theme.background,
-  },
-  cancelRecordingText: {
-    color: '#ff4444',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  recordingButton: {
-    backgroundColor: '#ff4444',
-    borderColor: '#ff4444',
   },
 
   // Selected images

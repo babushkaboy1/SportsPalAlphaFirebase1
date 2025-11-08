@@ -197,6 +197,8 @@ const ChatsScreen = ({ navigation }: any) => {
   const [groupPhoto, setGroupPhoto] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<any[]>([]);
   const [chatUnreadTotal, setChatUnreadTotal] = useState<number>(0);
+  const [chatMenuVisible, setChatMenuVisible] = useState(false);
+  const [selectedChat, setSelectedChat] = useState<any>(null);
 
   // Profile cache to minimize reads
   const profileCacheRef = useRef<{ [uid: string]: { username: string; photo?: string; timestamp: number } }>({});
@@ -640,6 +642,20 @@ const ChatsScreen = ({ navigation }: any) => {
     }
   };
 
+  const handleReportChat = () => {
+    setChatMenuVisible(false);
+    Alert.alert(
+      'Report',
+      'Why are you reporting this chat?',
+      [
+        { text: 'Inappropriate content', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
+        { text: 'Spam or harassment', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
+        { text: 'Suspicious activity', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
+  };
+
   /** ========= Animations ========= */
   useEffect(() => {
     if (isReady) {
@@ -732,6 +748,11 @@ const ChatsScreen = ({ navigation }: any) => {
               myJoinedActivitiesIds
             }
           });
+        }}
+        onLongPress={() => {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          setSelectedChat(item);
+          setChatMenuVisible(true);
         }}
         activeOpacity={0.85}
       >
@@ -1209,6 +1230,21 @@ const ChatsScreen = ({ navigation }: any) => {
             </View>
           </View>
         </View>
+      </Modal>
+
+      {/* Chat Options Menu */}
+      <Modal visible={chatMenuVisible} transparent animationType="fade">
+        <Pressable style={styles.modalOverlay} onPress={() => setChatMenuVisible(false)}>
+          <View style={{ backgroundColor: theme.card, borderRadius: 16, borderWidth: 1, borderColor: theme.border, maxWidth: 280, width: '80%' }}>
+            <TouchableOpacity
+              style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
+              onPress={handleReportChat}
+            >
+              <Ionicons name="flag-outline" size={22} color={theme.danger} />
+              <Text style={{ color: theme.danger, fontSize: 16, fontWeight: '600' }}>Report</Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
       </Modal>
     </SafeAreaView>
   );

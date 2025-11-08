@@ -8,7 +8,7 @@ export default ({ config }: { config: any }) => ({
   version: "1.0.0",
   orientation: "portrait",
   // Updated app icon to new turquoise orb asset
-  icon: "./assets/app-icon.png",
+  icon: "./assets/splash-logo.png",
   userInterfaceStyle: "dark",
   newArchEnabled: true,
   // Splash screen shown during app launch

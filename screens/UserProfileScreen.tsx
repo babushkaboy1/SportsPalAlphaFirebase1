@@ -16,7 +16,7 @@ function HostUsername({ activity }: { activity: any }) {
   return <Text style={{ fontSize: 14, color: theme.muted, fontWeight: '500' }}>{username}</Text>;
 }
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, FlatList, Animated, RefreshControl, Alert, Modal, Pressable, TextInput } from 'react-native';
+import { View, Text, StyleSheet, Image, TouchableOpacity, FlatList, Animated, RefreshControl, Alert, Modal, Pressable, TextInput, Clipboard } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
 import { useRoute, useNavigation } from '@react-navigation/native';
@@ -85,6 +85,8 @@ const UserProfileScreen = () => {
   const [favModalVisible, setFavModalVisible] = useState(false);
   const [connectionsModalVisible, setConnectionsModalVisible] = useState(false);
   const [userFriendProfiles, setUserFriendProfiles] = useState<Array<{ uid: string; username: string; photo?: string }>>([]);
+  const [menuVisible, setMenuVisible] = useState(false);
+  const [imageViewerVisible, setImageViewerVisible] = useState(false);
 
   useEffect(() => {
     const fetchProfile = async () => {
@@ -109,6 +111,7 @@ const UserProfileScreen = () => {
           username: data.username || 'User',
           photo: data.photo || data.photoURL,
           bio: data.bio,
+          socials: data.socials,
           selectedSports: data.selectedSports || data.sportsPreferences,
           friends: data.friends,
         } as any);
@@ -200,6 +203,7 @@ const UserProfileScreen = () => {
         username: data.username || 'User',
         photo: data.photo || data.photoURL,
         bio: data.bio,
+        socials: data.socials,
         selectedSports: data.selectedSports || data.sportsPreferences,
         friends: data.friends,
       } as any);
@@ -296,12 +300,22 @@ const UserProfileScreen = () => {
     }
   }, [isReady]);
 
-  const handleShareProfile = async () => {
-    try {
-      await shareProfile(userId, profile?.username || 'User');
-    } catch (error) {
-      console.error(error);
-    }
+  const handleShareProfile = () => {
+    shareProfile(userId, profile?.username || 'User');
+  };
+
+  const handleReportUser = () => {
+    setMenuVisible(false);
+    Alert.alert(
+      'Report User',
+      'Why are you reporting this user?',
+      [
+        { text: 'Inappropriate behavior', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
+        { text: 'Spam or fake account', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
+        { text: 'Harassment', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
   };
 
   // Helper functions for card info
@@ -531,14 +545,22 @@ const UserProfileScreen = () => {
               {profile?.username || 'Username'}
             </Text>
           </View>
-          <TouchableOpacity style={styles.settingsButton} onPress={handleShareProfile}>
-            <Ionicons name="share-social-outline" size={28} color={theme.text} />
+          <TouchableOpacity style={styles.settingsButton} onPress={() => setMenuVisible(true)}>
+            <Ionicons name="ellipsis-horizontal" size={28} color={theme.text} />
           </TouchableOpacity>
         </View>
         {/* Profile hero area: match Profile page spacing and size */}
         <View style={styles.profileInfo}>
           <View style={styles.profileLeftColumn}>
-            <Image source={{ uri: profile?.photo || 'https://via.placeholder.com/100' }} style={styles.profileImage} />
+            <TouchableOpacity 
+              activeOpacity={0.8} 
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                setImageViewerVisible(true);
+              }}
+            >
+              <Image source={{ uri: profile?.photo || 'https://via.placeholder.com/100' }} style={styles.profileImage} />
+            </TouchableOpacity>
           </View>
           {/* Stats next to avatar */}
           <View style={styles.statsColumn}>
@@ -634,6 +656,90 @@ const UserProfileScreen = () => {
             </TouchableOpacity>
           </View>
         )}
+
+        {/* Bio and Social Media Row - Above Action Buttons */}
+        {(profile?.bio || profile?.socials?.instagram || profile?.socials?.facebook || profile?.socials?.whatsapp) ? (
+          <View style={styles.bioSocialRow}>
+            {/* Bio Section - Left Side (to center) */}
+            <View style={styles.bioSectionHorizontal}>
+              {profile?.bio ? (
+                <View style={styles.bioIconRow}>
+                  <Ionicons name="information-circle-outline" size={16} color={theme.primary} />
+                  <Text style={styles.bioText} numberOfLines={2} ellipsizeMode="tail">
+                    {profile.bio}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+
+            {/* Social Media Icons - Right Side (from center) */}
+            {(profile?.socials?.instagram || profile?.socials?.facebook || profile?.socials?.whatsapp) ? (
+              <View style={styles.socialSectionHorizontal}>
+                {profile.socials.instagram ? (
+                  <TouchableOpacity 
+                    style={styles.socialIconButton} 
+                    onPress={() => {
+                      Alert.alert(
+                        'Instagram',
+                        profile.socials.instagram,
+                        [
+                          { text: 'Copy', onPress: () => {
+                            Clipboard.setString(profile.socials.instagram);
+                            Alert.alert('Copied', 'Instagram handle copied to clipboard');
+                          }},
+                          { text: 'Cancel', style: 'cancel' }
+                        ]
+                      );
+                    }}
+                  >
+                    <Ionicons name="logo-instagram" size={26} color={theme.primary} />
+                  </TouchableOpacity>
+                ) : null}
+                {profile.socials.facebook ? (
+                  <TouchableOpacity 
+                    style={styles.socialIconButton} 
+                    onPress={() => {
+                      Alert.alert(
+                        'Facebook',
+                        profile.socials.facebook,
+                        [
+                          { text: 'Copy', onPress: () => {
+                            Clipboard.setString(profile.socials.facebook);
+                            Alert.alert('Copied', 'Facebook handle copied to clipboard');
+                          }},
+                          { text: 'Cancel', style: 'cancel' }
+                        ]
+                      );
+                    }}
+                  >
+                    <Ionicons name="logo-facebook" size={26} color={theme.primary} />
+                  </TouchableOpacity>
+                ) : null}
+                {profile.socials.whatsapp ? (
+                  <TouchableOpacity 
+                    style={styles.socialIconButton} 
+                    onPress={() => {
+                      Alert.alert(
+                        'WhatsApp',
+                        profile.socials.whatsapp,
+                        [
+                          { text: 'Copy', onPress: () => {
+                            Clipboard.setString(profile.socials.whatsapp);
+                            Alert.alert('Copied', 'WhatsApp contact copied to clipboard');
+                          }},
+                          { text: 'Cancel', style: 'cancel' }
+                        ]
+                      );
+                    }}
+                  >
+                    <Ionicons name="logo-whatsapp" size={26} color={theme.primary} />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+
         <View style={styles.tabBar}>
           <TouchableOpacity
             style={[styles.tab, activeTab === 'games' && styles.activeTab]}
@@ -808,6 +914,59 @@ const UserProfileScreen = () => {
             )}
           </Pressable>
         </Pressable>
+      </Modal>
+
+      {/* Menu Modal */}
+      <Modal visible={menuVisible} transparent animationType="fade" onRequestClose={() => setMenuVisible(false)}>
+        <Pressable style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center' }} onPress={() => setMenuVisible(false)}>
+          <Pressable style={{ backgroundColor: theme.card, borderRadius: 16, borderWidth: 1, borderColor: theme.border, maxWidth: 280, width: '80%' }}>
+            <TouchableOpacity onPress={() => setMenuVisible(false)} style={{ position: 'absolute', top: 8, right: 8, zIndex: 1, backgroundColor: theme.background, borderRadius: 15, padding: 2 }}>
+              <Ionicons name="close-circle" size={24} color={theme.muted} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
+              onPress={handleShareProfile}
+            >
+              <Ionicons name="share-social-outline" size={22} color={theme.primary} />
+              <Text style={{ color: theme.text, fontSize: 16, fontWeight: '600' }}>Share Profile</Text>
+            </TouchableOpacity>
+            <View style={{ height: 1, backgroundColor: theme.border }} />
+            <TouchableOpacity
+              style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
+              onPress={handleReportUser}
+            >
+              <Ionicons name="flag-outline" size={22} color={theme.danger} />
+              <Text style={{ color: theme.danger, fontSize: 16, fontWeight: '600' }}>Report User</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Full-Screen Image Viewer */}
+      <Modal
+        visible={imageViewerVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          setImageViewerVisible(false);
+        }}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.95)', justifyContent: 'center', alignItems: 'center' }}>
+          <TouchableOpacity
+            style={{ position: 'absolute', top: 50, right: 20, zIndex: 10 }}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              setImageViewerVisible(false);
+            }}
+          >
+            <Ionicons name="close" size={32} color="#fff" />
+          </TouchableOpacity>
+          <Image
+            source={{ uri: profile?.photo || 'https://via.placeholder.com/100' }}
+            style={{ width: '90%', height: '70%', resizeMode: 'contain' }}
+          />
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -986,6 +1145,54 @@ const createStyles = (t: any) => StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     gap: 12,
+    marginBottom: 10,
+  },
+  bioSocialRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    marginBottom: 6,
+    minHeight: 50,
+  },
+  bioSectionHorizontal: {
+    flex: 1,
+    marginRight: 10,
+    justifyContent: 'center',
+  },
+  bioIconRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  bioText: {
+    flex: 1,
+    color: t.text,
+    fontSize: 13,
+    lineHeight: 18,
+    marginLeft: 6,
+  },
+  socialSectionHorizontal: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+  },
+  socialIconButton: {
+    padding: 6,
+    marginHorizontal: 6,
+  },
+  bioSection: {
+    width: '100%',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    marginBottom: 8,
+  },
+  socialSection: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
     marginBottom: 10,
   },
   // New: actions bar mirroring Profile page (left cluster + right message)

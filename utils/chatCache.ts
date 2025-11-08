@@ -40,6 +40,11 @@ export type CachedProfile = {
   photo?: string;
   photoURL?: string;
   bio?: string;
+  socials?: {
+    instagram?: string;
+    facebook?: string;
+    whatsapp?: string;
+  };
   selectedSports?: string[];
   [key: string]: any;
 };
@@ -257,6 +262,7 @@ export async function saveProfilesToCache(profiles: Record<string, CachedProfile
         photo: profile.photo || profile.photoURL,
         photoURL: profile.photoURL || profile.photo,
         bio: profile.bio,
+        socials: profile.socials,
         selectedSports: profile.selectedSports,
       };
     });
@@ -316,6 +322,7 @@ export async function updateProfileInCache(profile: CachedProfile): Promise<void
       photo: profile.photo || profile.photoURL,
       photoURL: profile.photoURL || profile.photo,
       bio: profile.bio,
+      socials: profile.socials,
       selectedSports: profile.selectedSports,
     };
 

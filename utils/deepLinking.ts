@@ -124,15 +124,30 @@ export async function shareActivity(activityId: string, activityName: string) {
   const url = generateActivityLink(activityId);
 
   try {
-    await Share.share({
-      message: Platform.OS === 'ios' 
-        ? `Check out this activity on SportsPal: ${activityName}`
-        : `Check out this activity on SportsPal: ${activityName}\n\n${url}`,
-      url: Platform.OS === 'ios' ? url : undefined,
-      title: `Join me for ${activityName}`,
-    });
-  } catch (error) {
+    const result = await Share.share(
+      Platform.OS === 'ios'
+        ? {
+            url: url,
+            message: `Check out this activity on SportsPal: ${activityName}`,
+          }
+        : {
+            message: `Check out this activity on SportsPal: ${activityName}\n\n${url}`,
+          },
+      Platform.OS === 'ios'
+        ? {
+            subject: `Join me for ${activityName}`,
+          }
+        : undefined
+    );
+
+    if (result.action === Share.sharedAction) {
+      console.log('Activity shared successfully');
+    } else if (result.action === Share.dismissedAction) {
+      console.log('Share dismissed');
+    }
+  } catch (error: any) {
     console.error('Error sharing activity:', error);
+    throw error;
   }
 }
 
@@ -143,15 +158,30 @@ export async function shareProfile(userId: string, username: string) {
   const url = generateProfileLink(userId);
 
   try {
-    await Share.share({
-      message: Platform.OS === 'ios'
-        ? `Check out ${username}'s profile on SportsPal`
-        : `Check out ${username}'s profile on SportsPal\n\n${url}`,
-      url: Platform.OS === 'ios' ? url : undefined,
-      title: `${username} on SportsPal`,
-    });
-  } catch (error) {
+    const result = await Share.share(
+      Platform.OS === 'ios'
+        ? {
+            url: url,
+            message: `Check out ${username}'s profile on SportsPal`,
+          }
+        : {
+            message: `Check out ${username}'s profile on SportsPal\n\n${url}`,
+          },
+      Platform.OS === 'ios'
+        ? {
+            subject: `${username} on SportsPal`,
+          }
+        : undefined
+    );
+
+    if (result.action === Share.sharedAction) {
+      console.log('Profile shared successfully');
+    } else if (result.action === Share.dismissedAction) {
+      console.log('Share dismissed');
+    }
+  } catch (error: any) {
     console.error('Error sharing profile:', error);
+    throw error;
   }
 }
 

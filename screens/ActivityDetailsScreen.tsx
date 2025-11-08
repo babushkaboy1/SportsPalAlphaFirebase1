@@ -91,6 +91,9 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
   const [noSelectionHintVisible, setNoSelectionHintVisible] = useState(false);
   const noSelectionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Menu modal state
+  const [menuVisible, setMenuVisible] = useState(false);
+
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const mapRef = useRef<MapView>(null);
 
@@ -593,6 +596,24 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
     }, 1500);
   };
 
+  const handleReportActivity = () => {
+    setMenuVisible(false);
+    Alert.alert(
+      'Report Activity',
+      'Why are you reporting this activity?',
+      [
+        { text: 'Inappropriate content', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
+        { text: 'Spam or misleading', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
+        { text: 'Dangerous location', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
+  };
+
+  const handleShareActivity = () => {
+    shareActivity(activity.id, activity.activity);
+  };
+
   // Determine if activity is in history: now > start + 2h
   const isHistorical = (() => {
     try {
@@ -622,10 +643,10 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
               </TouchableOpacity>
               <TouchableOpacity
                 style={{ padding: 4, right: 0, position: 'absolute', zIndex: 10 }}
-                onPress={() => shareActivity(activity.id, activity.activity)}
+                onPress={() => setMenuVisible(true)}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               >
-                <Ionicons name="share-social-outline" size={28} color={theme.primary} />
+                <Ionicons name="ellipsis-horizontal" size={28} color={theme.primary} />
               </TouchableOpacity>
               <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 44 }}>
                 <ActivityIcon activity={activity.activity} size={28} color={theme.primary} />
@@ -645,10 +666,10 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.backButton, { right: 16, position: 'absolute', zIndex: 10 }]}
-              onPress={() => shareActivity(activity.id, activity.activity)}
+              onPress={() => setMenuVisible(true)}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             >
-              <Ionicons name="share-social-outline" size={28} color={theme.primary} />
+              <Ionicons name="ellipsis-horizontal" size={28} color={theme.primary} />
             </TouchableOpacity>
             <View style={styles.headerTitleContainer}>
               <ActivityIcon activity={activity.activity} size={28} color={theme.primary} />
@@ -1229,6 +1250,32 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
           )}
         </Pressable>
       </Modal>
+
+      {/* Menu Modal */}
+      <Modal visible={menuVisible} transparent animationType="fade" onRequestClose={() => setMenuVisible(false)}>
+        <Pressable style={styles.modalOverlay} onPress={() => setMenuVisible(false)}>
+          <Pressable style={[styles.modalCard, { maxWidth: 280, padding: 0 }]}>
+            <TouchableOpacity onPress={() => setMenuVisible(false)} style={{ position: 'absolute', top: 8, right: 8, zIndex: 1, backgroundColor: theme.background, borderRadius: 15, padding: 2 }}>
+              <Ionicons name="close-circle" size={24} color={theme.muted} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={handleShareActivity}
+            >
+              <Ionicons name="share-social-outline" size={22} color={theme.primary} />
+              <Text style={styles.menuItemText}>Share Activity</Text>
+            </TouchableOpacity>
+            <View style={styles.menuDivider} />
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={handleReportActivity}
+            >
+              <Ionicons name="flag-outline" size={22} color={theme.danger} />
+              <Text style={[styles.menuItemText, { color: theme.danger }]}>Report Activity</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -1282,4 +1329,7 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
   actionIconAddedToCalendar: { color: '#fff' },
   myLocationButton: { position: 'absolute', bottom: 16, right: 16, backgroundColor: t.card, borderRadius: 24, padding: 8, elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 2, zIndex: 10 },
   activityLocationButton: { backgroundColor: t.card, borderRadius: 24, padding: 8, elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 2, marginBottom: 10, zIndex: 10 },
+  menuItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 },
+  menuItemText: { color: t.text, fontSize: 16, fontWeight: '600' },
+  menuDivider: { height: 1, backgroundColor: t.border },
 });

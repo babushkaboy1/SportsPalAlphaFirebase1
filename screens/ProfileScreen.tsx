@@ -18,6 +18,7 @@ import {
   Modal,
   Pressable,
   Alert,
+  Clipboard,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
@@ -128,6 +129,7 @@ const ProfileScreen = () => {
   // Stats modals
   const [favModalVisible, setFavModalVisible] = useState(false);
   const [connectionsModalVisible, setConnectionsModalVisible] = useState(false);
+  const [imageViewerVisible, setImageViewerVisible] = useState(false);
 
   // Lightweight bottom toast
   const toastAnim = useRef(new Animated.Value(0)).current;
@@ -225,6 +227,7 @@ const ProfileScreen = () => {
         username: data.username || 'User',
         photo: data.photo || data.photoURL,
         bio: data.bio,
+        socials: data.socials,
         selectedSports: data.selectedSports,
       } as any);
     } else {
@@ -1070,7 +1073,15 @@ const ProfileScreen = () => {
 
       <View style={styles.profileInfo}>
         <View style={styles.profileLeftColumn}>
-          <Image source={{ uri: profile?.photo || 'https://via.placeholder.com/100' }} style={styles.profileImage} />
+          <TouchableOpacity 
+            activeOpacity={0.8} 
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              setImageViewerVisible(true);
+            }}
+          >
+            <Image source={{ uri: profile?.photo || 'https://via.placeholder.com/100' }} style={styles.profileImage} />
+          </TouchableOpacity>
         </View>
         {/* Stats next to avatar */}
         <View style={styles.statsColumn}>
@@ -1094,6 +1105,89 @@ const ProfileScreen = () => {
           </View>
         </View>
       </View>
+
+      {/* Bio and Social Media Row - Above Action Buttons */}
+      {(profile?.bio || profile?.socials?.instagram || profile?.socials?.facebook || profile?.socials?.whatsapp) ? (
+        <View style={styles.bioSocialRow}>
+          {/* Bio Section - Left Side (to center) */}
+          <View style={styles.bioSectionHorizontal}>
+            {profile?.bio ? (
+              <View style={styles.bioIconRow}>
+                <Ionicons name="information-circle-outline" size={16} color={theme.primary} />
+                <Text style={styles.bioText} numberOfLines={2} ellipsizeMode="tail">
+                  {profile.bio}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+
+          {/* Social Media Icons - Right Side (from center) */}
+          {(profile?.socials?.instagram || profile?.socials?.facebook || profile?.socials?.whatsapp) ? (
+            <View style={styles.socialSectionHorizontal}>
+              {profile.socials.instagram ? (
+                <TouchableOpacity 
+                  style={styles.socialIconButton} 
+                  onPress={() => {
+                    Alert.alert(
+                      'Instagram',
+                      profile.socials.instagram,
+                      [
+                        { text: 'Copy', onPress: () => {
+                          Clipboard.setString(profile.socials.instagram);
+                          Alert.alert('Copied', 'Instagram handle copied to clipboard');
+                        }},
+                        { text: 'Cancel', style: 'cancel' }
+                      ]
+                    );
+                  }}
+                >
+                  <Ionicons name="logo-instagram" size={26} color={theme.primary} />
+                </TouchableOpacity>
+              ) : null}
+              {profile.socials.facebook ? (
+                <TouchableOpacity 
+                  style={styles.socialIconButton} 
+                  onPress={() => {
+                    Alert.alert(
+                      'Facebook',
+                      profile.socials.facebook,
+                      [
+                        { text: 'Copy', onPress: () => {
+                          Clipboard.setString(profile.socials.facebook);
+                          Alert.alert('Copied', 'Facebook handle copied to clipboard');
+                        }},
+                        { text: 'Cancel', style: 'cancel' }
+                      ]
+                    );
+                  }}
+                >
+                  <Ionicons name="logo-facebook" size={26} color={theme.primary} />
+                </TouchableOpacity>
+              ) : null}
+              {profile.socials.whatsapp ? (
+                <TouchableOpacity 
+                  style={styles.socialIconButton} 
+                  onPress={() => {
+                    Alert.alert(
+                      'WhatsApp',
+                      profile.socials.whatsapp,
+                      [
+                        { text: 'Copy', onPress: () => {
+                          Clipboard.setString(profile.socials.whatsapp);
+                          Alert.alert('Copied', 'WhatsApp contact copied to clipboard');
+                        }},
+                        { text: 'Cancel', style: 'cancel' }
+                      ]
+                    );
+                  }}
+                >
+                  <Ionicons name="logo-whatsapp" size={26} color={theme.primary} />
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ) : null}
+        </View>
+      ) : null}
 
       {!userId || userId === auth.currentUser?.uid ? (
         <View style={styles.profileActionsRow}>
@@ -1238,6 +1332,34 @@ const ProfileScreen = () => {
       >
         <Text style={{ color: '#fff', fontSize: 14, textAlign: 'center' }}>{toastMsg}</Text>
       </Animated.View>
+
+      {/* Full-Screen Image Viewer */}
+      <Modal
+        visible={imageViewerVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          setImageViewerVisible(false);
+        }}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.95)', justifyContent: 'center', alignItems: 'center' }}>
+          <TouchableOpacity
+            style={{ position: 'absolute', top: 50, right: 20, zIndex: 10 }}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              setImageViewerVisible(false);
+            }}
+          >
+            <Ionicons name="close" size={32} color="#fff" />
+          </TouchableOpacity>
+          <Image
+            source={{ uri: profile?.photo || 'https://via.placeholder.com/100' }}
+            style={{ width: '90%', height: '70%', resizeMode: 'contain' }}
+          />
+        </View>
+      </Modal>
+
       </Animated.View>
     </SafeAreaView>
   );
@@ -1348,6 +1470,54 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
     color: t.primary,
     fontWeight: 'bold',
     fontSize: 16,
+  },
+  bioSocialRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    marginBottom: 6,
+    minHeight: 50,
+  },
+  bioSectionHorizontal: {
+    flex: 1,
+    marginRight: 10,
+    justifyContent: 'center',
+  },
+  bioIconRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  bioText: {
+    flex: 1,
+    color: t.text,
+    fontSize: 13,
+    lineHeight: 18,
+    marginLeft: 6,
+  },
+  socialSectionHorizontal: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+  },
+  socialIconButton: {
+    padding: 6,
+    marginHorizontal: 6,
+  },
+  bioSection: {
+    width: '100%',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    marginBottom: 8,
+  },
+  socialSection: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    marginBottom: 10,
   },
   tabBar: {
     flexDirection: 'row',

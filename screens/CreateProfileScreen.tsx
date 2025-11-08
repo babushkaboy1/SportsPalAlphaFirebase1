@@ -11,6 +11,7 @@ import {
   ScrollView,
   ActivityIndicator,
   Animated,
+  Modal,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../context/ThemeContext';
@@ -58,8 +59,11 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
   const [email, setEmail] = useState(profileData?.email || '');
   // Phone removed per request
   const [password, setPassword] = useState(profileData?.password || '');
-  const [location, setLocation] = useState(profileData?.location || '');
+  const [bio, setBio] = useState(profileData?.bio || '');
   const [photo, setPhoto] = useState<string | null>(profileData?.photo || null);
+  const [instagram, setInstagram] = useState(profileData?.socials?.instagram || '');
+  const [facebook, setFacebook] = useState(profileData?.socials?.facebook || '');
+  const [whatsapp, setWhatsapp] = useState(profileData?.socials?.whatsapp || '');
   // Preselect favorites in edit mode (supports either key name from stored profile)
   const [selectedSports, setSelectedSports] = useState<string[]>(profileData?.sportsPreferences || profileData?.selectedSports || []);
   const [isReady, setIsReady] = useState(false);
@@ -87,6 +91,12 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
   const [passwordStrength, setPasswordStrength] = useState<{score: number; color: string; label: string; percent: number}>({ score: 0, color: '#cc3030', label: 'Very weak', percent: 0 });
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const insets = useSafeAreaInsets();
+
+  // Terms & Community Guidelines acceptance (create mode only)
+  const [termsModalVisible, setTermsModalVisible] = useState(false);
+  const [communityModalVisible, setCommunityModalVisible] = useState(false);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [acceptedCommunity, setAcceptedCommunity] = useState(false);
 
   // Fade in on mount
   useEffect(() => {
@@ -396,6 +406,12 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
       return;
     }
 
+    // In create mode, enforce Terms & Community Guidelines acceptance
+    if (!isEdit && (!acceptedTerms || !acceptedCommunity)) {
+      Alert.alert('Accept Policies', 'Please accept the Terms of Service and Community Guidelines to continue.');
+      return;
+    }
+
     // Validate username format
     const uErr = validateUsername(username);
     if (uErr) {
@@ -467,7 +483,12 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
         const profileData = {
           username,
           email,
-          location,
+          bio,
+          socials: {
+            instagram,
+            facebook,
+            whatsapp,
+          },
           photo: photoURL,
           sportsPreferences: selectedSports,
           username_lower: username ? username.toLowerCase() : null,
@@ -519,12 +540,20 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
           const profileDataSocial = {
             username,
             email: email || current.email || '',
-            location,
+            bio,
+            socials: {
+              instagram,
+              facebook,
+              whatsapp,
+            },
             photo: photoURL,
             sportsPreferences: selectedSports,
             username_lower: username ? username.toLowerCase() : null,
             uid: userId,
             emailVerified: !!current.emailVerified,
+            acceptedTerms: true,
+            acceptedCommunityGuidelines: true,
+            termsAcceptedAt: serverTimestamp(),
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           };
@@ -652,12 +681,20 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
         const profileData = {
           username,
           email,
-          location,
+          bio,
+          socials: {
+            instagram,
+            facebook,
+            whatsapp,
+          },
           photo: photoURL,
           sportsPreferences: selectedSports,
           username_lower: username ? username.toLowerCase() : null,
           uid: userId,
           emailVerified: true,
+          acceptedTerms: true,
+          acceptedCommunityGuidelines: true,
+          termsAcceptedAt: serverTimestamp(),
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         };
@@ -776,13 +813,17 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
         {!isEdit && showUsernameError && usernameError ? (
           <Text style={styles.errorText}>{usernameError}</Text>
         ) : null}
-        {/* Move City / Neighborhood directly under Username */}
+        {/* Bio field replaces location */}
         <TextInput
-          style={styles.input}
-          placeholder="City / Neighborhood"
+          style={[styles.input, styles.bioInput]}
+          placeholder="Tell us about yourself... (optional)"
           placeholderTextColor="#999"
-          value={location}
-          onChangeText={setLocation}
+          value={bio}
+          onChangeText={setBio}
+          multiline
+          numberOfLines={2}
+          maxLength={57}
+          textAlignVertical="top"
         />
         <TextInput
           style={[styles.input, ((isEdit || emailLocked || isSocialAuthUser) ? styles.inputDisabled : null)]}
@@ -1038,13 +1079,105 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
         ))}
       </View>
 
+      {/* Social Media Section (Optional) */}
+      <Text style={styles.subtitle}>Social Media (Optional)</Text>
+      <Text style={styles.helperText}>Add your social links or usernames</Text>
+
+      <View style={styles.socialInputContainer}>
+        <Ionicons name="logo-instagram" size={24} color={theme.primary} style={styles.socialIcon} />
+        <TextInput
+          style={styles.socialInput}
+          placeholder="Instagram (link or @username)"
+          placeholderTextColor="#999"
+          value={instagram}
+          onChangeText={setInstagram}
+        />
+      </View>
+
+      <View style={styles.socialInputContainer}>
+        <Ionicons name="logo-facebook" size={24} color={theme.primary} style={styles.socialIcon} />
+        <TextInput
+          style={styles.socialInput}
+          placeholder="Facebook (link or username)"
+          placeholderTextColor="#999"
+          value={facebook}
+          onChangeText={setFacebook}
+        />
+      </View>
+
+      <View style={styles.socialInputContainer}>
+        <Ionicons name="logo-whatsapp" size={24} color={theme.primary} style={styles.socialIcon} />
+        <TextInput
+          style={styles.socialInput}
+          placeholder="WhatsApp (link or number)"
+          placeholderTextColor="#999"
+          value={whatsapp}
+          onChangeText={setWhatsapp}
+        />
+      </View>
+
+      {/* Legal Agreements Section (Create mode only) */}
+      {!isEdit && (
+        <>
+          <Text style={styles.subtitle}>Legal Agreements</Text>
+          
+          {/* Terms of Service Button */}
+          <TouchableOpacity
+            style={styles.legalButton}
+            onPress={() => setTermsModalVisible(true)}
+          >
+            <Ionicons name="document-text-outline" size={22} color={theme.primary} />
+            <Text style={styles.legalButtonText}>Terms of Service</Text>
+            <Ionicons name="chevron-forward" size={20} color={theme.muted} />
+          </TouchableOpacity>
+
+          {/* Community Guidelines Button */}
+          <TouchableOpacity
+            style={styles.legalButton}
+            onPress={() => setCommunityModalVisible(true)}
+          >
+            <Ionicons name="people-outline" size={22} color={theme.primary} />
+            <Text style={styles.legalButtonText}>Community Guidelines</Text>
+            <Ionicons name="chevron-forward" size={20} color={theme.muted} />
+          </TouchableOpacity>
+
+          {/* Acceptance Checkboxes */}
+          <TouchableOpacity
+            style={styles.checkboxRow}
+            onPress={() => setAcceptedTerms(!acceptedTerms)}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.checkbox, acceptedTerms && styles.checkboxChecked]}>
+              {acceptedTerms && <Ionicons name="checkmark" size={18} color="#fff" />}
+            </View>
+            <Text style={styles.checkboxLabel}>
+              I have read and accept the <Text style={{ fontWeight: 'bold', color: theme.primary }}>Terms of Service</Text>
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.checkboxRow}
+            onPress={() => setAcceptedCommunity(!acceptedCommunity)}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.checkbox, acceptedCommunity && styles.checkboxChecked]}>
+              {acceptedCommunity && <Ionicons name="checkmark" size={18} color="#fff" />}
+            </View>
+            <Text style={styles.checkboxLabel}>
+              I agree to comply with the <Text style={{ fontWeight: 'bold', color: theme.primary }}>Community Guidelines</Text>
+            </Text>
+          </TouchableOpacity>
+        </>
+      )}
+
       <TouchableOpacity
         style={[
           styles.continueButton,
           (!isEdit && !isSocialAuthUser && auth.currentUser && !isEmailVerified) ? { opacity: 0.6 } : null,
+          (!isEdit && (!acceptedTerms || !acceptedCommunity)) ? { opacity: 0.6 } : null,
         ]}
         onPress={handleContinue}
-        disabled={!isEdit && !isSocialAuthUser && auth.currentUser != null && !isEmailVerified}
+        disabled={(!isEdit && !isSocialAuthUser && auth.currentUser != null && !isEmailVerified) || (!isEdit && (!acceptedTerms || !acceptedCommunity))}
       >
         <Text style={styles.continueButtonText}>{mainCtaLabel}</Text>
       </TouchableOpacity>
@@ -1052,6 +1185,209 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
       {/* Spinner for loading state */}
       {isLoading && <ActivityIndicator size="large" color="#1ae9ef" style={styles.loadingIndicator} />}
     </ScrollView>
+
+    {/* Terms of Service Modal */}
+    <Modal transparent visible={termsModalVisible} onRequestClose={() => setTermsModalVisible(false)} animationType="fade">
+      <View style={styles.modalBackdrop}>
+        <View style={[styles.modalCard, { maxHeight: '80%', width: '90%' }]}>
+          <Ionicons name="document-text-outline" size={26} color={theme.primary} style={{ marginBottom: 8 }} />
+          <Text style={styles.modalTitle}>Terms of Service</Text>
+          <ScrollView style={{ width: '100%', marginTop: 16 }} showsVerticalScrollIndicator={true}>
+            <Text style={styles.legalText}>
+              <Text style={{ fontWeight: 'bold', fontSize: 14 }}>Last Updated: November 2025{'\n\n'}</Text>
+              
+              <Text style={{ fontWeight: 'bold' }}>0) Who we are and how these Terms work{'\n\n'}</Text>
+              These Terms of Service ("Terms") are a legally binding agreement between you and SportsPal ("SportsPal," "we," "us," "our") governing your access to and use of the SportsPal mobile apps, websites, and related services (the "Service"). Our contact: sportspalapplication@gmail.com.{'\n\n'}
+              By creating an account, using the Service, or clicking "Agree," you accept these Terms. If you do not agree, do not use the Service.{'\n\n'}
+              Supplemental terms (e.g., privacy policy, community guidelines, feature-specific rules) are incorporated by reference. Some countries grant consumers non-waivable rights — nothing here limits those.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>1) Eligibility; Accounts; Security{'\n\n'}</Text>
+              <Text style={{ fontWeight: '600' }}>Age.</Text> You must be at least 16 if you are in the EEA/UK (or the age of digital consent in your country) and at least 13 elsewhere. If you are under 18 (or the age of majority in your region), you must have parental permission.{'\n\n'}
+              <Text style={{ fontWeight: '600' }}>Account.</Text> Provide accurate information, keep your credentials safe, and do not share your account. You are responsible for all activity under your account.{'\n\n'}
+              <Text style={{ fontWeight: '600' }}>One person, one account.</Text> No account farming, resale, or transfer without our written consent.{'\n\n'}
+              <Text style={{ fontWeight: '600' }}>Verification.</Text> We may request verification (e.g., email, phone, device checks). We can refuse, suspend, or reclaim usernames.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>2) The Service (what SportsPal is — and is not){'\n\n'}</Text>
+              <Text style={{ fontWeight: '600' }}>Platform only.</Text> SportsPal is a platform to discover activities and connect with people. We do not organize, supervise, or control activities, and we do not guarantee any user's identity, background, safety, skill level, or compatibility.{'\n\n'}
+              <Text style={{ fontWeight: '600' }}>No emergency services; no professional advice.</Text> SportsPal is not a medical, legal, or emergency service. Dial your local emergency number for urgent situations.{'\n\n'}
+              <Text style={{ fontWeight: '600' }}>Beta/changes.</Text> Features may change or be discontinued at any time. We may limit or revoke access without liability.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>3) Community Rules (use responsibly){'\n\n'}</Text>
+              You agree you will not:{'\n\n'}
+              • Harass, threaten, stalk, dox, or otherwise harm others.{'\n'}
+              • Post or transmit hateful, pornographic, exploitative, or illegal content; or content that infringes others' rights.{'\n'}
+              • Organize or promote dangerous or illegal activities, weapons, or drugs.{'\n'}
+              • Impersonate any person or entity, or misrepresent your affiliation, age, sex, or identity.{'\n'}
+              • Data-mine, scrape, spider, or use bots; reverse engineer or circumvent security.{'\n'}
+              • Upload malware or interfere with the Service's operation.{'\n'}
+              • Use the Service for advertising or commercial solicitation without our written permission.{'\n'}
+              • Use location spoofing or falsify activity locations.{'\n\n'}
+              <Text style={{ fontWeight: '600' }}>Enforcement.</Text> We may remove content, restrict features, or suspend/terminate accounts at any time for suspected violations, to protect users, or to comply with law — with or without notice. We are not obligated to explain our moderation decisions.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>4) Content and Licenses{'\n\n'}</Text>
+              <Text style={{ fontWeight: '600' }}>Your Content.</Text> You own the content you post (photos, text, messages, activity listings, etc.). By posting, you grant to SportsPal a worldwide, non-exclusive, transferable, sublicensable, royalty-free license to host, store, use, copy, modify, adapt, translate, create derivative works of, reproduce, publish, publicly perform/display, and distribute your content solely to operate, improve, promote, and provide the Service (including backups, moderation, and distribution via service providers).{'\n\n'}
+              <Text style={{ fontWeight: '600' }}>License to other users.</Text> You also grant other users a non-exclusive license to access and display your content within the Service as intended (e.g., viewing your profile or activity posts).{'\n\n'}
+              <Text style={{ fontWeight: '600' }}>Feedback.</Text> If you submit ideas or suggestions, you grant us a perpetual, irrevocable, worldwide, royalty-free license to use them without restriction.{'\n\n'}
+              <Text style={{ fontWeight: '600' }}>Moral rights.</Text> To the extent permitted by law, you waive any moral rights you may have in your content for the purposes above.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>5) Location and Discovery{'\n\n'}</Text>
+              <Text style={{ fontWeight: '600' }}>Location features.</Text> If enabled, we process your location (approximate or precise) to show you nearby content and users, improve safety, and combat spam/fraud.{'\n\n'}
+              <Text style={{ fontWeight: '600' }}>Display.</Text> We do not publish your exact real-time location to other users; discovery typically uses approximate distance.{'\n\n'}
+              <Text style={{ fontWeight: '600' }}>Accuracy.</Text> Location services may be inaccurate or unavailable. You can change permissions in device settings.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>6) Safety; Offline Interactions; Assumption of Risk; Release{'\n\n'}</Text>
+              <Text style={{ fontWeight: '600' }}>Your responsibility.</Text> You are solely responsible for your interactions on and off the Service. We do not conduct criminal background checks and do not vet users, even if we offer optional checks.{'\n\n'}
+              <Text style={{ fontWeight: '600' }}>Meetups.</Text> If you meet others, exercise caution: meet in public places, tell a friend, check venues, arrange your own transport, leave if you feel unsafe.{'\n\n'}
+              <Text style={{ fontWeight: '600' }}>Sports injuries and hazards.</Text> Sports and physical activities involve risk of injury, illness, property damage, or worse. By participating, you voluntarily assume all risks arising from your participation and interactions.{'\n\n'}
+              <Text style={{ fontWeight: '600' }}>Release.</Text> To the maximum extent permitted by law, you release and hold harmless SportsPal and its affiliates, officers, employees, and partners from any claims, demands, and damages (direct and indirect) arising from or related to user conduct, meetups, and activities arranged through the Service. This does not affect rights you cannot waive by law.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>7) No Background Checks; Optional Safety Tools{'\n\n'}</Text>
+              We may offer optional tools (ID checks, verification badges, in-app reporting, blocks, tips). They improve signals but are not guarantees. Absence or presence of a badge means nothing definitive about a user.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>8) Communications; Notifications; SMS{'\n\n'}</Text>
+              By providing contact details, you consent to receive transactional communications (e.g., security alerts, activity updates). Marketing messages require your consent where required by law and you can opt out. Carrier rates may apply. You can manage push notifications in device settings.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>9) Third-Party Services and Links{'\n\n'}</Text>
+              The Service may include third-party content, SDKs, and links (e.g., sign-in, maps, analytics, storage, payments). We are not responsible for third-party terms or privacy practices. Your use of third parties is at your own risk.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>10) Virtual Items, Subscriptions, and Payments (if/when offered){'\n\n'}</Text>
+              If we offer paid features, we will communicate pricing, billing cycles, auto-renewal terms, and refund policies in-app or in additional terms. Taxes and fees may apply. Apple App Store and Google Play in-app purchase rules may govern transactions and refunds.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>11) Intellectual Property; Our Rights{'\n\n'}</Text>
+              The Service and all related trademarks, logos, code, and content are owned by SportsPal or our licensors and are protected by law. Except for the limited rights expressly granted, no license is granted to you. Do not use our marks without written permission.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>12) Copyright Policy (DMCA/Global Notice-and-Takedown){'\n\n'}</Text>
+              We respect IP rights and will respond to notices of alleged infringement consistent with applicable law (including the U.S. DMCA).{'\n\n'}
+              To submit a copyright notice, email sportspalapplication@gmail.com with:{'\n\n'}
+              • your contact details;{'\n'}
+              • identification of the copyrighted work;{'\n'}
+              • the allegedly infringing material and its location;{'\n'}
+              • a statement of good-faith belief;{'\n'}
+              • a statement that your notice is accurate and, under penalty of perjury, you're authorized to act;{'\n'}
+              • your physical or electronic signature.{'\n\n'}
+              We may terminate accounts of repeat infringers.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>13) Moderation; Reporting; Appeals{'\n\n'}</Text>
+              We may review, remove, or restrict content or accounts at our discretion and without obligation to you. You can report content or users in-app or via email. We may, but are not required to, offer an appeal process.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>14) Term; Termination; Account Deletion{'\n\n'}</Text>
+              You may delete your account at any time (settings or by email). We may suspend or terminate access at any time for any or no reason, including violations, safety risks, or inactivity. Sections that by nature should survive (e.g., licenses for backup copies, safety releases, arbitration, IP rights, limitations of liability) survive termination.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>15) Changes to the Service and to these Terms{'\n\n'}</Text>
+              We may modify the Service and these Terms. If changes are material, we'll provide reasonable notice (e.g., in-app). Continued use after changes effective means you accept them. If you do not agree, stop using the Service and delete your account.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>16) Warranty Disclaimer{'\n\n'}</Text>
+              To the maximum extent permitted by law, the Service is provided "as is" and "as available." We disclaim all warranties, express or implied, including merchantability, fitness for a particular purpose, and non-infringement. We do not warrant uninterrupted, secure, or error-free operation, or that content will be accurate or safe.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>17) Limitation of Liability{'\n\n'}</Text>
+              To the maximum extent permitted by law, SportsPal and its affiliates, officers, employees, agents, and partners will not be liable for any indirect, incidental, special, consequential, exemplary, punitive, or enhanced damages, or for lost profits, data, goodwill, or other intangible losses, arising from or related to your use of or inability to use the Service, user conduct, or offline interactions.{'\n\n'}
+              <Text style={{ fontWeight: '600' }}>Cap.</Text> Our aggregate liability to you for any claims will not exceed the greater of (a) USD $100 or (b) the amounts you paid to us (if any) in the 12 months before the claim. Some jurisdictions do not allow certain limitations; in those places, we limit liability to the maximum extent allowed by law.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>18) Indemnification{'\n\n'}</Text>
+              To the maximum extent permitted by law, you agree to defend, indemnify, and hold harmless SportsPal and its affiliates from any claims, liabilities, damages, losses, and expenses (including reasonable legal fees) arising from or related to: (a) your content; (b) your use of the Service; (c) your interactions on or off the Service; (d) your violation of these Terms or law; (e) your infringement of third-party rights.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>19) Dispute Resolution — Binding Arbitration; Class Action Waiver{'\n\n'}</Text>
+              PLEASE READ — THIS SECTION LIMITS HOW DISPUTES ARE RESOLVED.{'\n\n'}
+              <Text style={{ fontWeight: '600' }}>Informal resolution.</Text> Before filing a claim, you agree to email sportspalapplication@gmail.com with "Dispute Notice," your name, account email, a brief description, and relief sought. We'll try to resolve within 30 days.{'\n\n'}
+              <Text style={{ fontWeight: '600' }}>Arbitration.</Text> If not resolved, any dispute, claim, or controversy arising out of or relating to these Terms or the Service ("Dispute") will be resolved by binding individual arbitration under the U.S. Federal Arbitration Act and JAMS or AAA rules (we'll agree on one). The arbitrator may award individual relief. No class arbitration. Seat of arbitration: [choose one: New York, NY / Delaware / California]; language: English. We'll pay filing/administrative fees for non-frivolous claims up to a reasonable cap set by rules.{'\n\n'}
+              <Text style={{ fontWeight: '600' }}>Class-action waiver.</Text> You and SportsPal waive any right to a jury trial or to participate in a class, consolidated, or representative action.{'\n\n'}
+              <Text style={{ fontWeight: '600' }}>Opt-out.</Text> You may opt out of this arbitration clause within 30 days of first accepting these Terms by emailing sportspalapplication@gmail.com with subject "Arbitration Opt-Out," your full name, and account email.{'\n\n'}
+              <Text style={{ fontWeight: '600' }}>Small claims & IP relief.</Text> Either party may seek individual relief in small-claims court within its jurisdiction or seek injunctive relief in court for IP or unauthorized use of the Service.{'\n\n'}
+              <Text style={{ fontWeight: '600' }}>EEA/UK/India/Other.</Text> If mandatory local law prohibits binding arbitration or class waivers for consumers, this Section does not deprive you of those non-waivable rights. You may bring claims in the courts of your habitual residence as required by law.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>20) Governing Law; Venue{'\n\n'}</Text>
+              Except where prohibited by mandatory local law, these Terms are governed by the laws of [choose one: Greece / England & Wales / State of Delaware, USA], without regard to its conflicts of laws rules. Subject to the arbitration clause, the exclusive venue for litigation (if any) shall be the courts located in [Athens, Greece / London, UK / Delaware, USA]. Consumers in the EEA/UK may bring claims in their local courts where required by law.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>21) App Store Terms (Apple/Google) — Third-Party Beneficiary{'\n\n'}</Text>
+              <Text style={{ fontWeight: '600' }}>Apple.</Text> You acknowledge these Terms are between you and SportsPal, not Apple Inc. Apple is not responsible for the Service or its content, has no obligation to furnish support, and is not liable for claims relating to the app (product liability, legal compliance, or IP). Apple is a third-party beneficiary of these Terms and may enforce them against you regarding your use of the iOS app. In the event of any failure to conform to any applicable warranty, you may notify Apple and Apple will refund the purchase price (if any).{'\n\n'}
+              <Text style={{ fontWeight: '600' }}>Google.</Text> Your use of the Android app may be subject to Google Play terms. Google is not responsible for support or for claims related to the app.{'\n\n'}
+              <Text style={{ fontWeight: '600' }}>Device restrictions.</Text> You must use the app according to the usage rules set by the app store provider and your device OS.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>22) Export Controls; Sanctions; Anti-Corruption{'\n\n'}</Text>
+              You represent you are not located in, under control of, or a national or resident of any country or person subject to sanctions. You agree to comply with export/import, sanctions, and anti-corruption laws.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>23) Privacy{'\n\n'}</Text>
+              Our Privacy Policy explains how we collect, use, and share information. By using the Service, you consent to our data practices as described there.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>24) Force Majeure{'\n\n'}</Text>
+              We are not liable for delays or failures due to events beyond our reasonable control (e.g., natural disasters, outages, strikes, war, government action, internet failures).{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>25) Assignment{'\n\n'}</Text>
+              You may not assign or transfer these Terms without our consent. We may assign or transfer them (e.g., merger, acquisition) with notice where required by law.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>26) Severability; No Waiver; Entire Agreement{'\n\n'}</Text>
+              If any provision is deemed unenforceable, it will be modified to the minimum extent necessary and the remainder remains in effect. No waiver is effective unless in writing. These Terms (plus incorporated policies) are the entire agreement between you and us regarding the Service.{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>27) Language; Consumer Rights{'\n\n'}</Text>
+              These Terms are in English. Translations may be provided for convenience; the English version controls except where local law requires otherwise. Nothing here limits non-waivable consumer rights in your country of residence (e.g., EEA/UK).{'\n\n'}
+              
+              <Text style={{ fontWeight: 'bold' }}>28) Contact; Notices{'\n\n'}</Text>
+              SportsPal — sportspalapplication@gmail.com{'\n\n'}
+              Legal notices must be sent by email with subject "Legal Notice." We may deliver notices via in-app messages, email, or postings.
+            </Text>
+          </ScrollView>
+          <TouchableOpacity 
+            style={[styles.modalBtn, { backgroundColor: theme.primary, marginTop: 16, width: '100%', flex: 0 }]} 
+            onPress={() => setTermsModalVisible(false)}
+          >
+            <Text style={[styles.modalBtnText, { color: '#fff' }]}>Close</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+
+    {/* Community Guidelines Modal */}
+    <Modal transparent visible={communityModalVisible} onRequestClose={() => setCommunityModalVisible(false)} animationType="fade">
+      <View style={styles.modalBackdrop}>
+        <View style={[styles.modalCard, { maxHeight: '80%', width: '90%' }]}>
+          <Ionicons name="people-outline" size={26} color={theme.primary} style={{ marginBottom: 8 }} />
+          <Text style={styles.modalTitle}>Community Guidelines</Text>
+          <ScrollView style={{ width: '100%', marginTop: 16 }} showsVerticalScrollIndicator={true}>
+            <Text style={styles.legalText}>
+              <Text style={{ fontWeight: 'bold', fontSize: 14 }}>Last Updated: November 2025{'\n\n'}</Text>
+              
+              <Text style={{ fontWeight: 'bold' }}>Purpose.</Text> Keep SportsPal respectful, safe, and useful for finding people to play sports with.{'\n'}
+              <Text style={{ fontWeight: 'bold' }}>Applies to:</Text> Profiles, usernames, photos, activity listings, chats, messages, and any in-app behavior—on and off the platform when arranged through SportsPal.{'\n\n'}
+
+              <Text style={{ fontWeight: 'bold' }}>A. Golden Rules{'\n'}</Text>
+              <Text style={{ fontWeight: 'bold' }}>Be respectful.</Text> No harassment, threats, stalking, or intimidation.{'\n'}
+              <Text style={{ fontWeight: 'bold' }}>No hate or violence.</Text> Prohibitions include slurs, dehumanization, extremist praise, or incitement.{'\n'}
+              <Text style={{ fontWeight: 'bold' }}>No sexual content/nudity.</Text> No explicit or pornographic content; no fetish content; no sexualization of minors (zero tolerance).{'\n'}
+              <Text style={{ fontWeight: 'bold' }}>No illegal or dangerous activity.</Text> Weapons trading, drugs, doping substances, fraud, hacking, or instructions to cause harm are banned.{'\n'}
+              <Text style={{ fontWeight: 'bold' }}>No doxxing/privacy invasions.</Text> Don't share private info (addresses, IDs, financials, medical data) without consent.{'\n'}
+              <Text style={{ fontWeight: 'bold' }}>No scams or spam.</Text> No pyramid schemes, fake giveaways, phishing, malware, mass unsolicited messages.{'\n'}
+              <Text style={{ fontWeight: 'bold' }}>No impersonation or misrepresentation.</Text> Don't claim to be someone you're not; parody must be clearly labeled.{'\n'}
+              <Text style={{ fontWeight: 'bold' }}>Accurate activities.</Text> Describe date, time, location, sport, skill level, participant limits, and any costs truthfully. Update or cancel if plans change.{'\n'}
+              <Text style={{ fontWeight: 'bold' }}>Respect IP.</Text> Only post photos and content you own or have rights to.{'\n'}
+              <Text style={{ fontWeight: 'bold' }}>Meet safely.</Text> Follow our Safety Guidelines. Leave if you feel unsafe—always.{'\n\n'}
+
+              <Text style={{ fontWeight: 'bold' }}>B. Three-Strike Moderation Ladder (with immediate-removal override){'\n'}</Text>
+              <Text style={{ fontWeight: 'bold' }}>Strike 1 (Warning):</Text> Content removal + feature limits (e.g., 24–72h chat/creation restriction).{'\n'}
+              <Text style={{ fontWeight: 'bold' }}>Strike 2 (Probation):</Text> 7–30 days suspension of some or all features.{'\n'}
+              <Text style={{ fontWeight: 'bold' }}>Strike 3 (Removal):</Text> Permanent ban.{'\n'}
+              <Text style={{ fontWeight: 'bold' }}>Immediate Removal:</Text> We may skip steps for child safety, credible violence threats, severe harassment, doxxing, hate speech, or explicit sexual content.{'\n'}
+              <Text style={{ fontWeight: 'bold' }}>Strike decay:</Text> Strikes typically expire after 12 months if no further violations.{'\n\n'}
+
+              <Text style={{ fontWeight: 'bold' }}>C. Appeals{'\n'}</Text>
+              <Text style={{ fontWeight: 'bold' }}>Window:</Text> 14 days from enforcement notice.{'\n'}
+              <Text style={{ fontWeight: 'bold' }}>How:</Text> Email sportspalapplication@gmail.com from your account email with subject "Appeal."{'\n'}
+              <Text style={{ fontWeight: 'bold' }}>What to include:</Text> Activity/Profile/Message screenshot or link, brief explanation, any relevant context.{'\n'}
+              <Text style={{ fontWeight: 'bold' }}>Outcome:</Text> We confirm, modify, or reverse within a reasonable time. Decisions after appeal are final.{'\n\n'}
+
+              <Text style={{ fontWeight: 'bold' }}>D. False Reporting & Abuse of Tools{'\n'}</Text>
+              Deliberate false reports or brigading may result in strikes or suspension.
+            </Text>
+          </ScrollView>
+          <TouchableOpacity 
+            style={[styles.modalBtn, { backgroundColor: theme.primary, marginTop: 16, width: '100%', flex: 0 }]} 
+            onPress={() => setCommunityModalVisible(false)}
+          >
+            <Text style={[styles.modalBtnText, { color: '#fff' }]}>Close</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+
     </Animated.View>
   );
 };
@@ -1155,6 +1491,11 @@ const createStyles = (t: any) => StyleSheet.create({
     color: t.text,
     marginVertical: 8,
   },
+  bioInput: {
+    minHeight: 70,
+    maxHeight: 70,
+    paddingTop: 14,
+  },
   inputDisabled: {
     opacity: 0.6,
   },
@@ -1163,6 +1504,32 @@ const createStyles = (t: any) => StyleSheet.create({
     color: t.muted,
     marginVertical: 15,
     textAlign: 'center',
+  },
+  helperText: {
+    fontSize: 14,
+    color: t.muted,
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  socialInputContainer: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: t.card,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: t.border,
+    marginVertical: 6,
+    paddingHorizontal: 10,
+  },
+  socialIcon: {
+    marginRight: 12,
+  },
+  socialInput: {
+    flex: 1,
+    padding: 14,
+    fontSize: 16,
+    color: t.text,
   },
   sportsGrid: {
     width: '100%',
@@ -1349,6 +1716,89 @@ const createStyles = (t: any) => StyleSheet.create({
     color: '#fff',
     fontSize: 12,
     fontWeight: '700',
+  },
+  // Legal agreements styles
+  legalButton: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: t.card,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: t.border,
+    marginBottom: 10,
+  },
+  legalButtonText: {
+    flex: 1,
+    color: t.text,
+    fontSize: 15,
+    fontWeight: '600',
+    marginLeft: 12,
+  },
+  checkboxRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 12,
+    marginBottom: 8,
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: t.border,
+    backgroundColor: t.card,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  checkboxChecked: {
+    backgroundColor: t.primary,
+    borderColor: t.primary,
+  },
+  checkboxLabel: {
+    flex: 1,
+    color: t.text,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  // Modal styles
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalCard: {
+    width: '94%',
+    backgroundColor: t.card,
+    borderRadius: 16,
+    padding: 18,
+    alignItems: 'center',
+  },
+  modalTitle: {
+    color: t.text,
+    fontSize: 18,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  modalBtn: {
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  modalBtnText: {
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  legalText: {
+    color: t.text,
+    fontSize: 13,
+    lineHeight: 20,
+    paddingHorizontal: 8,
   },
 });
 
