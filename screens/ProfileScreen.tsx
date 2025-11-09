@@ -637,7 +637,9 @@ const ProfileScreen = () => {
       case 'activities':
         return (
           <View style={{ flex: 1 }}>
-            <Text style={styles.tabTitleCentered}>Scheduled Activities</Text>
+            <TouchableOpacity activeOpacity={1} onPress={() => Keyboard.dismiss()}>
+              <Text style={styles.tabTitleCentered}>Scheduled Activities</Text>
+            </TouchableOpacity>
             <View style={styles.userSearchRow}>
               <Ionicons name="search" size={16} color={theme.primary} style={{ marginRight: 8 }} />
               <TextInput
@@ -689,7 +691,9 @@ const ProfileScreen = () => {
       case 'history':
         return (
           <View style={{ flex: 1 }}>
-            <Text style={styles.tabTitleCentered}>Activity History</Text>
+            <TouchableOpacity activeOpacity={1} onPress={() => Keyboard.dismiss()}>
+              <Text style={styles.tabTitleCentered}>Activity History</Text>
+            </TouchableOpacity>
             <View style={styles.userSearchRow}>
               <Ionicons name="search" size={16} color={theme.primary} style={{ marginRight: 8 }} />
               <TextInput
@@ -732,7 +736,9 @@ const ProfileScreen = () => {
       case 'friends':
         return (
           <View style={{ flex: 1 }}>
-            <Text style={styles.tabTitleCentered}>Connections</Text>
+            <TouchableOpacity activeOpacity={1} onPress={() => Keyboard.dismiss()}>
+              <Text style={styles.tabTitleCentered}>Connections</Text>
+            </TouchableOpacity>
             {/* Search users (on top) */}
             <View style={styles.userSearchRow}>
               <Ionicons name="search" size={16} color={theme.primary} style={{ marginRight: 8 }} />
@@ -1223,7 +1229,10 @@ const ProfileScreen = () => {
           <TouchableOpacity
             key={tab}
             style={[styles.tab, activeTab === tab && styles.activeTab, { flex: 1 }]}
-            onPress={() => setActiveTab(tab)}
+            onPress={() => {
+              Keyboard.dismiss();
+              setActiveTab(tab);
+            }}
           >
             <Ionicons
               name={getIconName(tab)}

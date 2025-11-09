@@ -553,11 +553,11 @@ const CreateGameScreen = () => {
   const [showParticipantsPicker, setShowParticipantsPicker] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const scrollRef = useRef(null);
+  const scrollRef = useRef<ScrollView>(null);
   const pullAnim = useRef(new Animated.Value(0)).current; // pixels pulled down when at top
-  const CLEAR_THRESHOLD = 110; // pull distance to clear
+  const CLEAR_THRESHOLD = 120; // pull distance to clear
   const lastPullRef = useRef(0);
-  const HEADER_OVERLAY_OFFSET = 68; // position overlay lower, near the title
+  const HEADER_OVERLAY_OFFSET = 60; // position overlay lower, near the title
 
   useEffect(() => {
     const timeout = setTimeout(() => setIsReady(true), 500);
@@ -887,7 +887,7 @@ const CreateGameScreen = () => {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
-        {/* Fixed pull-to-clear overlay above the title */}
+        {/* Pull-to-reset indicator overlay */}
         <Animated.View
           pointerEvents="none"
           style={[
@@ -895,15 +895,22 @@ const CreateGameScreen = () => {
             {
               top: insets.top + HEADER_OVERLAY_OFFSET,
               opacity: pullAnim.interpolate({
-                inputRange: [0, 20, CLEAR_THRESHOLD * 0.4, CLEAR_THRESHOLD],
-                outputRange: [0, 0.25, 0.8, 1],
+                inputRange: [0, 15, CLEAR_THRESHOLD * 0.5, CLEAR_THRESHOLD],
+                outputRange: [0, 0.3, 0.85, 1],
                 extrapolate: 'clamp',
               }),
               transform: [
                 {
                   scale: pullAnim.interpolate({
                     inputRange: [0, CLEAR_THRESHOLD],
-                    outputRange: [0.6, 1],
+                    outputRange: [0.5, 1.05],
+                    extrapolate: 'clamp',
+                  }),
+                },
+                {
+                  translateY: pullAnim.interpolate({
+                    inputRange: [0, CLEAR_THRESHOLD],
+                    outputRange: [-10, 0],
                     extrapolate: 'clamp',
                   }),
                 },
@@ -911,36 +918,113 @@ const CreateGameScreen = () => {
             },
           ]}
         >
-          <View style={styles.clearBadge}>
-            <Ionicons name="close" size={18} color={theme.text} />
-          </View>
-          <Animated.Text
-            style={[styles.pullClearText,
+          {/* Animated circle background */}
+          <Animated.View
+            style={[
+              styles.resetCircle,
               {
+                backgroundColor: theme.card,
+                borderColor: pullAnim.interpolate({
+                  inputRange: [0, CLEAR_THRESHOLD * 0.5, CLEAR_THRESHOLD],
+                  outputRange: [theme.border, theme.primaryStrong, theme.primary],
+                  extrapolate: 'clamp',
+                }),
+                transform: [
+                  {
+                    rotate: pullAnim.interpolate({
+                      inputRange: [0, CLEAR_THRESHOLD],
+                      outputRange: ['0deg', '180deg'],
+                      extrapolate: 'clamp',
+                    }),
+                  },
+                ],
+              },
+            ]}
+          >
+            <Animated.View
+              style={{
+                transform: [
+                  {
+                    rotate: pullAnim.interpolate({
+                      inputRange: [0, CLEAR_THRESHOLD],
+                      outputRange: ['0deg', '-180deg'],
+                      extrapolate: 'clamp',
+                    }),
+                  },
+                ],
+              }}
+            >
+              <Ionicons 
+                name="refresh" 
+                size={24} 
+                color={theme.primary}
+              />
+            </Animated.View>
+          </Animated.View>
+
+          {/* Progress indicator */}
+          <Animated.View
+            style={[
+              styles.progressBar,
+              {
+                width: pullAnim.interpolate({
+                  inputRange: [0, CLEAR_THRESHOLD],
+                  outputRange: ['0%', '100%'],
+                  extrapolate: 'clamp',
+                }),
+                backgroundColor: pullAnim.interpolate({
+                  inputRange: [0, CLEAR_THRESHOLD * 0.5, CLEAR_THRESHOLD],
+                  outputRange: [theme.border, theme.primaryStrong, theme.primary],
+                  extrapolate: 'clamp',
+                }),
+              },
+            ]}
+          />
+
+          {/* Text instructions */}
+          <Animated.Text
+            style={[
+              styles.pullResetText,
+              {
+                color: theme.text,
                 opacity: pullAnim.interpolate({
-                  inputRange: [0, CLEAR_THRESHOLD * 0.6, CLEAR_THRESHOLD],
-                  outputRange: [0.8, 1, 0],
+                  inputRange: [0, CLEAR_THRESHOLD * 0.7, CLEAR_THRESHOLD],
+                  outputRange: [1, 1, 0],
                   extrapolate: 'clamp',
                 }),
               },
             ]}
           >
-            Pull to clear form
+            Pull down to reset form
           </Animated.Text>
+
+          {/* Release text - appears near threshold */}
           <Animated.Text
-            style={[styles.pullClearText,
+            style={[
+              styles.pullResetText,
               {
                 position: 'absolute',
-                top: 32,
+                top: 88,
+                color: theme.primary,
+                fontWeight: '700',
                 opacity: pullAnim.interpolate({
-                  inputRange: [0, CLEAR_THRESHOLD - 10, CLEAR_THRESHOLD, CLEAR_THRESHOLD + 10],
-                  outputRange: [0, 0, 0.95, 1],
+                  inputRange: [0, CLEAR_THRESHOLD * 0.7, CLEAR_THRESHOLD - 5, CLEAR_THRESHOLD],
+                  outputRange: [0, 0, 0.8, 1],
                   extrapolate: 'clamp',
                 }),
+                transform: [
+                  {
+                    scale: pullAnim.interpolate({
+                      inputRange: [0, CLEAR_THRESHOLD * 0.7, CLEAR_THRESHOLD],
+                      outputRange: [0.8, 0.8, 1.1],
+                      extrapolate: 'clamp',
+                    }),
+                  },
+                ],
               },
             ]}
           >
-            Release to clear
+            ✓ Release to reset
           </Animated.Text>
         </Animated.View>
 
@@ -1164,13 +1248,21 @@ const CreateGameScreen = () => {
                 ) : null}
               </View>
 
-              <View style={{ backgroundColor: theme.card, padding: 10, borderRadius: 8, marginBottom: 10 }}>
-                <Text style={{ color: theme.primary, fontWeight: '700', marginBottom: 8 }}>Route Statistics (optional)</Text>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <Text style={{ color: theme.muted }}>Distance</Text>
+              <View style={styles.routeStatsContainer}>
+                <View style={styles.routeStatsHeader}>
+                  <Ionicons name="stats-chart" size={20} color={theme.primary} />
+                  <Text style={styles.routeStatsTitle}>Route Statistics</Text>
+                  <Text style={styles.routeStatsOptional}>(optional)</Text>
+                </View>
+                
+                <View style={styles.statRow}>
+                  <View style={styles.statLabelContainer}>
+                    <Ionicons name="trail-sign" size={16} color={theme.primary} style={{ marginRight: 6 }} />
+                    <Text style={styles.statLabel}>Distance</Text>
+                  </View>
                   <TextInput
                     ref={distanceRef}
-                    style={[styles.input, { flex: 1, marginLeft: 12, paddingVertical: 6 }]}
+                    style={styles.statInput}
                     placeholder="e.g. 20.86 km"
                     placeholderTextColor={theme.muted}
                     value={gpxStats.distance}
@@ -1178,13 +1270,22 @@ const CreateGameScreen = () => {
                     returnKeyType="next"
                     blurOnSubmit={false}
                     onSubmitEditing={() => ascentRef.current?.focus()}
+                    onFocus={() => {
+                      setTimeout(() => {
+                        scrollRef.current?.scrollTo({ y: 300, animated: true });
+                      }, 100);
+                    }}
                   />
                 </View>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <Text style={{ color: theme.muted }}>Ascent</Text>
+                
+                <View style={styles.statRow}>
+                  <View style={styles.statLabelContainer}>
+                    <Ionicons name="trending-up" size={16} color={theme.primary} style={{ marginRight: 6 }} />
+                    <Text style={styles.statLabel}>Ascent</Text>
+                  </View>
                   <TextInput
                     ref={ascentRef}
-                    style={[styles.input, { flex: 1, marginLeft: 12, paddingVertical: 6 }]}
+                    style={styles.statInput}
                     placeholder="e.g. 345 m"
                     placeholderTextColor={theme.muted}
                     value={gpxStats.ascent}
@@ -1192,13 +1293,22 @@ const CreateGameScreen = () => {
                     returnKeyType="next"
                     blurOnSubmit={false}
                     onSubmitEditing={() => difficultyRef.current?.focus()}
+                    onFocus={() => {
+                      setTimeout(() => {
+                        scrollRef.current?.scrollTo({ y: 350, animated: true });
+                      }, 100);
+                    }}
                   />
                 </View>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <Text style={{ color: theme.muted }}>Difficulty</Text>
+                
+                <View style={styles.statRow}>
+                  <View style={styles.statLabelContainer}>
+                    <Ionicons name="speedometer" size={16} color={theme.primary} style={{ marginRight: 6 }} />
+                    <Text style={styles.statLabel}>Difficulty</Text>
+                  </View>
                   <TextInput
                     ref={difficultyRef}
-                    style={[styles.input, { flex: 1, marginLeft: 12, paddingVertical: 6 }]}
+                    style={styles.statInput}
                     placeholder="e.g. Moderate"
                     placeholderTextColor={theme.muted}
                     value={gpxStats.difficulty}
@@ -1206,13 +1316,22 @@ const CreateGameScreen = () => {
                     returnKeyType="next"
                     blurOnSubmit={false}
                     onSubmitEditing={() => descentRef.current?.focus()}
+                    onFocus={() => {
+                      setTimeout(() => {
+                        scrollRef.current?.scrollTo({ y: 400, animated: true });
+                      }, 100);
+                    }}
                   />
                 </View>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <Text style={{ color: theme.muted }}>Descent</Text>
+                
+                <View style={styles.statRow}>
+                  <View style={styles.statLabelContainer}>
+                    <Ionicons name="trending-down" size={16} color={theme.primary} style={{ marginRight: 6 }} />
+                    <Text style={styles.statLabel}>Descent</Text>
+                  </View>
                   <TextInput
                     ref={descentRef}
-                    style={[styles.input, { flex: 1, marginLeft: 12, paddingVertical: 6 }]}
+                    style={styles.statInput}
                     placeholder="e.g. 1,135 m"
                     placeholderTextColor={theme.muted}
                     value={gpxStats.descent}
@@ -1220,13 +1339,22 @@ const CreateGameScreen = () => {
                     returnKeyType="next"
                     blurOnSubmit={false}
                     onSubmitEditing={() => maxElevationRef.current?.focus()}
+                    onFocus={() => {
+                      setTimeout(() => {
+                        scrollRef.current?.scrollTo({ y: 450, animated: true });
+                      }, 100);
+                    }}
                   />
                 </View>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <Text style={{ color: theme.muted }}>Max Elevation</Text>
+                
+                <View style={styles.statRow}>
+                  <View style={styles.statLabelContainer}>
+                    <Ionicons name="arrow-up-circle" size={16} color={theme.primary} style={{ marginRight: 6 }} />
+                    <Text style={styles.statLabel}>Max Elevation</Text>
+                  </View>
                   <TextInput
                     ref={maxElevationRef}
-                    style={[styles.input, { flex: 1, marginLeft: 12, paddingVertical: 6 }]}
+                    style={styles.statInput}
                     placeholder="e.g. 1,059 m"
                     placeholderTextColor={theme.muted}
                     value={gpxStats.maxElevation}
@@ -1234,13 +1362,22 @@ const CreateGameScreen = () => {
                     returnKeyType="next"
                     blurOnSubmit={false}
                     onSubmitEditing={() => trailRankRef.current?.focus()}
+                    onFocus={() => {
+                      setTimeout(() => {
+                        scrollRef.current?.scrollTo({ y: 500, animated: true });
+                      }, 100);
+                    }}
                   />
                 </View>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <Text style={{ color: theme.muted }}>TrailRank</Text>
+                
+                <View style={styles.statRow}>
+                  <View style={styles.statLabelContainer}>
+                    <Ionicons name="star" size={16} color={theme.primary} style={{ marginRight: 6 }} />
+                    <Text style={styles.statLabel}>TrailRank</Text>
+                  </View>
                   <TextInput
                     ref={trailRankRef}
-                    style={[styles.input, { flex: 1, marginLeft: 12, paddingVertical: 6 }]}
+                    style={styles.statInput}
                     placeholder="e.g. 10"
                     placeholderTextColor={theme.muted}
                     value={gpxStats.trailRank}
@@ -1248,19 +1385,33 @@ const CreateGameScreen = () => {
                     returnKeyType="next"
                     blurOnSubmit={false}
                     onSubmitEditing={() => routeTypeRef.current?.focus()}
+                    onFocus={() => {
+                      setTimeout(() => {
+                        scrollRef.current?.scrollTo({ y: 550, animated: true });
+                      }, 100);
+                    }}
                   />
                 </View>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                  <Text style={{ color: theme.muted }}>Route Type</Text>
+                
+                <View style={styles.statRow}>
+                  <View style={styles.statLabelContainer}>
+                    <Ionicons name="git-branch" size={16} color={theme.primary} style={{ marginRight: 6 }} />
+                    <Text style={styles.statLabel}>Route Type</Text>
+                  </View>
                   <TextInput
                     ref={routeTypeRef}
-                    style={[styles.input, { flex: 1, marginLeft: 12, paddingVertical: 6 }]}
-                    placeholder="e.g. One-way"
+                    style={styles.statInput}
+                    placeholder="e.g. Loop, One-way"
                     placeholderTextColor={theme.muted}
                     value={gpxStats.routeType}
                     onChangeText={(t) => setGpxStats((s: any) => ({ ...s, routeType: t }))}
                     returnKeyType="done"
                     onSubmitEditing={() => Keyboard.dismiss()}
+                    onFocus={() => {
+                      setTimeout(() => {
+                        scrollRef.current?.scrollTo({ y: 600, animated: true });
+                      }, 100);
+                    }}
                   />
                 </View>
               </View>
@@ -1493,19 +1644,6 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
     paddingBottom: 6,
     backgroundColor: 'transparent',
   },
-  clearBadge: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: t.primaryStrong,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 6,
-  },
-  pullClearText: {
-    color: t.muted,
-    fontSize: 12,
-  },
   sectionLabel: {
     color: t.primary,
     fontSize: 18,
@@ -1617,6 +1755,33 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 5,
+    paddingVertical: 10,
+  },
+  resetCircle: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    borderWidth: 3,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  progressBar: {
+    height: 3,
+    borderRadius: 2,
+    marginTop: 8,
+    marginBottom: 8,
+    maxWidth: 120,
+  },
+  pullResetText: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginTop: 4,
   },
   // Modal styles copied from ActivityDetailsScreen
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center', padding: 20 },
@@ -1638,4 +1803,62 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
   modalConfirmText: { color: t.isDark ? '#111' : '#fff', fontWeight: '700' },
   bottomToast: { position: 'absolute', left: 0, right: 0, bottom: 22, alignItems: 'center' },
   bottomToastText: { backgroundColor: 'rgba(26, 233, 239, 0.18)', color: t.text, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 14, overflow: 'hidden', fontWeight: '600' },
+  // Route Statistics Styles
+  routeStatsContainer: {
+    backgroundColor: t.card,
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: t.border,
+  },
+  routeStatsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: t.border,
+  },
+  routeStatsTitle: {
+    color: t.primary,
+    fontWeight: '700',
+    fontSize: 16,
+    marginLeft: 8,
+  },
+  routeStatsOptional: {
+    color: t.muted,
+    fontSize: 13,
+    fontWeight: '500',
+    marginLeft: 6,
+  },
+  statRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+    paddingVertical: 4,
+  },
+  statLabelContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minWidth: 120,
+  },
+  statLabel: {
+    color: t.text,
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  statInput: {
+    flex: 1,
+    backgroundColor: t.background,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    color: t.text,
+    fontWeight: '500',
+    fontSize: 14,
+    borderWidth: 1,
+    borderColor: t.border,
+  },
 });

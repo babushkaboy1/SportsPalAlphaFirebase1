@@ -8,7 +8,7 @@ export default ({ config }: { config: any }) => ({
   version: "1.0.0",
   orientation: "portrait",
   // Updated app icon to new turquoise orb asset
-  icon: "./assets/splash-logo.png",
+  icon: "./assets/app-icon.png",
   userInterfaceStyle: "dark",
   newArchEnabled: true,
   // Splash screen shown during app launch
@@ -21,14 +21,16 @@ export default ({ config }: { config: any }) => ({
     supportsTablet: true,
     bundleIdentifier: "com.sportspal",
     associatedDomains: ["applinks:sportspal-1b468.web.app"],
-    // Ensure iOS uses the same splash image explicitly
+    // Ensure iOS uses the same splash image explicitly - no icon should show before this
     splash: {
       image: "./assets/splash-logo.png",
       resizeMode: "contain",
-      backgroundColor: "#000000"
+      backgroundColor: "#000000",
+      tabletImage: "./assets/splash-logo.png"
     },
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false,
+      UILaunchStoryboardName: "SplashScreen",
       NSCameraUsageDescription: "This app uses the camera to allow you to take and upload profile pictures and share photos with friends.",
       NSPhotoLibraryUsageDescription: "This app needs access to your photo library to let you select and upload images for your profile, activities, and to share with other users.",
       NSPhotoLibraryAddUsageDescription: "This app needs access to save images to your photo library.",

@@ -68,6 +68,7 @@ const LoginScreen = ({ navigation }: any) => {
   const pendingCredentialRef = useRef<AuthCredential | null>(null);
   const linkEmailRef = useRef<string | null>(null);
   const flowRef = useRef<{ mode: 'google' | 'facebook' | 'apple' | null; forLink?: boolean }>({ mode: null, forLink: false });
+  const isNavigatingRef = useRef(false);
 
   // Minimal password prompt for linking when original account uses Password provider
   const [linkPasswordVisible, setLinkPasswordVisible] = useState(false);
@@ -75,62 +76,15 @@ const LoginScreen = ({ navigation }: any) => {
 
   // Fade in on mount
   useEffect(() => {
+    // Reset navigation flag when screen mounts
+    isNavigatingRef.current = false;
+    
     Animated.timing(fadeAnim, {
       toValue: 1,
       duration: 350,
       useNativeDriver: true,
     }).start();
   }, []);
-
-  // If already signed in, redirect based on profile existence
-  useEffect(() => {
-    const checkAndRedirect = async () => {
-      const user = auth.currentUser;
-      if (!user) return;
-      try {
-        const profileDoc = await getDoc(doc(db, 'profiles', user.uid));
-        if (profileDoc.exists()) {
-          navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
-        } else {
-          navigation.dispatch(
-            CommonActions.reset({
-              index: 0,
-              routes: [
-                {
-                  name: 'CreateProfile',
-                  params: {
-                    mode: 'create',
-                    profileData: { email: user.email || '', emailLocked: true },
-                  },
-                },
-              ],
-            })
-          );
-        }
-      } catch (e) {
-        // On error, default to profile creation to avoid entering app without profile
-        navigation.dispatch(
-          CommonActions.reset({
-            index: 0,
-            routes: [
-              {
-                name: 'CreateProfile',
-                params: {
-                  mode: 'create',
-                  profileData: { email: user.email || '', emailLocked: true },
-                },
-              },
-            ],
-          })
-        );
-      }
-    };
-    // Check immediately
-    checkAndRedirect();
-    // And on focus
-    const unsubscribe = navigation.addListener('focus', checkAndRedirect);
-    return unsubscribe;
-  }, [navigation]);
 
   // Handle Google auth response
   useEffect(() => {
@@ -148,6 +102,10 @@ const LoginScreen = ({ navigation }: any) => {
               linkEmailRef.current = null;
               Alert.alert('Success', 'Accounts linked successfully!');
             }
+            
+            // Add small delay for smoother transition
+            await new Promise(resolve => setTimeout(resolve, 150));
+            
             navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
           } catch (e: any) {
             console.error('Google link error:', e);
@@ -179,6 +137,10 @@ const LoginScreen = ({ navigation }: any) => {
               linkEmailRef.current = null;
               Alert.alert('Success', 'Accounts linked successfully!');
             }
+            
+            // Add small delay for smoother transition
+            await new Promise(resolve => setTimeout(resolve, 150));
+            
             navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
           } catch (e: any) {
             console.error('Facebook link error:', e);
@@ -207,36 +169,13 @@ const LoginScreen = ({ navigation }: any) => {
 
   // Centralized credential sign-in with automatic linking fallback
   const handleCredentialSignIn = async (cred: AuthCredential) => {
+    if (isNavigatingRef.current) return; // Prevent duplicate navigation
+    
     try {
-      const userCredential = await signInWithCredential(auth, cred);
-      const user = userCredential.user;
-      
-      // Check if user has a profile
-      const hasProfile = await checkUserProfile(user.uid);
-      
-      if (hasProfile) {
-        // User has profile, go to main app
-        navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
-      } else {
-        // New user, redirect to profile creation with email locked
-        navigation.dispatch(
-          CommonActions.reset({
-            index: 0,
-            routes: [
-              {
-                name: 'CreateProfile',
-                params: {
-                  mode: 'create',
-                  profileData: {
-                    email: user.email || '',
-                    emailLocked: true,
-                  },
-                },
-              },
-            ],
-          })
-        );
-      }
+      // Just sign in - App.tsx will handle navigation automatically
+      await signInWithCredential(auth, cred);
+      // Mark navigation to prevent duplicate attempts
+      isNavigatingRef.current = true;
     } catch (err: any) {
       if (err?.code === 'auth/account-exists-with-different-credential') {
         const emailForLink = (err as any)?.customData?.email || email || null;
@@ -309,6 +248,10 @@ const LoginScreen = ({ navigation }: any) => {
             linkEmailRef.current = null;
             Alert.alert('Success', 'Accounts linked successfully!');
           }
+          
+          // Add small delay for smoother transition
+          await new Promise(resolve => setTimeout(resolve, 150));
+          
           navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
         } catch (e: any) {
           console.error('Apple link error:', e);
@@ -327,36 +270,14 @@ const LoginScreen = ({ navigation }: any) => {
 
 
   const handleLogin = async () => {
+    if (isLoading || isNavigatingRef.current) return; // Prevent duplicate calls
+    
     setIsLoading(true);
     try {
-      const userCredential = await signInWithEmailAndPassword(auth, email, password);
-      const user = userCredential.user;
-      
-      // Check if user has a profile
-      const hasProfile = await checkUserProfile(user.uid);
-      
-      if (hasProfile) {
-        navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
-      } else {
-        // Redirect to profile creation with email locked
-        navigation.dispatch(
-          CommonActions.reset({
-            index: 0,
-            routes: [
-              {
-                name: 'CreateProfile',
-                params: {
-                  mode: 'create',
-                  profileData: {
-                    email: user.email || email,
-                    emailLocked: true,
-                  },
-                },
-              },
-            ],
-          })
-        );
-      }
+      // Just sign in - App.tsx will handle navigation automatically
+      await signInWithEmailAndPassword(auth, email, password);
+      // Mark navigation to prevent duplicate attempts
+      isNavigatingRef.current = true;
     } catch (error: any) {
       let message = 'Login error. Please try again.';
       let title = 'Login Failed';
@@ -381,6 +302,7 @@ const LoginScreen = ({ navigation }: any) => {
         message = 'Invalid login credentials. Please check your email and password.';
       }
       Alert.alert(title, message);
+      isNavigatingRef.current = false; // Reset on error
     } finally {
       setIsLoading(false);
     }
@@ -429,6 +351,10 @@ const LoginScreen = ({ navigation }: any) => {
         linkEmailRef.current = null;
       }
       setLinkPasswordVisible(false);
+      
+      // Add small delay for smoother transition
+      await new Promise(resolve => setTimeout(resolve, 150));
+      
       navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
     } catch (e: any) {
       Alert.alert('Link with password failed', e?.message || 'Could not link accounts.');

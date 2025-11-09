@@ -12,6 +12,8 @@ import {
   ActivityIndicator,
   Animated,
   Modal,
+  Keyboard,
+  Platform,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../context/ThemeContext';
@@ -90,7 +92,14 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordStrength, setPasswordStrength] = useState<{score: number; color: string; label: string; percent: number}>({ score: 0, color: '#cc3030', label: 'Very weak', percent: 0 });
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const scrollRef = useRef<ScrollView>(null);
+  const instagramRef = useRef<TextInput>(null);
+  const facebookRef = useRef<TextInput>(null);
+  const whatsappRef = useRef<TextInput>(null);
   const insets = useSafeAreaInsets();
+
+  // Keyboard state for adjusting ScrollView padding so inputs appear above keyboard
+  const [keyboardHeight, setKeyboardHeight] = useState<number>(0);
 
   // Terms & Community Guidelines acceptance (create mode only)
   const [termsModalVisible, setTermsModalVisible] = useState(false);
@@ -118,6 +127,20 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
     if (!email && auth.currentUser?.email) {
       setEmail(auth.currentUser.email);
     }
+  }, []);
+
+  // Listen for keyboard show/hide and set bottom padding accordingly (works for Android and iOS)
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const onShow = (e: any) => setKeyboardHeight(e.endCoordinates?.height || 0);
+    const onHide = () => setKeyboardHeight(0);
+    const subShow = Keyboard.addListener(showEvent, onShow);
+    const subHide = Keyboard.addListener(hideEvent, onHide);
+    return () => {
+      try { subShow.remove(); } catch {}
+      try { subHide.remove(); } catch {}
+    };
   }, []);
 
   // Username policy (Instagram-like): 1–30 chars, letters/numbers/periods/underscores only, case-insensitive unique
@@ -763,8 +786,9 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
   return (
     <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
       <ScrollView
+      ref={scrollRef}
       style={styles.scrollView}
-      contentContainerStyle={[styles.container, { paddingTop: insets.top + 30 }]}
+      contentContainerStyle={[styles.container, { paddingTop: insets.top + 30, paddingBottom: Math.max(20, keyboardHeight + 20) }]}
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
     >
@@ -1086,33 +1110,58 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
       <View style={styles.socialInputContainer}>
         <Ionicons name="logo-instagram" size={24} color={theme.primary} style={styles.socialIcon} />
         <TextInput
+          ref={instagramRef}
           style={styles.socialInput}
           placeholder="Instagram (link or @username)"
           placeholderTextColor="#999"
           value={instagram}
           onChangeText={setInstagram}
+          returnKeyType="next"
+          blurOnSubmit={false}
+          onSubmitEditing={() => facebookRef.current?.focus()}
+          onFocus={() => {
+            setTimeout(() => {
+              scrollRef.current?.scrollTo({ y: 1100, animated: true });
+            }, 100);
+          }}
         />
       </View>
 
       <View style={styles.socialInputContainer}>
         <Ionicons name="logo-facebook" size={24} color={theme.primary} style={styles.socialIcon} />
         <TextInput
+          ref={facebookRef}
           style={styles.socialInput}
           placeholder="Facebook (link or username)"
           placeholderTextColor="#999"
           value={facebook}
           onChangeText={setFacebook}
+          returnKeyType="next"
+          blurOnSubmit={false}
+          onSubmitEditing={() => whatsappRef.current?.focus()}
+          onFocus={() => {
+            setTimeout(() => {
+              scrollRef.current?.scrollTo({ y: 1150, animated: true });
+            }, 100);
+          }}
         />
       </View>
 
       <View style={styles.socialInputContainer}>
         <Ionicons name="logo-whatsapp" size={24} color={theme.primary} style={styles.socialIcon} />
         <TextInput
+          ref={whatsappRef}
           style={styles.socialInput}
           placeholder="WhatsApp (link or number)"
           placeholderTextColor="#999"
           value={whatsapp}
           onChangeText={setWhatsapp}
+          returnKeyType="done"
+          onFocus={() => {
+            setTimeout(() => {
+              scrollRef.current?.scrollTo({ y: 1200, animated: true });
+            }, 100);
+          }}
         />
       </View>
 

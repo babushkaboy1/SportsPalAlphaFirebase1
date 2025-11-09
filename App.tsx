@@ -242,6 +242,10 @@ function AppInner() {
         if (!cancelled) setHasProfile(null);
         return;
       }
+      // Small delay to ensure auth state is fully settled
+      await new Promise(resolve => setTimeout(resolve, 50));
+      if (cancelled) return;
+      
       try {
         const snap = await getDoc(doc(db, 'profiles', user.uid));
         if (!cancelled) setHasProfile(snap.exists());
@@ -327,7 +331,7 @@ function AppInner() {
           <InboxBadgeProvider>
           <NavigationContainer ref={navRef} theme={navTheme} onReady={() => setNavReady(true)}>
           <StatusBar style={theme.isDark ? 'light' : 'dark'} backgroundColor={theme.background} />
-          {initializing ? (
+          {initializing || (user && hasProfile === null) ? (
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#121212' }}>
               <ActivityIndicator size="large" color={theme.primary} />
             </View>
@@ -338,9 +342,27 @@ function AppInner() {
           initialRouteName={!user ? 'Login' : (hasProfile === false ? 'CreateProfile' : 'MainTabs')}
           screenOptions={{
             headerShown: false,
-            animation: 'slide_from_right',
-            animationTypeForReplace: 'push',
+            animation: 'fade',
             cardStyle: { backgroundColor: theme.background },
+            transitionSpec: {
+              open: {
+                animation: 'timing',
+                config: {
+                  duration: 200,
+                },
+              },
+              close: {
+                animation: 'timing',
+                config: {
+                  duration: 200,
+                },
+              },
+            },
+            cardStyleInterpolator: ({ current }) => ({
+              cardStyle: {
+                opacity: current.progress,
+              },
+            }),
           }}
         >
           <Stack.Screen name="Login" component={LoginScreen} />

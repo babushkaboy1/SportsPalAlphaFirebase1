@@ -558,9 +558,11 @@ const ChatDetailScreen = () => {
 
   useEffect(() => {
     initialScrollDoneRef.current = false;
-    pendingScrollRestoreRef.current = null;
     scrollOffsetRef.current = 0;
     contentHeightRef.current = 0;
+    // Reset restoration helpers when switching chats
+    pendingAddedRestoreRef.current = null;
+    messageHeightsRef.current = {};
   }, [chatId]);
 
   // ========== STATE ==========
@@ -604,8 +606,17 @@ const ChatDetailScreen = () => {
   const scrollOffsetRef = useRef(0);
   const contentHeightRef = useRef(0);
   const isAtBottomRef = useRef(true);
-  const pendingScrollRestoreRef = useRef<{ prevHeight: number; prevOffset: number } | null>(null);
   const initialScrollDoneRef = useRef(false);
+  const isLoadingOlderRef = useRef(false);
+  // Track measured heights for each message id
+  const messageHeightsRef = useRef<Record<string, number>>({});
+  // Pending precise restoration after adding older messages
+  const pendingAddedRestoreRef = useRef<{
+    addedIds: string[];
+    prevOffset: number;
+    prevHeight: number;
+    restored: boolean;
+  } | null>(null);
 
   // ========== TOAST ==========
   const showToast = useCallback((msg: string) => {
@@ -999,10 +1010,14 @@ const ChatDetailScreen = () => {
     if (isLoadingOlder || noMoreOlderRef.current || !oldestSnapRef.current) return;
 
     setIsLoadingOlder(true);
+    isLoadingOlderRef.current = true;
     
-    // Store current scroll position and content height
-    const previousContentHeight = contentHeightRef.current;
-    const previousOffset = scrollOffsetRef.current;
+    // Mark that we're not at bottom to prevent auto-scroll during prepend
+    isAtBottomRef.current = false;
+
+    // Capture current scroll metrics BEFORE data changes
+    const prevHeight = contentHeightRef.current;
+    const prevOffset = scrollOffsetRef.current;
     
     try {
       const { messages: older, lastSnapshot } = await fetchOlderMessagesPage(
@@ -1013,25 +1028,33 @@ const ChatDetailScreen = () => {
 
       if (older.length) {
         oldestSnapRef.current = lastSnapshot || oldestSnapRef.current;
-        pendingScrollRestoreRef.current = {
-          prevHeight: previousContentHeight,
-          prevOffset: previousOffset,
-        };
         
-        // Update messages
+        // Update messages - React Native will handle scroll position automatically
+        // with maintainVisibleContentPosition prop
+        const addedIds = older.map((m: any) => m.id);
         setMessages((prev) => {
           const map = new Map<string, Message>();
           [...older, ...prev].forEach((m: any) => map.set(m.id, m));
           return Array.from(map.values()) as any;
         });
-        
-        // Don't auto-scroll to bottom
-        isAtBottomRef.current = false;
+
+        // Set restoration ref so onContentSizeChange can adjust offset exactly once
+        pendingAddedRestoreRef.current = {
+          addedIds,
+          prevOffset,
+          prevHeight,
+          restored: false,
+        };
       } else {
         noMoreOlderRef.current = true;
       }
     } catch {}
-    setIsLoadingOlder(false);
+    
+    // Small delay to ensure smooth rendering before resetting flag
+    setTimeout(() => {
+      setIsLoadingOlder(false);
+      isLoadingOlderRef.current = false;
+    }, 150);
   }, [isLoadingOlder, chatId]);
 
   const handleScroll = useCallback(
@@ -1044,8 +1067,8 @@ const ChatDetailScreen = () => {
       scrollOffsetRef.current = y;
       contentHeightRef.current = contentHeight;
       
-      // Load older messages when scrolling near top
-      if (y <= 40) {
+      // Load older messages when scrolling near top (increased threshold for smoother trigger)
+      if (y <= 100 && !isLoadingOlder) {
         loadOlderMessages();
       }
 
@@ -1061,7 +1084,7 @@ const ChatDetailScreen = () => {
       // Track if user is at bottom (within 50px)
       isAtBottomRef.current = distanceFromBottom < 50;
     },
-    [loadOlderMessages, showScrollButton]
+    [loadOlderMessages, showScrollButton, isLoadingOlder]
   );
 
   const handleContentSizeChange = useCallback(
@@ -1069,27 +1092,30 @@ const ChatDetailScreen = () => {
       const previousHeight = contentHeightRef.current;
       contentHeightRef.current = height;
 
-      const pendingRestore = pendingScrollRestoreRef.current;
-      if (pendingRestore) {
-        const delta = Math.max(height - (pendingRestore.prevHeight || 0), 0);
-        const nextOffset = Math.max((pendingRestore.prevOffset || 0) + delta, 0);
-        pendingScrollRestoreRef.current = null;
-        requestAnimationFrame(() => {
-          flatListRef.current?.scrollToOffset({
-            offset: nextOffset,
-            animated: false,
-          });
-        });
-        return;
-      }
-
+      // Initial scroll to bottom when chat first loads
       if (!initialScrollDoneRef.current && isReady && height > 0) {
         initialScrollDoneRef.current = true;
         requestAnimationFrame(() => scrollToBottom(false));
         return;
       }
 
-      if (isAtBottomRef.current && height > previousHeight) {
+      // If we have a pending restore (older messages were prepended), adjust offset once
+      const restore = pendingAddedRestoreRef.current;
+      if (restore && !restore.restored) {
+        const delta = Math.max(height - (restore.prevHeight || 0), 0);
+        const targetOffset = Math.max((restore.prevOffset || 0) + delta, 0);
+        // Mark restored and clear
+        pendingAddedRestoreRef.current = null;
+        // Restore without animation to avoid flicker
+        requestAnimationFrame(() => {
+          flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: false });
+        });
+        return;
+      }
+
+      // Auto-scroll to bottom when new messages arrive (and user is near bottom)
+      // BUT NOT when we're loading older messages
+      if (isAtBottomRef.current && height > previousHeight && !isLoadingOlderRef.current) {
         requestAnimationFrame(() => scrollToBottom(true));
       }
     },
@@ -2042,8 +2068,11 @@ const ChatDetailScreen = () => {
                 removeClippedSubviews={Platform.OS === 'android'}
                 ListHeaderComponent={
                   isLoadingOlder ? (
-                    <View style={{ paddingVertical: 8 }}>
+                    <View style={{ paddingVertical: 16, alignItems: 'center' }}>
                       <ActivityIndicator size="small" color={theme.primary} />
+                      <Text style={{ color: theme.muted, fontSize: 12, marginTop: 6 }}>
+                        Loading older messages...
+                      </Text>
                     </View>
                   ) : null
                 }

@@ -16,7 +16,7 @@ function HostUsername({ activity }: { activity: any }) {
   return <Text style={{ fontSize: 14, color: theme.muted, fontWeight: '500' }}>{username}</Text>;
 }
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, FlatList, Animated, RefreshControl, Alert, Modal, Pressable, TextInput, Clipboard } from 'react-native';
+import { View, Text, StyleSheet, Image, TouchableOpacity, FlatList, Animated, RefreshControl, Alert, Modal, Pressable, TextInput, Clipboard, Keyboard } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
 import { useRoute, useNavigation } from '@react-navigation/native';
@@ -546,7 +546,7 @@ const UserProfileScreen = () => {
             </Text>
           </View>
           <TouchableOpacity style={styles.settingsButton} onPress={() => setMenuVisible(true)}>
-            <Ionicons name="ellipsis-horizontal" size={28} color={theme.text} />
+            <Ionicons name="ellipsis-horizontal" size={28} color={theme.primary} />
           </TouchableOpacity>
         </View>
         {/* Profile hero area: match Profile page spacing and size */}
@@ -583,79 +583,6 @@ const UserProfileScreen = () => {
             </View>
           </View>
         </View>
-        {/* Actions row identical to own Profile: center-aligned, same sizes/spacings as Edit Profile & Share Profile */}
-        {!isSelf && (
-          <View style={styles.profileActionsRow}>
-            {incomingRequest ? (
-              <>
-                <TouchableOpacity
-                  style={[styles.profileActionButton, styles.profileActionButtonInverted]}
-                  onPress={async () => {
-                    try {
-                      await acceptIncomingRequestFromProfile(userId);
-                      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                      setIsFriend(true);
-                      setIncomingRequest(false);
-                    } catch (e) { console.warn('accept from profile failed', e); }
-                  }}
-                  activeOpacity={0.85}
-                >
-                  <Ionicons name="checkmark-done-outline" size={18} color={'#fff'} style={{ marginRight: 6 }} />
-                  <Text style={[styles.profileActionText, styles.profileActionTextInverted]}>Accept</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.profileActionButton}
-                  onPress={async () => {
-                    try {
-                      await declineIncomingRequestFromProfile(userId);
-                      await Haptics.selectionAsync();
-                      setIncomingRequest(false);
-                    } catch (e) { console.warn('decline from profile failed', e); }
-                  }}
-                  activeOpacity={0.85}
-                >
-                  <Ionicons name="close-outline" size={18} color={theme.primary} style={{ marginRight: 4 }} />
-                  <Text style={styles.profileActionText}>Delete</Text>
-                </TouchableOpacity>
-              </>
-            ) : (
-              <TouchableOpacity
-                style={[
-                  styles.profileActionButton,
-                  (requestSent || isFriend) && styles.profileActionButtonInverted,
-                ]}
-                onPress={handleAddFriend}
-                disabled={false}
-                activeOpacity={0.85}
-              >
-                <Ionicons
-                  name={isFriend ? 'checkmark-done-outline' : 'person-add-outline'}
-                  size={18}
-                  color={(requestSent || isFriend) ? '#fff' : theme.primary}
-                  style={{ marginRight: 4 }}
-                />
-                <Text style={[styles.profileActionText, (requestSent || isFriend) && styles.profileActionTextInverted]}>
-                  {isFriend ? 'Connected' : (requestSent ? 'Request Sent' : 'Add Friend')}
-                </Text>
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity
-              style={styles.profileActionButton}
-              onPress={async () => {
-                try {
-                  // Open or create a DM regardless of connection status
-                  const chatId = await ensureDmChat(userId);
-                  navigation.navigate('ChatDetail', { chatId });
-                } catch (e) {
-                  console.warn('open DM failed', e);
-                }
-              }}
-            >
-              <Ionicons name="chatbubble-ellipses-outline" size={18} color={theme.primary} style={{ marginRight: 4 }} />
-              <Text style={styles.profileActionText}>Message</Text>
-            </TouchableOpacity>
-          </View>
-        )}
 
         {/* Bio and Social Media Row - Above Action Buttons */}
         {(profile?.bio || profile?.socials?.instagram || profile?.socials?.facebook || profile?.socials?.whatsapp) ? (
@@ -740,16 +667,96 @@ const UserProfileScreen = () => {
           </View>
         ) : null}
 
+        {/* Actions row identical to own Profile: center-aligned, same sizes/spacings as Edit Profile & Share Profile */}
+        {!isSelf && (
+          <View style={styles.profileActionsRow}>
+            {incomingRequest ? (
+              <>
+                <TouchableOpacity
+                  style={[styles.profileActionButton, styles.profileActionButtonInverted]}
+                  onPress={async () => {
+                    try {
+                      await acceptIncomingRequestFromProfile(userId);
+                      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                      setIsFriend(true);
+                      setIncomingRequest(false);
+                    } catch (e) { console.warn('accept from profile failed', e); }
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="checkmark-done-outline" size={18} color={'#fff'} style={{ marginRight: 6 }} />
+                  <Text style={[styles.profileActionText, styles.profileActionTextInverted]}>Accept</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.profileActionButton}
+                  onPress={async () => {
+                    try {
+                      await declineIncomingRequestFromProfile(userId);
+                      await Haptics.selectionAsync();
+                      setIncomingRequest(false);
+                    } catch (e) { console.warn('decline from profile failed', e); }
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="close-outline" size={18} color={theme.primary} style={{ marginRight: 4 }} />
+                  <Text style={styles.profileActionText}>Delete</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <TouchableOpacity
+                style={[
+                  styles.profileActionButton,
+                  (requestSent || isFriend) && styles.profileActionButtonInverted,
+                ]}
+                onPress={handleAddFriend}
+                disabled={false}
+                activeOpacity={0.85}
+              >
+                <Ionicons
+                  name={isFriend ? 'checkmark-done-outline' : 'person-add-outline'}
+                  size={18}
+                  color={(requestSent || isFriend) ? '#fff' : theme.primary}
+                  style={{ marginRight: 4 }}
+                />
+                <Text style={[styles.profileActionText, (requestSent || isFriend) && styles.profileActionTextInverted]}>
+                  {isFriend ? 'Connected' : (requestSent ? 'Request Sent' : 'Add Friend')}
+                </Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              style={styles.profileActionButton}
+              onPress={async () => {
+                try {
+                  // Open or create a DM regardless of connection status
+                  const chatId = await ensureDmChat(userId);
+                  navigation.navigate('ChatDetail', { chatId });
+                } catch (e) {
+                  console.warn('open DM failed', e);
+                }
+              }}
+            >
+              <Ionicons name="chatbubble-ellipses-outline" size={18} color={theme.primary} style={{ marginRight: 4 }} />
+              <Text style={styles.profileActionText}>Message</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         <View style={styles.tabBar}>
           <TouchableOpacity
             style={[styles.tab, activeTab === 'games' && styles.activeTab]}
-            onPress={() => setActiveTab('games')}
+            onPress={() => {
+              Keyboard.dismiss();
+              setActiveTab('games');
+            }}
           >
             <Ionicons name="list" size={28} color={activeTab === 'games' ? theme.primary : theme.muted} />
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.tab, activeTab === 'history' && styles.activeTab]}
-            onPress={() => setActiveTab('history')}
+            onPress={() => {
+              Keyboard.dismiss();
+              setActiveTab('history');
+            }}
           >
             <Ionicons name="time" size={28} color={activeTab === 'history' ? theme.primary : theme.muted} />
           </TouchableOpacity>
@@ -757,7 +764,9 @@ const UserProfileScreen = () => {
         <View style={styles.contentContainer}>
           {activeTab === 'games' ? (
             <View style={{ flex: 1 }}>
-              <Text style={styles.tabTitleCentered}>Scheduled Activities</Text>
+              <TouchableOpacity activeOpacity={1} onPress={() => Keyboard.dismiss()}>
+                <Text style={styles.tabTitleCentered}>Scheduled Activities</Text>
+              </TouchableOpacity>
               <View style={styles.userSearchRow}>
                 <Ionicons name="search" size={16} color={theme.primary} style={{ marginRight: 8 }} />
                 <TextInput
@@ -802,7 +811,9 @@ const UserProfileScreen = () => {
             </View>
           ) : (
             <View style={{ flex: 1 }}>
-              <Text style={styles.tabTitleCentered}>Activity History</Text>
+              <TouchableOpacity activeOpacity={1} onPress={() => Keyboard.dismiss()}>
+                <Text style={styles.tabTitleCentered}>Activity History</Text>
+              </TouchableOpacity>
               <View style={styles.userSearchRow}>
                 <Ionicons name="search" size={16} color={theme.primary} style={{ marginRight: 8 }} />
                 <TextInput
