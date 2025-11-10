@@ -9,15 +9,15 @@
     "rewrites": [
       {
         "source": "/activity/**",
-        "function": "handleDeepLink"
+        "destination": "/redirect.html"
       },
       {
         "source": "/profile/**",
-        "function": "handleDeepLink"
+        "destination": "/redirect.html"
       },
       {
         "source": "/chat/**",
-        "function": "handleDeepLink"
+        "destination": "/redirect.html"
       }
     ],
     "headers": [

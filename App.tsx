@@ -17,6 +17,8 @@ import * as NavigationBar from 'expo-navigation-bar';
 import * as SystemUI from 'expo-system-ui';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { registerPushNotificationsForCurrentUser, subscribeNotificationResponses, getLastNotificationResponseData, setInAppNotificationHandler } from './utils/notifications';
+import * as Linking from 'expo-linking';
+import { parseDeepLink } from './utils/deepLinking';
 
 // Import your screens
 import DiscoverGamesScreen from './screens/DiscoverGamesScreen';
@@ -30,6 +32,7 @@ import ActivityDetailsScreen from './screens/ActivityDetailsScreen';
 import ChatDetailScreen from './screens/ChatDetailScreen';
 import PickLocationScreen from './screens/PickLocationScreen';
 import UserProfileScreen from './screens/UserProfileScreen';
+import BlockedUsersScreen from './screens/BlockedUsersScreen';
 
 // Import the ActivityProvider
 import { ActivityProvider } from './context/ActivityContext';
@@ -324,6 +327,51 @@ function AppInner() {
     }
   }, [user]);
 
+  // Deep linking handler
+  useEffect(() => {
+    if (!user) return; // Only handle deep links when user is authenticated
+
+    // Handle initial URL (app opened via deep link)
+    Linking.getInitialURL().then((url) => {
+      if (url && navRef.isReady()) {
+        handleDeepLinkNavigation(url);
+      }
+    }).catch(() => {});
+
+    // Handle URLs while app is running
+    const subscription = Linking.addEventListener('url', ({ url }) => {
+      if (navRef.isReady()) {
+        handleDeepLinkNavigation(url);
+      }
+    });
+
+    return () => subscription.remove();
+  }, [user]);
+
+  const handleDeepLinkNavigation = (url: string) => {
+    const { type, id } = parseDeepLink(url);
+    
+    if (!id || !navRef.isReady()) return;
+
+    try {
+      switch (type) {
+        case 'activity':
+          (navRef as any).navigate('ActivityDetails', { activityId: id });
+          break;
+        case 'profile':
+          (navRef as any).navigate('UserProfile', { userId: id });
+          break;
+        case 'chat':
+          (navRef as any).navigate('ChatDetail', { chatId: id });
+          break;
+        default:
+          console.log('Unknown deep link type:', type);
+      }
+    } catch (error) {
+      console.error('Error navigating to deep link:', error);
+    }
+  };
+
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#121212' }}>
       <SafeAreaProvider>
@@ -372,6 +420,7 @@ function AppInner() {
           <Stack.Screen name="ChatDetail" component={ChatDetailScreen} />
           <Stack.Screen name="PickLocation" component={PickLocationScreen} />
           <Stack.Screen name="UserProfile" component={UserProfileScreen} options={{ headerShown: false }} />
+          <Stack.Screen name="BlockedUsers" component={BlockedUsersScreen} options={{ headerShown: false }} />
           </Stack.Navigator>
           )}
           {/* In-App Notification Banner */}

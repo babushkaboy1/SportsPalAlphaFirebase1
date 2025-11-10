@@ -64,6 +64,18 @@ export const ActivityIcon = ({
     case "american-football":
       // Use the american-football ball icon (Ionicons) rather than a helmet
       return <Ionicons name="american-football" size={size} color={color} />;
+    case "cricket":
+      return <MaterialCommunityIcons name="cricket" size={size} color={color} />;
+    case "golf":
+      return <Ionicons name="golf-outline" size={size} color={color} />;
+    case "baseball":
+      return <MaterialCommunityIcons name="baseball" size={size} color={color} />;
+    case "field hockey":
+    case "field-hockey":
+      return <MaterialCommunityIcons name="hockey-sticks" size={size} color={color} />;
+    case "ice hockey":
+    case "ice-hockey":
+      return <MaterialCommunityIcons name="hockey-puck" size={size} color={color} />;
     default:
       return <Ionicons name="help-circle-outline" size={size} color={color} />;
   }

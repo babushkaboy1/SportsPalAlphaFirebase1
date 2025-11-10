@@ -21,7 +21,7 @@ export default ({ config }: { config: any }) => ({
     supportsTablet: true,
     bundleIdentifier: "com.sportspal",
     associatedDomains: ["applinks:sportspal-1b468.web.app"],
-    // Ensure iOS uses the same splash image explicitly - no icon should show before this
+    // iOS splash configuration - ensures splash shows immediately, not app icon
     splash: {
       image: "./assets/splash-logo.png",
       resizeMode: "contain",
@@ -30,7 +30,8 @@ export default ({ config }: { config: any }) => ({
     },
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false,
-      UILaunchStoryboardName: "SplashScreen",
+      // Remove this to prevent icon showing before splash
+      // UILaunchStoryboardName: "SplashScreen",
       NSCameraUsageDescription: "This app uses the camera to allow you to take and upload profile pictures and share photos with friends.",
       NSPhotoLibraryUsageDescription: "This app needs access to your photo library to let you select and upload images for your profile, activities, and to share with other users.",
       NSPhotoLibraryAddUsageDescription: "This app needs access to save images to your photo library.",
@@ -46,6 +47,12 @@ export default ({ config }: { config: any }) => ({
     adaptiveIcon: {
       foregroundImage: "./assets/adaptive-icon.png",
       backgroundColor: "#ffffff"
+    },
+    // Android splash configuration - shows immediately on launch
+    splash: {
+      image: "./assets/splash-logo.png",
+      resizeMode: "contain",
+      backgroundColor: "#000000"
     },
     edgeToEdgeEnabled: true,
     package: "com.sportspal.app",

@@ -398,9 +398,7 @@ const SettingsScreen: React.FC = () => {
             label="Blocked users"
             sub="Manage your block list"
             rightIcon="chevron-forward"
-            onPress={() => {
-              Alert.alert('Coming Soon', 'Blocked users management will be available soon.');
-            }}
+            onPress={() => navigation.navigate('BlockedUsers' as any)}
           />
         </Section>
 

@@ -37,13 +37,14 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { doc, getDoc, onSnapshot, collection, query, where, getDocs, updateDoc, arrayUnion } from 'firebase/firestore';
 import { db, auth } from '../firebaseConfig';
 import { ActivityIcon } from '../components/ActivityIcons';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../types/navigation';
 import { uploadChatImage } from '../utils/imageUtils';
+import { muteChat, unmuteChat, isChatMuted } from '../utils/firestoreMutes';
 import { sendFriendRequest, cancelFriendRequest } from '../utils/firestoreFriends';
 import { useTheme } from '../context/ThemeContext';
 import { useActivityContext } from '../context/ActivityContext';
@@ -590,6 +591,7 @@ const ChatDetailScreen = () => {
   const [toastMessage, setToastMessage] = useState('');
   const [toastVisible, setToastVisible] = useState(false);
   const [showScrollButton, setShowScrollButton] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
 
   // Refs
   const flatListRef = useRef<FlatList>(null);
@@ -612,10 +614,7 @@ const ChatDetailScreen = () => {
   const messageHeightsRef = useRef<Record<string, number>>({});
   // Pending precise restoration after adding older messages
   const pendingAddedRestoreRef = useRef<{
-    addedIds: string[];
-    prevOffset: number;
     prevHeight: number;
-    restored: boolean;
   } | null>(null);
 
   // ========== TOAST ==========
@@ -628,6 +627,30 @@ const ChatDetailScreen = () => {
       toastTimeoutRef.current = null;
     }, 2000);
   }, []);
+
+  // ========== CHECK IF CHAT IS MUTED ==========
+  useEffect(() => {
+    const checkMuted = async () => {
+      const muted = await isChatMuted(chatId);
+      setIsMuted(muted);
+    };
+    checkMuted();
+  }, [chatId]);
+
+  // ========== RELOAD MUTE STATE WHEN SCREEN IS FOCUSED ==========
+  useFocusEffect(
+    React.useCallback(() => {
+      const checkMuted = async () => {
+        try {
+          const muted = await isChatMuted(chatId);
+          setIsMuted(muted);
+        } catch (error) {
+          console.error('Error checking mute state:', error);
+        }
+      };
+      checkMuted();
+    }, [chatId])
+  );
 
   // ========== SCROLL TO BOTTOM ==========
   const scrollToBottom = useCallback((animated: boolean = true) => {
@@ -1016,8 +1039,7 @@ const ChatDetailScreen = () => {
     isAtBottomRef.current = false;
 
     // Capture current scroll metrics BEFORE data changes
-    const prevHeight = contentHeightRef.current;
-    const prevOffset = scrollOffsetRef.current;
+  const prevHeight = contentHeightRef.current;
     
     try {
       const { messages: older, lastSnapshot } = await fetchOlderMessagesPage(
@@ -1029,21 +1051,15 @@ const ChatDetailScreen = () => {
       if (older.length) {
         oldestSnapRef.current = lastSnapshot || oldestSnapRef.current;
         
-        // Update messages - React Native will handle scroll position automatically
-        // with maintainVisibleContentPosition prop
-        const addedIds = older.map((m: any) => m.id);
         setMessages((prev) => {
           const map = new Map<string, Message>();
           [...older, ...prev].forEach((m: any) => map.set(m.id, m));
           return Array.from(map.values()) as any;
         });
 
-        // Set restoration ref so onContentSizeChange can adjust offset exactly once
+        // Remember previous content height so we can keep the user anchored seamlessly
         pendingAddedRestoreRef.current = {
-          addedIds,
-          prevOffset,
           prevHeight,
-          restored: false,
         };
       } else {
         noMoreOlderRef.current = true;
@@ -1101,16 +1117,19 @@ const ChatDetailScreen = () => {
 
       // If we have a pending restore (older messages were prepended), adjust offset once
       const restore = pendingAddedRestoreRef.current;
-      if (restore && !restore.restored) {
+      if (restore) {
         const delta = Math.max(height - (restore.prevHeight || 0), 0);
-        const targetOffset = Math.max((restore.prevOffset || 0) + delta, 0);
-        // Mark restored and clear
         pendingAddedRestoreRef.current = null;
-        // Restore without animation to avoid flicker
-        requestAnimationFrame(() => {
-          flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: false });
-        });
-        return;
+
+        if (delta > 0) {
+          const currentOffset = scrollOffsetRef.current || 0;
+          const targetOffset = Math.max(currentOffset + delta, 0);
+          scrollOffsetRef.current = targetOffset;
+          requestAnimationFrame(() => {
+            flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: false });
+          });
+          return;
+        }
       }
 
       // Auto-scroll to bottom when new messages arrive (and user is near bottom)
@@ -1627,7 +1646,27 @@ const ChatDetailScreen = () => {
         },
       ]
     );
-  }, [chatId, exitChat]);
+  }, [chatId]);
+
+  const handleMuteToggle = useCallback(async () => {
+    setOptionsVisible(false);
+    try {
+      if (isMuted) {
+        await unmuteChat(chatId);
+        setIsMuted(false);
+        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        showToast('Chat unmuted');
+      } else {
+        await muteChat(chatId);
+        setIsMuted(true);
+        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        showToast('Chat muted');
+      }
+    } catch (error) {
+      console.error('Error toggling mute:', error);
+      Alert.alert('Error', 'Failed to update mute settings');
+    }
+  }, [chatId, isMuted, showToast]);
 
   // ========== INVITE TO ACTIVITIES ==========
   const handleSendInvites = useCallback(async () => {
@@ -2038,6 +2077,7 @@ const ChatDetailScreen = () => {
             {renderHeader()}
           </View>
 
+
           {/* Messages */}
           {!isReady ? (
             <View style={styles.loadingContainer}>
@@ -2257,6 +2297,23 @@ const ChatDetailScreen = () => {
                         <Ionicons name="chevron-forward" size={18} color={theme.muted} style={{ marginLeft: 'auto' }} />
                       </TouchableOpacity>
 
+                      <TouchableOpacity
+                        style={styles.optionItem}
+                        onPress={handleMuteToggle}
+                      >
+                        <View style={styles.optionIconCircle}>
+                          <Ionicons 
+                            name={isMuted ? "notifications" : "notifications-off-outline"} 
+                            size={20} 
+                            color={theme.primary} 
+                          />
+                        </View>
+                        <Text style={styles.optionItemText}>
+                          {isMuted ? 'Unmute' : 'Mute'}
+                        </Text>
+                        <Ionicons name="chevron-forward" size={18} color={theme.muted} style={{ marginLeft: 'auto' }} />
+                      </TouchableOpacity>
+
                       <View style={styles.optionsDivider} />
 
                       <TouchableOpacity
@@ -2327,6 +2384,23 @@ const ChatDetailScreen = () => {
                           <Ionicons name="chevron-forward" size={18} color={theme.muted} style={{ marginLeft: 'auto' }} />
                         </TouchableOpacity>
                       )}
+
+                      <TouchableOpacity
+                        style={styles.optionItem}
+                        onPress={handleMuteToggle}
+                      >
+                        <View style={styles.optionIconCircle}>
+                          <Ionicons 
+                            name={isMuted ? "notifications" : "notifications-off-outline"} 
+                            size={20} 
+                            color={theme.primary} 
+                          />
+                        </View>
+                        <Text style={styles.optionItemText}>
+                          {isMuted ? 'Unmute' : 'Mute'}
+                        </Text>
+                        <Ionicons name="chevron-forward" size={18} color={theme.muted} style={{ marginLeft: 'auto' }} />
+                      </TouchableOpacity>
 
                       <View style={styles.optionsDivider} />
 

@@ -3,10 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SportsPal - Find Your Game, Play Together</title>
+    <title>SportsPal - Build Your Active Community</title>
+    <link rel="icon" type="image/png" href="favicon.ico">
+    <link rel="apple-touch-icon" href="logo.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script type="module" src="https://unpkg.com/ionicons@7.1.0/dist/ionicons/ionicons.esm.js"></script>
+    <script nomodule src="https://unpkg.com/ionicons@7.1.0/dist/ionicons/ionicons.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css">
     <style>
         * {
             margin: 0;
@@ -67,6 +72,7 @@
         }
         
         .logo-container {
+            position: relative;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -77,13 +83,23 @@
         .logo {
             width: 80px;
             height: 80px;
-            background: linear-gradient(135deg, #1ae9ef 0%, #15b8bd 100%);
             border-radius: 20px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 40px;
             box-shadow: 0 8px 32px rgba(26, 233, 239, 0.3);
+            background: transparent;
+            z-index: 1;
+            position: relative;
+        }
+        .logo-bg {
+            position: absolute;
+            width: 120px;
+            height: 120px;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            background: radial-gradient(circle, rgba(26,233,239,0.18) 0%, rgba(26,233,239,0) 80%);
+            z-index: 0;
+            border-radius: 50%;
+            pointer-events: none;
         }
         
         h1 {
@@ -142,7 +158,14 @@
         .feature-icon {
             font-size: 48px;
             margin-bottom: 16px;
-            display: block;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #1ae9ef;
+        }
+        
+        .feature-icon ion-icon {
+            font-size: 48px;
         }
         
         .feature-title {
@@ -215,32 +238,175 @@
             height: 24px;
         }
         
-        .activity-icons {
-            display: flex;
-            gap: 16px;
-            justify-content: center;
-            flex-wrap: wrap;
-            margin: 64px 0 32px;
+        .sports-section {
+            width: 100%;
+            max-width: 1000px;
+            margin: 48px 0;
+            text-align: center;
             animation: fadeInUp 0.8s ease-out 0.6s both;
         }
         
+        .sports-title {
+            font-size: 28px;
+            font-weight: 700;
+            color: #ffffff;
+            margin-bottom: 12px;
+        }
+        
+        .sports-subtitle {
+            font-size: 16px;
+            color: #9ca3af;
+            margin-bottom: 32px;
+        }
+        
+        .activity-icons {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+            gap: 20px;
+            justify-content: center;
+            padding: 0 20px;
+        }
+        
         .activity-icon {
-            width: 56px;
-            height: 56px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 16px 12px;
             background: rgba(255, 255, 255, 0.05);
             border: 1px solid rgba(255, 255, 255, 0.1);
             border-radius: 14px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 28px;
             transition: all 0.3s ease;
+            color: #1ae9ef;
+            cursor: pointer;
+        }
+        
+        .activity-icon ion-icon, .activity-icon .mdi {
+            font-size: 32px;
+        }
+        
+        .icon-label {
+            font-size: 11px;
+            font-weight: 600;
+            color: #d1d5db;
+            text-align: center;
+            line-height: 1.2;
+            transition: color 0.3s ease;
         }
         
         .activity-icon:hover {
-            transform: scale(1.1) rotate(5deg);
+            transform: translateY(-4px);
             background: rgba(26, 233, 239, 0.15);
-            border-color: rgba(26, 233, 239, 0.3);
+            border-color: rgba(26, 233, 239, 0.4);
+            box-shadow: 0 8px 24px rgba(26, 233, 239, 0.2);
+        }
+        
+        .activity-icon:hover .icon-label {
+            color: #1ae9ef;
+        }
+        
+        .feature-card {
+            cursor: pointer;
+        }
+        
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.7);
+            animation: fadeIn 0.3s ease;
+        }
+        
+        .modal.active {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .modal-content {
+            background: linear-gradient(135deg, #1a1a1a 0%, #0a0a0a 100%);
+            border: 1px solid rgba(26, 233, 239, 0.3);
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            position: relative;
+            animation: slideUp 0.3s ease;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .modal-close {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            font-size: 32px;
+            color: #9ca3af;
+            cursor: pointer;
+            transition: color 0.3s ease;
+            background: none;
+            border: none;
+            line-height: 1;
+        }
+        
+        .modal-close:hover {
+            color: #1ae9ef;
+        }
+        
+        .modal-icon {
+            font-size: 64px;
+            color: #1ae9ef;
+            text-align: center;
+            margin-bottom: 24px;
+        }
+        
+        .modal-title {
+            font-size: 28px;
+            font-weight: 700;
+            color: #1ae9ef;
+            text-align: center;
+            margin-bottom: 16px;
+        }
+        
+        .modal-text {
+            color: #d1d5db;
+            line-height: 1.8;
+            font-size: 16px;
+        }
+        
+        .modal-text strong {
+            color: #1ae9ef;
+        }
+        
+        .modal-list {
+            margin: 16px 0;
+            padding-left: 24px;
+        }
+        
+        .modal-list li {
+            margin-bottom: 12px;
+            color: #d1d5db;
         }
         
         .footer {
@@ -249,6 +415,87 @@
             text-align: center;
             color: #6b7280;
             font-size: 14px;
+        }
+        
+        .footer-links {
+            display: flex;
+            gap: 24px;
+            justify-content: center;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+        
+        .footer-links a {
+            color: #9ca3af;
+            text-decoration: none;
+            transition: color 0.3s ease;
+        }
+        
+        .footer-links a:hover {
+            color: #1ae9ef;
+        }
+        
+        .legal-section {
+            width: 100%;
+            max-width: 900px;
+            margin: 48px 0;
+            animation: fadeInUp 0.8s ease-out 0.8s both;
+        }
+        
+        .legal-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: #ffffff;
+            text-align: center;
+            margin-bottom: 24px;
+        }
+        
+        .legal-buttons {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 16px;
+        }
+        
+        .legal-button {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 20px 24px;
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            text-decoration: none;
+            color: #ffffff;
+            transition: all 0.3s ease;
+        }
+        
+        .legal-button:hover {
+            transform: translateY(-4px);
+            background: rgba(26, 233, 239, 0.1);
+            border-color: rgba(26, 233, 239, 0.3);
+            box-shadow: 0 8px 24px rgba(26, 233, 239, 0.2);
+        }
+        
+        .legal-button ion-icon {
+            font-size: 32px;
+            color: #1ae9ef;
+            flex-shrink: 0;
+        }
+        
+        .legal-button-content {
+            flex: 1;
+        }
+        
+        .legal-button-title {
+            font-weight: 600;
+            font-size: 16px;
+            margin-bottom: 4px;
+        }
+        
+        .legal-button-desc {
+            font-size: 13px;
+            color: #9ca3af;
         }
         
         @media (max-width: 768px) {
@@ -273,8 +520,39 @@
                 height: 64px;
                 font-size: 32px;
             }
+            .logo-bg {
+                width: 90px;
+                height: 90px;
+            }
+            
+            .sports-title {
+                font-size: 24px;
+            }
+            
+            .sports-subtitle {
+                font-size: 14px;
+            }
+            
+            .activity-icons {
+                grid-template-columns: repeat(auto-fill, minmax(75px, 1fr));
+                gap: 12px;
+                padding: 0 12px;
+            }
+            
+            .activity-icon {
+                padding: 12px 8px;
+            }
+            
+            .activity-icon ion-icon, .activity-icon .mdi {
+                font-size: 28px;
+            }
+            
+            .icon-label {
+                font-size: 10px;
+            }
         }
     </style>
+</head>
 </head>
 <body>
     <div class="background-gradient"></div>
@@ -282,51 +560,160 @@
     <div class="container">
         <div class="header">
             <div class="logo-container">
-                <div class="logo"></div>
+                <div class="logo-bg"></div>
+                <img src="logo.png" alt="SportsPal Logo" class="logo">
             </div>
             <h1>SportsPal</h1>
-            <p class="tagline">Find Your Game, Play Together</p>
+            <p class="tagline">Build Your Active Community</p>
             <p class="description">
-                Discover local sports activities, connect with athletes in your area, and never miss a game. 
-                From pickup basketball to trail running, find your next adventure.
+                Connect with athletes in your area, discover sports activities, and build lasting connections. 
+                From pickup basketball to marathon training, find your community of active individuals.
             </p>
         </div>
         
         <div class="features">
-            <div class="feature-card">
-                <span class="feature-icon">📍</span>
+            <div class="feature-card" onclick="openFeatureModal('discover')">
+                <span class="feature-icon">
+                    <ion-icon name="location-outline"></ion-icon>
+                </span>
                 <div class="feature-title">Discover Nearby</div>
-                <p class="feature-desc">Find activities and games happening around you in real-time</p>
+                <p class="feature-desc">Find sports activities and athletes in your area in real-time</p>
             </div>
             
-            <div class="feature-card">
-                <span class="feature-icon">👥</span>
+            <div class="feature-card" onclick="openFeatureModal('connect')">
+                <span class="feature-icon">
+                    <ion-icon name="people-outline"></ion-icon>
+                </span>
                 <div class="feature-title">Join & Connect</div>
-                <p class="feature-desc">Meet like-minded athletes and build your sports community</p>
+                <p class="feature-desc">Meet like-minded athletes and build your active community</p>
             </div>
             
-            <div class="feature-card">
-                <span class="feature-icon">💬</span>
+            <div class="feature-card" onclick="openFeatureModal('chat')">
+                <span class="feature-icon">
+                    <ion-icon name="chatbubbles-outline"></ion-icon>
+                </span>
                 <div class="feature-title">Group Chat</div>
                 <p class="feature-desc">Coordinate with your team and stay in touch with your crew</p>
             </div>
             
-            <div class="feature-card">
-                <span class="feature-icon">📅</span>
+            <div class="feature-card" onclick="openFeatureModal('planning')">
+                <span class="feature-icon">
+                    <ion-icon name="calendar-outline"></ion-icon>
+                </span>
                 <div class="feature-title">Easy Planning</div>
-                <p class="feature-desc">Create events, invite friends, and manage your sports schedule</p>
+                <p class="feature-desc">Create activities, coordinate with others, and manage your training schedule</p>
+            </div>
+            
+            <div class="feature-card" onclick="openFeatureModal('routes')">
+                <span class="feature-icon">
+                    <ion-icon name="map-outline"></ion-icon>
+                </span>
+                <div class="feature-title">Route Sharing</div>
+                <p class="feature-desc">Upload and preview GPX routes for running, cycling, and hiking</p>
+            </div>
+            
+            <div class="feature-card" onclick="openFeatureModal('safety')">
+                <span class="feature-icon">
+                    <ion-icon name="shield-checkmark-outline"></ion-icon>
+                </span>
+                <div class="feature-title">Safety First</div>
+                <p class="feature-desc">Built-in safety features and community guidelines for secure meetups</p>
             </div>
         </div>
         
-        <div class="activity-icons">
-            <div class="activity-icon">⚽</div>
-            <div class="activity-icon">🏀</div>
-            <div class="activity-icon">🎾</div>
-            <div class="activity-icon">🏃</div>
-            <div class="activity-icon">🚴</div>
-            <div class="activity-icon">🏋️</div>
-            <div class="activity-icon">⛰️</div>
-            <div class="activity-icon">🏐</div>
+        <div class="sports-section">
+            <h2 class="sports-title">All Sports & Activities</h2>
+            <p class="sports-subtitle">Click any sport to learn more about connecting with athletes in your area</p>
+            <div class="activity-icons">
+                <div class="activity-icon" onclick="openSportModal('soccer')">
+                    <ion-icon name="football-outline"></ion-icon>
+                    <span class="icon-label">Soccer</span>
+                </div>
+                <div class="activity-icon" onclick="openSportModal('basketball')">
+                    <ion-icon name="basketball-outline"></ion-icon>
+                    <span class="icon-label">Basketball</span>
+                </div>
+                <div class="activity-icon" onclick="openSportModal('tennis')">
+                    <ion-icon name="tennisball-outline"></ion-icon>
+                    <span class="icon-label">Tennis</span>
+                </div>
+                <div class="activity-icon" onclick="openSportModal('running')">
+                    <i class="mdi mdi-run"></i>
+                    <span class="icon-label">Running</span>
+                </div>
+                <div class="activity-icon" onclick="openSportModal('cycling')">
+                    <i class="mdi mdi-bike"></i>
+                    <span class="icon-label">Cycling</span>
+                </div>
+                <div class="activity-icon" onclick="openSportModal('gym')">
+                    <ion-icon name="barbell-outline"></ion-icon>
+                    <span class="icon-label">Gym</span>
+                </div>
+                <div class="activity-icon" onclick="openSportModal('hiking')">
+                    <i class="mdi mdi-hiking"></i>
+                    <span class="icon-label">Hiking</span>
+                </div>
+                <div class="activity-icon" onclick="openSportModal('volleyball')">
+                    <i class="mdi mdi-volleyball"></i>
+                    <span class="icon-label">Volleyball</span>
+                </div>
+                <div class="activity-icon" onclick="openSportModal('americanfootball')">
+                    <ion-icon name="american-football-outline"></ion-icon>
+                    <span class="icon-label">Football</span>
+                </div>
+                <div class="activity-icon" onclick="openSportModal('swimming')">
+                    <i class="mdi mdi-swim"></i>
+                    <span class="icon-label">Swimming</span>
+                </div>
+                <div class="activity-icon" onclick="openSportModal('yoga')">
+                    <i class="mdi mdi-yoga"></i>
+                    <span class="icon-label">Yoga</span>
+                </div>
+                <div class="activity-icon" onclick="openSportModal('calisthenics')">
+                    <i class="mdi mdi-weight-lifter"></i>
+                    <span class="icon-label">Calisthenics</span>
+                </div>
+                <div class="activity-icon" onclick="openSportModal('padel')">
+                    <i class="mdi mdi-racquetball"></i>
+                    <span class="icon-label">Padel</span>
+                </div>
+                <div class="activity-icon" onclick="openSportModal('badminton')">
+                    <i class="mdi mdi-badminton"></i>
+                    <span class="icon-label">Badminton</span>
+                </div>
+                <div class="activity-icon" onclick="openSportModal('tabletennis')">
+                    <i class="mdi mdi-table-tennis"></i>
+                    <span class="icon-label">Table Tennis</span>
+                </div>
+                <div class="activity-icon" onclick="openSportModal('boxing')">
+                    <i class="mdi mdi-boxing-glove" style="transform: scaleX(-1);"></i>
+                    <span class="icon-label">Boxing</span>
+                </div>
+                <div class="activity-icon" onclick="openSportModal('martialarts')">
+                    <i class="mdi mdi-karate"></i>
+                    <span class="icon-label">Martial Arts</span>
+                </div>
+                <div class="activity-icon" onclick="openSportModal('cricket')">
+                    <i class="mdi mdi-cricket"></i>
+                    <span class="icon-label">Cricket</span>
+                </div>
+                <div class="activity-icon" onclick="openSportModal('golf')">
+                    <ion-icon name="golf-outline"></ion-icon>
+                    <span class="icon-label">Golf</span>
+                </div>
+                <div class="activity-icon" onclick="openSportModal('baseball')">
+                    <i class="mdi mdi-baseball"></i>
+                    <span class="icon-label">Baseball</span>
+                </div>
+                <div class="activity-icon" onclick="openSportModal('fieldhockey')">
+                    <i class="mdi mdi-hockey-sticks"></i>
+                    <span class="icon-label">Field Hockey</span>
+                </div>
+                <div class="activity-icon" onclick="openSportModal('icehockey')">
+                    <i class="mdi mdi-hockey-puck"></i>
+                    <span class="icon-label">Ice Hockey</span>
+                </div>
+            </div>
         </div>
         
         <div class="download-section">
@@ -347,10 +734,496 @@
             </div>
         </div>
         
+        <div class="legal-section">
+            <h3 class="legal-title">Legal & Safety</h3>
+            <div class="legal-buttons">
+                <a href="terms.html" class="legal-button">
+                    <ion-icon name="document-text-outline"></ion-icon>
+                    <div class="legal-button-content">
+                        <div class="legal-button-title">Terms of Service</div>
+                        <p class="legal-button-desc">User agreement & liability</p>
+                    </div>
+                </a>
+                
+                <a href="privacy.html" class="legal-button">
+                    <ion-icon name="shield-checkmark-outline"></ion-icon>
+                    <div class="legal-button-content">
+                        <div class="legal-button-title">Privacy Policy</div>
+                        <p class="legal-button-desc">How we protect your data</p>
+                    </div>
+                </a>
+                
+                <a href="community-guidelines.html" class="legal-button">
+                    <ion-icon name="people-circle-outline"></ion-icon>
+                    <div class="legal-button-content">
+                        <div class="legal-button-title">Community Guidelines</div>
+                        <p class="legal-button-desc">Rules & safety guidelines</p>
+                    </div>
+                </a>
+            </div>
+        </div>
+        
         <div class="footer">
-            <p>© 2025 SportsPal. Find your game, play together.</p>
+            <div class="footer-links">
+                <a href="terms.html">Terms of Service</a>
+                <a href="privacy.html">Privacy Policy</a>
+                <a href="community-guidelines.html">Community Guidelines</a>
+            </div>
+            <p>© 2025 SportsPal. Build your active community.</p>
         </div>
     </div>
+    
+    <!-- Feature Modals -->
+    <div id="featureModal" class="modal" onclick="closeModal('featureModal')">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <button class="modal-close" onclick="closeModal('featureModal')">&times;</button>
+            <div id="featureModalContent"></div>
+        </div>
+    </div>
+    
+    <!-- Sport Modals -->
+    <div id="sportModal" class="modal" onclick="closeModal('sportModal')">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <button class="modal-close" onclick="closeModal('sportModal')">&times;</button>
+            <div id="sportModalContent"></div>
+        </div>
+    </div>
+    
+    <script>
+        // Feature Modal Content
+        const featureContent = {
+            discover: {
+                icon: 'location-outline',
+                title: 'Discover Nearby Activities',
+                text: `<p class="modal-text"><strong>Real-Time Location-Based Discovery</strong></p>
+                <p class="modal-text">SportsPal uses your location to show you sports activities happening right in your neighborhood. Whether you're looking for a pickup basketball game, a running group, or a tennis partner, we make it easy to find athletes near you.</p>
+                <ul class="modal-list">
+                    <li><strong>Adjustable Radius:</strong> Set your discovery range from 5km to 100km</li>
+                    <li><strong>Live Updates:</strong> See new activities as they're created in real-time</li>
+                    <li><strong>Filter by Sport:</strong> Focus on the activities that interest you</li>
+                    <li><strong>Skill Levels:</strong> Find activities that match your experience level</li>
+                    <li><strong>Distance Display:</strong> See exactly how far each activity is from you</li>
+                </ul>
+                <p class="modal-text">Your privacy is protected - we only show approximate distances to other users, never your exact location.</p>`
+            },
+            connect: {
+                icon: 'people-outline',
+                title: 'Join & Connect with Athletes',
+                text: `<p class="modal-text"><strong>Build Your Active Community</strong></p>
+                <p class="modal-text">SportsPal makes it simple to join activities and connect with like-minded athletes in your area. Build lasting relationships through shared sporting experiences.</p>
+                <ul class="modal-list">
+                    <li><strong>One-Tap Join:</strong> Instantly join activities that interest you</li>
+                    <li><strong>See Participants:</strong> View who else is joining before you commit</li>
+                    <li><strong>Profile Browsing:</strong> Check out other athletes' sports interests and activity history</li>
+                    <li><strong>Friend System:</strong> Connect with regular training partners</li>
+                    <li><strong>Activity Feed:</strong> Stay updated on your community's activities</li>
+                    <li><strong>Notifications:</strong> Get alerts when activities you're interested in are created</li>
+                </ul>
+                <p class="modal-text">Meet people who share your passion for staying active and create a network of training partners.</p>`
+            },
+            chat: {
+                icon: 'chatbubbles-outline',
+                title: 'Group Chat & Coordination',
+                text: `<p class="modal-text"><strong>Seamless Communication</strong></p>
+                <p class="modal-text">Every activity on SportsPal comes with its own group chat, making coordination effortless. Stay connected with your teammates and training partners.</p>
+                <ul class="modal-list">
+                    <li><strong>Activity-Specific Chats:</strong> Dedicated chat for each activity you join</li>
+                    <li><strong>Real-Time Messaging:</strong> Instant communication with all participants</li>
+                    <li><strong>Share Updates:</strong> Coordinate last-minute changes or meeting points</li>
+                    <li><strong>Photo Sharing:</strong> Share moments from your activities</li>
+                    <li><strong>Push Notifications:</strong> Never miss important messages</li>
+                    <li><strong>Pre-Activity Planning:</strong> Discuss details before the activity starts</li>
+                </ul>
+                <p class="modal-text">Keep everyone on the same page and build camaraderie before you even meet up.</p>`
+            },
+            planning: {
+                icon: 'calendar-outline',
+                title: 'Easy Activity Planning',
+                text: `<p class="modal-text"><strong>Create & Manage Activities Effortlessly</strong></p>
+                <p class="modal-text">Organizing sports activities has never been easier. SportsPal gives you all the tools you need to create, manage, and host successful activities.</p>
+                <ul class="modal-list">
+                    <li><strong>Quick Creation:</strong> Set up an activity in under a minute</li>
+                    <li><strong>Detailed Information:</strong> Specify sport, location, time, skill level, and participant limits</li>
+                    <li><strong>Calendar Integration:</strong> See all your upcoming activities in one place</li>
+                    <li><strong>Location Picker:</strong> Choose exact meeting points with map integration</li>
+                    <li><strong>Edit Anytime:</strong> Update activity details if plans change</li>
+                    <li><strong>Participant Management:</strong> See who's joined and manage your activity</li>
+                </ul>
+                <p class="modal-text">Whether you're hosting regular training sessions or organizing one-time events, SportsPal makes it simple.</p>`
+            },
+            routes: {
+                icon: 'map-outline',
+                title: 'GPX Route Sharing',
+                text: `<p class="modal-text"><strong>Advanced Route Planning & Sharing</strong></p>
+                <p class="modal-text">For running, cycling, and hiking activities, SportsPal supports GPX file uploads, allowing you to share exact routes with participants.</p>
+                <ul class="modal-list">
+                    <li><strong>GPX Upload:</strong> Import routes from popular fitness apps (Strava, Garmin, etc.)</li>
+                    <li><strong>Route Preview:</strong> See the complete route on a map before joining</li>
+                    <li><strong>Elevation Profile:</strong> View terrain difficulty and elevation changes</li>
+                    <li><strong>Distance & Duration:</strong> Know exactly what to expect</li>
+                    <li><strong>Turn-by-Turn:</strong> Follow the route during your activity</li>
+                    <li><strong>Download Routes:</strong> Export to your preferred GPS device or app</li>
+                </ul>
+                <p class="modal-text">This feature is perfect for group rides, trail runs, and hiking adventures where everyone needs to know the route beforehand. No more getting lost or separated from the group!</p>
+                <p class="modal-text"><strong>How it helps:</strong> Participants can preview the difficulty, plan their pace, and ensure they're prepared for the terrain. It's especially useful for exploring new trails and routes safely with others.</p>`
+            },
+            safety: {
+                icon: 'shield-checkmark-outline',
+                title: 'Safety & Community Guidelines',
+                text: `<p class="modal-text"><strong>Your Safety is Our Priority</strong></p>
+                <p class="modal-text">SportsPal is built with safety in mind. We provide tools and guidelines to help you meet new people safely and enjoyably.</p>
+                <ul class="modal-list">
+                    <li><strong>Public Meetups:</strong> We recommend meeting in public, well-lit locations</li>
+                    <li><strong>Profile Verification:</strong> Optional identity verification for added trust</li>
+                    <li><strong>Report System:</strong> Easy reporting of concerning behavior</li>
+                    <li><strong>Block Feature:</strong> Control who you interact with</li>
+                    <li><strong>Community Guidelines:</strong> Clear rules for respectful behavior</li>
+                    <li><strong>Safety Tips:</strong> Built-in guidance for safe meetups</li>
+                    <li><strong>Moderation:</strong> Active monitoring and enforcement of community standards</li>
+                </ul>
+                <p class="modal-text">Always tell a friend where you're going, meet in public places, and trust your instincts. Our community guidelines ensure everyone has a positive experience.</p>`
+            }
+        };
+        
+        // Sport Modal Content
+        const sportContent = {
+            soccer: {
+                iconType: 'ion', icon: 'football-outline',
+                title: 'Soccer / Football',
+                text: `<p class="modal-text"><strong>Find Your Next Match</strong></p>
+                <p class="modal-text">Whether you're looking for a casual kickabout or a competitive 11-a-side game, SportsPal connects you with soccer players in your area.</p>
+                <ul class="modal-list">
+                    <li><strong>Pickup Games:</strong> Join informal matches at local pitches</li>
+                    <li><strong>Regular Teams:</strong> Find weekly games with consistent groups</li>
+                    <li><strong>Skill Matching:</strong> From beginners to advanced players</li>
+                    <li><strong>Different Formats:</strong> 5-a-side, 7-a-side, or full 11v11</li>
+                </ul>
+                <p class="modal-text">Never play alone again - there's always a game happening near you!</p>`
+            },
+            basketball: {
+                iconType: 'ion', icon: 'basketball-outline',
+                title: 'Basketball',
+                text: `<p class="modal-text"><strong>Get on the Court</strong></p>
+                <p class="modal-text">Find pickup basketball games, join regular runs, or organize tournaments in your neighborhood.</p>
+                <ul class="modal-list">
+                    <li><strong>Pickup Games:</strong> 3v3, 4v4, or full court 5v5</li>
+                    <li><strong>Skill Levels:</strong> From casual shootarounds to competitive runs</li>
+                    <li><strong>Indoor & Outdoor:</strong> Find courts near you year-round</li>
+                    <li><strong>Regular Groups:</strong> Connect with consistent playing partners</li>
+                </ul>
+                <p class="modal-text">Ball is life - find your court and your crew on SportsPal!</p>`
+            },
+            tennis: {
+                iconType: 'ion', icon: 'tennisball-outline',
+                title: 'Tennis',
+                text: `<p class="modal-text"><strong>Find Your Tennis Partner</strong></p>
+                <p class="modal-text">Looking for someone to rally with or a competitive match? Connect with tennis players at your skill level.</p>
+                <ul class="modal-list">
+                    <li><strong>Singles & Doubles:</strong> Find partners or opponents</li>
+                    <li><strong>Skill Matching:</strong> From beginners to tournament players</li>
+                    <li><strong>Court Locations:</strong> Share preferred tennis clubs or public courts</li>
+                    <li><strong>Practice Partners:</strong> Find consistent hitting partners</li>
+                </ul>
+                <p class="modal-text">Whether you're working on your serve or preparing for competition, find the perfect tennis partner!</p>`
+            },
+            running: {
+                iconType: 'mdi', icon: 'run',
+                title: 'Running',
+                text: `<p class="modal-text"><strong>Run Together, Go Further</strong></p>
+                <p class="modal-text">Join group runs, find running partners, and explore new routes safely with others.</p>
+                <ul class="modal-list">
+                    <li><strong>GPX Route Upload:</strong> Share your planned route so everyone knows where you're going</li>
+                    <li><strong>Preview Routes:</strong> See the path, distance, and elevation before joining</li>
+                    <li><strong>Pace Groups:</strong> Find runners who match your speed (easy, tempo, intervals)</li>
+                    <li><strong>Distance Options:</strong> From 5K recovery runs to marathon training</li>
+                    <li><strong>Morning/Evening Runs:</strong> Find groups that fit your schedule</li>
+                </ul>
+                <p class="modal-text"><strong>Why GPX matters:</strong> When running in unfamiliar areas, seeing the route beforehand helps you prepare (hydration stops, terrain type) and ensures no one gets lost. Perfect for trail running and exploring new neighborhoods!</p>`
+            },
+            cycling: {
+                iconType: 'mdi', icon: 'bike',
+                title: 'Cycling',
+                text: `<p class="modal-text"><strong>Ride with Your Crew</strong></p>
+                <p class="modal-text">Find cycling groups for road rides, mountain biking, or casual bike outings.</p>
+                <ul class="modal-list">
+                    <li><strong>GPX Route Sharing:</strong> Upload your planned route with turn-by-turn directions</li>
+                    <li><strong>Elevation Preview:</strong> See climbs and descents before you commit</li>
+                    <li><strong>Distance & Speed:</strong> Know the ride length and expected pace</li>
+                    <li><strong>Road & Mountain:</strong> Different activities for different disciplines</li>
+                    <li><strong>Group Rides:</strong> From casual to competitive pacelines</li>
+                </ul>
+                <p class="modal-text"><strong>Why GPX is game-changing:</strong> Cycling routes can be complex with multiple turns. Sharing the GPX file means everyone can load it into their GPS computer or phone, ensuring the group stays together and no one misses a turn. Preview the route's difficulty to bring appropriate gear!</p>`
+            },
+            hiking: {
+                iconType: 'mdi', icon: 'hiking',
+                title: 'Hiking',
+                text: `<p class="modal-text"><strong>Explore Trails Together</strong></p>
+                <p class="modal-text">Find hiking partners for everything from easy nature walks to challenging mountain trails.</p>
+                <ul class="modal-list">
+                    <li><strong>GPX Trail Upload:</strong> Share exact trail routes with waypoints</li>
+                    <li><strong>Elevation Profiles:</strong> See total elevation gain and difficulty</li>
+                    <li><strong>Trail Preview:</strong> Know what to expect before you go</li>
+                    <li><strong>Difficulty Levels:</strong> From easy walks to strenuous climbs</li>
+                    <li><strong>Safety in Groups:</strong> Never hike remote trails alone</li>
+                    <li><strong>Distance & Time:</strong> Plan your hiking day accurately</li>
+                </ul>
+                <p class="modal-text"><strong>Why GPX is essential for hiking:</strong> Trail conditions and navigation can be challenging. Having the GPX route means everyone can track progress, know how much further to go, and stay safe if separated. Especially critical for backcountry and remote trails where cell service is limited!</p>`
+            },
+            gym: {
+                iconType: 'ion', icon: 'barbell-outline',
+                title: 'Gym & Weightlifting',
+                text: `<p class="modal-text"><strong>Find Your Workout Partner</strong></p>
+                <p class="modal-text">Connect with gym-goers for lifting sessions, spotting partners, or workout motivation.</p>
+                <ul class="modal-list">
+                    <li><strong>Lifting Partners:</strong> Find someone to spot you on heavy lifts</li>
+                    <li><strong>Training Splits:</strong> Match with partners doing similar programs</li>
+                    <li><strong>Gym Locations:</strong> Find partners at your preferred gym</li>
+                    <li><strong>Accountability:</strong> Consistent workout partners for better results</li>
+                </ul>
+                <p class="modal-text">Training is better with a partner - find yours and hit your PRs!</p>`
+            },
+            volleyball: {
+                iconType: 'mdi', icon: 'volleyball',
+                title: 'Volleyball',
+                text: `<p class="modal-text"><strong>Spike, Set, & Serve</strong></p>
+                <p class="modal-text">Find beach or indoor volleyball games happening near you.</p>
+                <ul class="modal-list">
+                    <li><strong>Beach & Indoor:</strong> Both variants supported</li>
+                    <li><strong>Pickup Games:</strong> Casual 4v4 or 6v6 matches</li>
+                    <li><strong>Skill Levels:</strong> From recreational to competitive</li>
+                    <li><strong>Regular Games:</strong> Join consistent weekly matches</li>
+                </ul>
+                <p class="modal-text">Always have enough players for a full court with SportsPal!</p>`
+            },
+            americanfootball: {
+                iconType: 'ion', icon: 'american-football-outline',
+                title: 'American Football',
+                text: `<p class="modal-text"><strong>Join the Game</strong></p>
+                <p class="modal-text">Find flag football games or tackle leagues in your area.</p>
+                <ul class="modal-list">
+                    <li><strong>Flag Football:</strong> Non-contact games for all skill levels</li>
+                    <li><strong>Touch Football:</strong> Casual pickup games</li>
+                    <li><strong>Organized Leagues:</strong> Join or form teams</li>
+                    <li><strong>Practice Sessions:</strong> Work on skills with others</li>
+                </ul>
+                <p class="modal-text">Get your football fix year-round with local players!</p>`
+            },
+            swimming: {
+                iconType: 'mdi', icon: 'swim',
+                title: 'Swimming',
+                text: `<p class="modal-text"><strong>Swim & Train Together</strong></p>
+                <p class="modal-text">Find swimming partners for pool sessions or open water swimming.</p>
+                <ul class="modal-list">
+                    <li><strong>Pool Sessions:</strong> Lap swimming partners</li>
+                    <li><strong>Open Water:</strong> Safe open water swimming in groups</li>
+                    <li><strong>Training Partners:</strong> Consistent workout buddies</li>
+                    <li><strong>Skill Development:</strong> Share techniques and tips</li>
+                </ul>
+                <p class="modal-text">Swimming is safer and more enjoyable with partners!</p>`
+            },
+            yoga: {
+                iconType: 'mdi', icon: 'yoga',
+                title: 'Yoga',
+                text: `<p class="modal-text"><strong>Flow Together</strong></p>
+                <p class="modal-text">Find yoga partners for outdoor sessions, home practice, or studio classes.</p>
+                <ul class="modal-list">
+                    <li><strong>Outdoor Yoga:</strong> Park and beach sessions</li>
+                    <li><strong>Home Practice:</strong> Connect for virtual or in-person sessions</li>
+                    <li><strong>All Styles:</strong> Vinyasa, Hatha, Yin, and more</li>
+                    <li><strong>All Levels:</strong> Beginners to advanced practitioners</li>
+                </ul>
+                <p class="modal-text">Enhance your practice with a supportive yoga community!</p>`
+            },
+            calisthenics: {
+                iconType: 'mdi', icon: 'weight-lifter',
+                title: 'Calisthenics',
+                text: `<p class="modal-text"><strong>Bodyweight Training</strong></p>
+                <p class="modal-text">Connect with calisthenics enthusiasts for park workouts and skill development.</p>
+                <ul class="modal-list">
+                    <li><strong>Park Workouts:</strong> Use outdoor equipment together</li>
+                    <li><strong>Skill Sharing:</strong> Learn and teach advanced movements</li>
+                    <li><strong>Training Partners:</strong> Push each other to improve</li>
+                    <li><strong>All Levels:</strong> From basics to advanced skills</li>
+                </ul>
+                <p class="modal-text">Master bodyweight skills with a crew that motivates you!</p>`
+            },
+            padel: {
+                iconType: 'mdi', icon: 'racquetball',
+                title: 'Padel',
+                text: `<p class="modal-text"><strong>The Fastest Growing Sport</strong></p>
+                <p class="modal-text">Find padel partners and doubles matches at courts near you.</p>
+                <ul class="modal-list">
+                    <li><strong>Doubles Matches:</strong> The standard format for padel</li>
+                    <li><strong>Skill Matching:</strong> Find players at your level</li>
+                    <li><strong>Court Locations:</strong> Growing number of padel facilities</li>
+                    <li><strong>Social Sport:</strong> Meet people in this friendly community</li>
+                </ul>
+                <p class="modal-text">Experience the social, fast-paced game taking the world by storm!</p>`
+            },
+            badminton: {
+                iconType: 'mdi', icon: 'badminton',
+                title: 'Badminton',
+                text: `<p class="modal-text"><strong>Fast-Paced Racket Sport</strong></p>
+                <p class="modal-text">Find badminton partners for singles or doubles matches.</p>
+                <ul class="modal-list">
+                    <li><strong>Singles & Doubles:</strong> Both formats available</li>
+                    <li><strong>Indoor Courts:</strong> Year-round play</li>
+                    <li><strong>Skill Levels:</strong> Casual to competitive players</li>
+                    <li><strong>Regular Games:</strong> Find consistent playing partners</li>
+                </ul>
+                <p class="modal-text">One of the fastest racket sports - find your match!</p>`
+            },
+            tabletennis: {
+                iconType: 'mdi', icon: 'table-tennis',
+                title: 'Table Tennis',
+                text: `<p class="modal-text"><strong>Ping Pong Partners</strong></p>
+                <p class="modal-text">Find table tennis players for games at clubs, community centers, or offices.</p>
+                <ul class="modal-list">
+                    <li><strong>Casual & Competitive:</strong> All skill levels welcome</li>
+                    <li><strong>Indoor Sport:</strong> Play year-round</li>
+                    <li><strong>Quick Games:</strong> Perfect for lunch breaks</li>
+                    <li><strong>Skill Development:</strong> Improve with regular partners</li>
+                </ul>
+                <p class="modal-text">Fast, fun, and accessible - find your table tennis community!</p>`
+            },
+            boxing: {
+                iconType: 'mdi', icon: 'boxing-glove', iconStyle: 'transform:scaleX(-1);',
+                title: 'Boxing',
+                text: `<p class="modal-text"><strong>Train & Spar</strong></p>
+                <p class="modal-text">Find boxing partners for training, sparring, or pad work.</p>
+                <ul class="modal-list">
+                    <li><strong>Training Partners:</strong> Pad work and bag sessions</li>
+                    <li><strong>Sparring:</strong> Find partners at your skill/weight class</li>
+                    <li><strong>Gym Sessions:</strong> Connect at boxing gyms</li>
+                    <li><strong>All Levels:</strong> From beginners to experienced fighters</li>
+                </ul>
+                <p class="modal-text">Improve your skills with dedicated training partners!</p>`
+            },
+            martialarts: {
+                iconType: 'mdi', icon: 'karate',
+                title: 'Martial Arts',
+                text: `<p class="modal-text"><strong>Train & Practice Together</strong></p>
+                <p class="modal-text">Connect with martial artists for training, sparring, and skill development.</p>
+                <ul class="modal-list">
+                    <li><strong>Various Disciplines:</strong> Karate, Taekwondo, Jiu-Jitsu, MMA, and more</li>
+                    <li><strong>Training Partners:</strong> Work on techniques together</li>
+                    <li><strong>Sparring Sessions:</strong> Controlled practice matches</li>
+                    <li><strong>Skill Sharing:</strong> Learn from practitioners of different styles</li>
+                </ul>
+                <p class="modal-text">Enhance your martial arts journey with training partners!</p>`
+            },
+            cricket: {
+                iconType: 'mdi', icon: 'cricket',
+                title: 'Cricket',
+                text: `<p class="modal-text"><strong>Join the Cricket Community</strong></p>
+                <p class="modal-text">Find cricket matches, practice sessions, and leagues in your area.</p>
+                <ul class="modal-list">
+                    <li><strong>Net Sessions:</strong> Practice batting and bowling with others</li>
+                    <li><strong>Match Play:</strong> Join T20, ODI, or Test format games</li>
+                    <li><strong>All Skill Levels:</strong> From casual to competitive players</li>
+                    <li><strong>Team Formation:</strong> Build your cricket squad</li>
+                    <li><strong>Indoor & Outdoor:</strong> Find facilities near you</li>
+                </ul>
+                <p class="modal-text">Whether you're a batsman, bowler, or all-rounder, connect with cricket enthusiasts!</p>`
+            },
+            golf: {
+                iconType: 'ion', icon: 'golf-outline',
+                title: 'Golf',
+                text: `<p class="modal-text"><strong>Find Your Golf Partner</strong></p>
+                <p class="modal-text">Connect with golfers for rounds, practice sessions, or tournaments.</p>
+                <ul class="modal-list">
+                    <li><strong>Tee Times:</strong> Find playing partners for your next round</li>
+                    <li><strong>Driving Range:</strong> Practice sessions with fellow golfers</li>
+                    <li><strong>Handicap Matching:</strong> Play with golfers at your level</li>
+                    <li><strong>Course Reviews:</strong> Discover new courses together</li>
+                    <li><strong>Tournament Play:</strong> Join competitions and events</li>
+                </ul>
+                <p class="modal-text">Improve your game and enjoy the course with like-minded golfers!</p>`
+            },
+            baseball: {
+                iconType: 'mdi', icon: 'baseball',
+                title: 'Baseball',
+                text: `<p class="modal-text"><strong>Play Ball!</strong></p>
+                <p class="modal-text">Find baseball games, practice sessions, and leagues in your neighborhood.</p>
+                <ul class="modal-list">
+                    <li><strong>Pickup Games:</strong> Casual baseball and softball matches</li>
+                    <li><strong>League Play:</strong> Join organized teams and competitions</li>
+                    <li><strong>Batting Practice:</strong> Hit the cages with partners</li>
+                    <li><strong>Position Practice:</strong> Work on pitching, fielding, or batting</li>
+                    <li><strong>All Ages:</strong> Youth leagues to adult recreational</li>
+                </ul>
+                <p class="modal-text">From pickup games to competitive leagues, find your baseball community!</p>`
+            },
+            fieldhockey: {
+                iconType: 'mdi', icon: 'hockey-sticks',
+                title: 'Field Hockey',
+                text: `<p class="modal-text"><strong>Hit the Field</strong></p>
+                <p class="modal-text">Connect with field hockey players for matches, practice, and tournaments.</p>
+                <ul class="modal-list">
+                    <li><strong>Team Matches:</strong> Join 11-a-side games</li>
+                    <li><strong>Indoor & Outdoor:</strong> Grass field and indoor court options</li>
+                    <li><strong>Skill Sessions:</strong> Practice stick skills and drills</li>
+                    <li><strong>All Levels:</strong> Beginners to competitive players</li>
+                    <li><strong>Mixed Games:</strong> Co-ed and gender-specific matches</li>
+                </ul>
+                <p class="modal-text">Fast-paced and exciting - find your field hockey team!</p>`
+            },
+            icehockey: {
+                iconType: 'mdi', icon: 'hockey-puck',
+                title: 'Ice Hockey',
+                text: `<p class="modal-text"><strong>Get on the Ice</strong></p>
+                <p class="modal-text">Find ice hockey games, pick-up sessions, and leagues at your local rink.</p>
+                <ul class="modal-list">
+                    <li><strong>Pickup Hockey:</strong> Drop-in games at local rinks</li>
+                    <li><strong>League Play:</strong> Competitive and recreational leagues</li>
+                    <li><strong>Stick & Puck:</strong> Open ice practice sessions</li>
+                    <li><strong>Skill Levels:</strong> From beginners to advanced players</li>
+                    <li><strong>Goalie Practice:</strong> Find partners for shooting practice</li>
+                </ul>
+                <p class="modal-text">Lace up your skates and join the ice hockey community!</p>`
+            }
+        };
+        
+        function openFeatureModal(feature) {
+            const content = featureContent[feature];
+            document.getElementById('featureModalContent').innerHTML = `
+                <div class="modal-icon">
+                    <ion-icon name="${content.icon}"></ion-icon>
+                </div>
+                <h2 class="modal-title">${content.title}</h2>
+                ${content.text}
+            `;
+            document.getElementById('featureModal').classList.add('active');
+        }
+        
+        function openSportModal(sport) {
+            const content = sportContent[sport];
+            let iconHtml = '';
+            if (content.iconType === 'ion') {
+                iconHtml = `<ion-icon name="${content.icon}"></ion-icon>`;
+            } else if (content.iconType === 'mdi') {
+                iconHtml = `<i class="mdi mdi-${content.icon}"${content.iconStyle ? ` style=\"${content.iconStyle}\"` : ''}></i>`;
+            }
+            document.getElementById('sportModalContent').innerHTML = `
+                <div class="modal-icon">${iconHtml}</div>
+                <h2 class="modal-title">${content.title}</h2>
+                ${content.text}
+            `;
+            document.getElementById('sportModal').classList.add('active');
+        }
+        
+        function closeModal(modalId) {
+            document.getElementById(modalId).classList.remove('active');
+        }
+        
+        // Close modals on Escape key
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+                closeModal('featureModal');
+                closeModal('sportModal');
+            }
+        });
+    </script>
     
     <script>
         // Detect deep link and redirect to app

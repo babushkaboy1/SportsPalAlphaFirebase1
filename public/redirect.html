@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Opening in SportsPal...</title>
+    <link rel="icon" type="image/png" href="logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script type="module" src="https://unpkg.com/ionicons@7.1.0/dist/ionicons/ionicons.esm.js"></script>
+    <script nomodule src="https://unpkg.com/ionicons@7.1.0/dist/ionicons/ionicons.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(180deg, #0a0a0a 0%, #1a1a1a 100%);
+            min-height: 100vh;
+            color: #ffffff;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .background-gradient {
+            position: fixed;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle at 50% 50%, rgba(26, 233, 239, 0.15) 0%, transparent 50%);
+            animation: pulse 8s ease-in-out infinite;
+            pointer-events: none;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 0.3; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.1); }
+        }
+        
+        .container {
+            position: relative;
+            text-align: center;
+            padding: 40px 24px;
+            max-width: 500px;
+            width: 100%;
+            animation: fadeInUp 0.6s ease-out;
+        }
+        
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .content-card {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 24px;
+            padding: 32px 24px;
+            margin-bottom: 24px;
+            animation: slideIn 0.6s ease-out;
+        }
+        
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: scale(0.95);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+        
+        .activity-icon-container {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(26, 233, 239, 0.15);
+            border-radius: 20px;
+            border: 2px solid rgba(26, 233, 239, 0.3);
+            color: #1ae9ef;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .activity-icon-container::before {
+            content: '';
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle, rgba(26,233,239,0.2) 0%, transparent 70%);
+            animation: glow 2s ease-in-out infinite;
+        }
+        
+        @keyframes glow {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+        }
+        
+        .activity-icon-container ion-icon,
+        .activity-icon-container .mdi {
+            font-size: 48px;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .activity-title {
+            font-size: 24px;
+            font-weight: 700;
+            color: #ffffff;
+            margin-bottom: 8px;
+        }
+        
+        .activity-details {
+            font-size: 14px;
+            color: #9ca3af;
+            margin-bottom: 4px;
+        }
+        
+        .logo-container {
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 24px;
+        }
+        
+        .logo-bg {
+            position: absolute;
+            width: 100px;
+            height: 100px;
+            background: radial-gradient(circle, rgba(26,233,239,0.15) 0%, rgba(26,233,239,0) 80%);
+            border-radius: 50%;
+        }
+        
+        .logo {
+            width: 60px;
+            height: 60px;
+            border-radius: 16px;
+            box-shadow: 0 8px 32px rgba(26, 233, 239, 0.3);
+            position: relative;
+            z-index: 1;
+        }
+        
+        h1 {
+            font-size: 28px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #1ae9ef 0%, #ffffff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 12px;
+        }
+        
+        .status-text {
+            font-size: 16px;
+            color: #d1d5db;
+            margin-bottom: 24px;
+            line-height: 1.6;
+        }
+        
+        .spinner {
+            width: 40px;
+            height: 40px;
+            margin: 0 auto 20px;
+            border: 3px solid rgba(26, 233, 239, 0.2);
+            border-top-color: #1ae9ef;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .fallback-buttons {
+            display: none;
+            flex-direction: column;
+            gap: 12px;
+            margin-top: 24px;
+            animation: fadeIn 0.5s ease-out;
+        }
+        
+        .fallback-buttons.show {
+            display: flex;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 14px 28px;
+            text-decoration: none;
+            border-radius: 12px;
+            font-weight: 600;
+            font-size: 15px;
+            transition: all 0.3s ease;
+            border: 2px solid transparent;
+        }
+        
+        .btn-primary {
+            background: #1ae9ef;
+            color: #000000;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(26, 233, 239, 0.4);
+        }
+        
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: #ffffff;
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+        
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.15);
+            border-color: rgba(26, 233, 239, 0.4);
+        }
+        
+        .info-text {
+            font-size: 13px;
+            color: #9ca3af;
+            margin-top: 20px;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+    <div class="background-gradient"></div>
+    
+    <div class="container">
+        <div class="content-card" id="contentCard" style="display: none;">
+            <div class="activity-icon-container" id="activityIcon">
+                <ion-icon name="help-circle-outline"></ion-icon>
+            </div>
+            <div class="activity-title" id="activityTitle">Loading...</div>
+            <div class="activity-details" id="activityDetails"></div>
+        </div>
+        
+        <div class="logo-container">
+            <div class="logo-bg"></div>
+            <img src="/logo.png" alt="SportsPal Logo" class="logo" onerror="this.style.display='none'">
+        </div>
+        
+        <h1>Opening in SportsPal...</h1>
+        <p class="status-text" id="statusText">We're redirecting you to the app</p>
+        
+        <div class="spinner"></div>
+        
+        <div class="fallback-buttons" id="fallbackButtons">
+            <a href="#" id="openAppBtn" class="btn btn-primary">Open SportsPal</a>
+            <a href="https://sportspal-1b468.web.app" class="btn btn-secondary">Go to Website</a>
+        </div>
+        
+        <p class="info-text" id="infoText">If the app doesn't open automatically, tap "Open SportsPal" above</p>
+    </div>
+    
+    <script type="module">
+        // Sport icon mapping (matching app)
+        const sportIcons = {
+            'soccer': { type: 'ion', icon: 'football-outline' },
+            'basketball': { type: 'ion', icon: 'basketball-outline' },
+            'tennis': { type: 'ion', icon: 'tennisball-outline' },
+            'running': { type: 'mdi', icon: 'run' },
+            'cycling': { type: 'mdi', icon: 'bike' },
+            'gym': { type: 'ion', icon: 'barbell-outline' },
+            'hiking': { type: 'mdi', icon: 'hiking' },
+            'volleyball': { type: 'mdi', icon: 'volleyball' },
+            'american football': { type: 'ion', icon: 'american-football-outline' },
+            'swimming': { type: 'mdi', icon: 'swim' },
+            'yoga': { type: 'mdi', icon: 'yoga' },
+            'calisthenics': { type: 'mdi', icon: 'weight-lifter' },
+            'padel': { type: 'mdi', icon: 'racquetball' },
+            'badminton': { type: 'mdi', icon: 'badminton' },
+            'table tennis': { type: 'mdi', icon: 'table-tennis' },
+            'boxing': { type: 'mdi', icon: 'boxing-glove', style: 'transform: scaleX(-1);' },
+            'martial arts': { type: 'mdi', icon: 'karate' },
+            'cricket': { type: 'mdi', icon: 'cricket' },
+            'golf': { type: 'ion', icon: 'golf-outline' },
+            'baseball': { type: 'mdi', icon: 'baseball' },
+            'field hockey': { type: 'mdi', icon: 'hockey-sticks' },
+            'ice hockey': { type: 'mdi', icon: 'hockey-puck' }
+        };
+        
+        // Get the current URL path
+        const path = window.location.pathname;
+        const userAgent = navigator.userAgent.toLowerCase();
+        const isIOS = /iphone|ipad|ipod/.test(userAgent);
+        const isAndroid = /android/.test(userAgent);
+        
+        // Build app scheme URL
+        const appScheme = `sportspal:/${path}`;
+        
+        // Build universal link
+        const universalLink = `https://sportspal-1b468.web.app${path}`;
+        
+        // Extract activity ID from path
+        const pathParts = path.split('/').filter(Boolean);
+        const linkType = pathParts[0]; // activity, profile, or chat
+        const itemId = pathParts[1];
+        
+        // Fetch activity data if it's an activity link
+        async function fetchActivityData() {
+            if (linkType === 'activity' && itemId) {
+                try {
+                    const response = await fetch(`https://firestore.googleapis.com/v1/projects/sportspal-1b468/databases/(default)/documents/activities/${itemId}`);
+                    const data = await response.json();
+                    
+                    if (data.fields) {
+                        const activity = data.fields.activity?.stringValue || 'Activity';
+                        const location = data.fields.location?.stringValue || '';
+                        const date = data.fields.date?.stringValue || '';
+                        const time = data.fields.time?.stringValue || '';
+                        
+                        // Update UI with activity details
+                        document.getElementById('activityTitle').textContent = activity;
+                        if (location || date) {
+                            document.getElementById('activityDetails').textContent = `${location ? location + ' • ' : ''}${date} ${time}`;
+                        }
+                        
+                        // Set sport icon
+                        const sportKey = activity.toLowerCase();
+                        const sportIcon = sportIcons[sportKey] || { type: 'ion', icon: 'help-circle-outline' };
+                        const iconContainer = document.getElementById('activityIcon');
+                        
+                        if (sportIcon.type === 'ion') {
+                            iconContainer.innerHTML = `<ion-icon name="${sportIcon.icon}"${sportIcon.style ? ` style="${sportIcon.style}"` : ''}></ion-icon>`;
+                        } else {
+                            iconContainer.innerHTML = `<i class="mdi mdi-${sportIcon.icon}"${sportIcon.style ? ` style="${sportIcon.style}"` : ''}></i>`;
+                        }
+                        
+                        document.getElementById('contentCard').style.display = 'block';
+                        document.getElementById('statusText').textContent = `Opening ${activity} activity in SportsPal...`;
+                    }
+                } catch (error) {
+                    console.log('Could not fetch activity data:', error);
+                }
+            }
+        }
+        
+        // Fetch data immediately
+        fetchActivityData();
+        
+        // Track if we already tried opening
+        let appOpenAttempted = false;
+        let redirectStopped = false;
+        
+        // Stop redirecting if user comes back to page (app didn't open)
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && appOpenAttempted) {
+                redirectStopped = true;
+                showFallback();
+            }
+        });
+        
+        // Function to try opening the app
+        function openApp() {
+            if (appOpenAttempted || redirectStopped) return;
+            appOpenAttempted = true;
+            
+            if (isIOS) {
+                // Try universal link first for iOS
+                window.location.href = universalLink;
+            } else if (isAndroid) {
+                // Try custom scheme for Android
+                window.location.href = appScheme;
+            } else {
+                // Desktop - show fallback immediately
+                document.getElementById('statusText').textContent = 'SportsPal is a mobile app';
+                document.getElementById('infoText').textContent = 'Download the app on your phone to view this content';
+                showFallback();
+            }
+        }
+        
+        // Show fallback buttons after delay
+        function showFallback() {
+            const fallbackButtons = document.getElementById('fallbackButtons');
+            const openAppBtn = document.getElementById('openAppBtn');
+            const spinner = document.querySelector('.spinner');
+            
+            openAppBtn.href = isIOS || isAndroid ? appScheme : 'https://sportspal-1b468.web.app';
+            
+            spinner.style.display = 'none';
+            fallbackButtons.classList.add('show');
+        }
+        
+        // Try opening after a short delay to let content load
+        setTimeout(() => {
+            if (!redirectStopped) {
+                openApp();
+            }
+        }, 800);
+        
+        // Show fallback after 3 seconds if app didn't open
+        setTimeout(() => {
+            if (appOpenAttempted && !redirectStopped) {
+                redirectStopped = true;
+                showFallback();
+            }
+        }, 3000);
+        
+        // Update status text for different link types
+        if (linkType === 'profile') {
+            document.getElementById('statusText').textContent = 'Opening profile in SportsPal...';
+        } else if (linkType === 'chat') {
+            document.getElementById('statusText').textContent = 'Opening chat in SportsPal...';
+        }
+    </script>
+</body>
+</html>

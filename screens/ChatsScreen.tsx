@@ -29,6 +29,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { uploadChatImage } from '../utils/imageUtils';
+import { muteChat, unmuteChat, getMutedChats } from '../utils/firestoreMutes';
 import { createCustomGroupChat } from '../utils/firestoreChats';
 import { acceptFriendRequest, declineFriendRequest } from '../utils/firestoreFriends';
 import {
@@ -52,7 +53,7 @@ import {
 } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 import { db, auth } from '../firebaseConfig';
-import { useRoute, useNavigation } from '@react-navigation/native';
+import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useActivityContext } from '../context/ActivityContext';
 import { ActivityIcon } from '../components/ActivityIcons';
 import { normalizeDateFormat } from '../utils/storage';
@@ -199,6 +200,7 @@ const ChatsScreen = ({ navigation }: any) => {
   const [chatUnreadTotal, setChatUnreadTotal] = useState<number>(0);
   const [chatMenuVisible, setChatMenuVisible] = useState(false);
   const [selectedChat, setSelectedChat] = useState<any>(null);
+  const [mutedChats, setMutedChats] = useState<string[]>([]);
 
   // Profile cache to minimize reads
   const profileCacheRef = useRef<{ [uid: string]: { username: string; photo?: string; timestamp: number } }>({});
@@ -270,11 +272,18 @@ const ChatsScreen = ({ navigation }: any) => {
 
       if (!fbUser) {
         setChats([]); setNotifications([]); setNotificationCount(0); setIsReady(true);
+        setMutedChats([]);
         // Clear all caches on logout
         clearAllChatCaches();
         return;
       }
       const uid = fbUser.uid;
+
+      // Load muted chats
+      (async () => {
+        const muted = await getMutedChats();
+        setMutedChats(muted);
+      })();
 
       // ========== LOAD FROM CACHE FIRST (instant UI) ==========
       (async () => {
@@ -545,6 +554,21 @@ const ChatsScreen = ({ navigation }: any) => {
     if (route?.params?.inboxView === 'notifications') setShowActivity(true);
   }, [route?.params]);
 
+  /** ========= Reload muted chats when screen is focused ========= */
+  useFocusEffect(
+    React.useCallback(() => {
+      const loadMutedChats = async () => {
+        try {
+          const muted = await getMutedChats();
+          setMutedChats(muted);
+        } catch (error) {
+          console.error('Error loading muted chats:', error);
+        }
+      };
+      loadMutedChats();
+    }, [])
+  );
+
   /** ========= Pull to refresh ========= */
   const onRefresh = async () => {
     setRefreshing(true);
@@ -656,6 +680,30 @@ const ChatsScreen = ({ navigation }: any) => {
     );
   };
 
+  const handleMuteToggle = async () => {
+    if (!selectedChat?.id) return;
+    
+    setChatMenuVisible(false);
+    const isMuted = mutedChats.includes(selectedChat.id);
+    
+    try {
+      if (isMuted) {
+        await unmuteChat(selectedChat.id);
+        setMutedChats(prev => prev.filter(id => id !== selectedChat.id));
+        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        Alert.alert('Unmuted', 'You will now receive notifications from this chat.');
+      } else {
+        await muteChat(selectedChat.id);
+        setMutedChats(prev => [...prev, selectedChat.id]);
+        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        Alert.alert('Muted', 'You will no longer receive notifications from this chat.');
+      }
+    } catch (error) {
+      console.error('Error toggling mute:', error);
+      Alert.alert('Error', 'Failed to update mute settings. Please try again.');
+    }
+  };
+
   /** ========= Animations ========= */
   useEffect(() => {
     if (isReady) {
@@ -761,6 +809,9 @@ const ChatsScreen = ({ navigation }: any) => {
           <View style={styles.chatInfo}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <Text style={styles.chatTitle} numberOfLines={1}>{item.name}</Text>
+              {mutedChats.includes(item.id) && (
+                <Ionicons name="notifications-off" size={16} color={theme.muted} style={{ marginLeft: 6 }} />
+              )}
               {item.unreadCount > 0 && (
                 <View style={[styles.unreadBadgeSmall, { marginLeft: 6 }]}>
                   <Text style={styles.unreadBadgeText}>{item.unreadCount > 99 ? '99+' : item.unreadCount}</Text>
@@ -1236,6 +1287,20 @@ const ChatsScreen = ({ navigation }: any) => {
       <Modal visible={chatMenuVisible} transparent animationType="fade">
         <Pressable style={styles.modalOverlay} onPress={() => setChatMenuVisible(false)}>
           <View style={{ backgroundColor: theme.card, borderRadius: 16, borderWidth: 1, borderColor: theme.border, maxWidth: 280, width: '80%' }}>
+            <TouchableOpacity
+              style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
+              onPress={handleMuteToggle}
+            >
+              <Ionicons 
+                name={selectedChat && mutedChats.includes(selectedChat.id) ? "notifications" : "notifications-off"} 
+                size={22} 
+                color={theme.primary} 
+              />
+              <Text style={{ color: theme.text, fontSize: 16, fontWeight: '600' }}>
+                {selectedChat && mutedChats.includes(selectedChat.id) ? 'Unmute' : 'Mute'}
+              </Text>
+            </TouchableOpacity>
+            <View style={{ height: 1, backgroundColor: theme.border }} />
             <TouchableOpacity
               style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
               onPress={handleReportChat}

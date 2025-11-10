@@ -32,6 +32,7 @@ import { sendFriendRequest, cancelFriendRequest, removeFriend, acceptIncomingReq
 import { shareActivity, shareProfile } from '../utils/deepLinking';
 import { ensureDmChat } from '../utils/firestoreChats';
 import { getProfileFromCache, updateProfileInCache } from '../utils/chatCache';
+import { blockUser, isUserBlocked } from '../utils/firestoreBlocks';
 
 // Slight darken helper for hex colors (fallback to original on parse failure)
 function darkenHex(color: string, amount = 0.12): string {
@@ -87,6 +88,7 @@ const UserProfileScreen = () => {
   const [userFriendProfiles, setUserFriendProfiles] = useState<Array<{ uid: string; username: string; photo?: string }>>([]);
   const [menuVisible, setMenuVisible] = useState(false);
   const [imageViewerVisible, setImageViewerVisible] = useState(false);
+  const [isBlocked, setIsBlocked] = useState(false);
 
   useEffect(() => {
     const fetchProfile = async () => {
@@ -117,6 +119,10 @@ const UserProfileScreen = () => {
         } as any);
         setIsReady(true);
       }
+      
+      // Check if user is blocked
+      const blocked = await isUserBlocked(userId);
+      setIsBlocked(blocked);
     };
     fetchProfile();
   }, [userId]);
@@ -314,6 +320,37 @@ const UserProfileScreen = () => {
         { text: 'Spam or fake account', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
         { text: 'Harassment', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
         { text: 'Cancel', style: 'cancel' },
+      ]
+    );
+  };
+
+  const handleBlockUser = () => {
+    setMenuVisible(false);
+    Alert.alert(
+      'Block User',
+      `Are you sure you want to block ${profile?.username || 'this user'}?\n\n• You won't see their profile or activities\n• They can't send you messages\n• Your connection will be removed\n• They won't be notified`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Block',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await blockUser(userId);
+              await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              setIsBlocked(true);
+              Alert.alert('Blocked', `${profile?.username || 'User'} has been blocked.`, [
+                {
+                  text: 'OK',
+                  onPress: () => navigation.goBack(),
+                },
+              ]);
+            } catch (error) {
+              console.error('Error blocking user:', error);
+              Alert.alert('Error', 'Failed to block user. Please try again.');
+            }
+          },
+        },
       ]
     );
   };
@@ -940,6 +977,14 @@ const UserProfileScreen = () => {
             >
               <Ionicons name="share-social-outline" size={22} color={theme.primary} />
               <Text style={{ color: theme.text, fontSize: 16, fontWeight: '600' }}>Share Profile</Text>
+            </TouchableOpacity>
+            <View style={{ height: 1, backgroundColor: theme.border }} />
+            <TouchableOpacity
+              style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
+              onPress={handleBlockUser}
+            >
+              <Ionicons name="ban-outline" size={22} color={theme.danger} />
+              <Text style={{ color: theme.danger, fontSize: 16, fontWeight: '600' }}>Block User</Text>
             </TouchableOpacity>
             <View style={{ height: 1, backgroundColor: theme.border }} />
             <TouchableOpacity
