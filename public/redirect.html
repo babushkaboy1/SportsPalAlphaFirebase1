@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Opening in SportsPal...</title>
-    <link rel="icon" type="image/png" href="logo.png">
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -367,9 +367,11 @@
         // Fetch data immediately
         fetchActivityData();
         
-        // Track if we already tried opening
-        let appOpenAttempted = false;
-        let redirectStopped = false;
+    // Track if we already tried opening
+    let appOpenAttempted = false;
+    let redirectStopped = false;
+    const attemptKey = `spal_deeplink_attempted:${path}`;
+    const alreadyAttemptedThisSession = sessionStorage.getItem(attemptKey) === '1';
         
         // Stop redirecting if user comes back to page (app didn't open)
         document.addEventListener('visibilitychange', () => {
@@ -383,10 +385,11 @@
         function openApp() {
             if (appOpenAttempted || redirectStopped) return;
             appOpenAttempted = true;
+            try { sessionStorage.setItem(attemptKey, '1'); } catch {}
             
             if (isIOS) {
-                // Try universal link first for iOS
-                window.location.href = universalLink;
+                // Use custom scheme first to avoid Firebase rewrite causing a reload loop
+                window.location.href = appScheme;
             } else if (isAndroid) {
                 // Try custom scheme for Android
                 window.location.href = appScheme;
@@ -404,6 +407,7 @@
             const openAppBtn = document.getElementById('openAppBtn');
             const spinner = document.querySelector('.spinner');
             
+            // Direct open button should always use the app scheme (avoids universal link reloads)
             openAppBtn.href = isIOS || isAndroid ? appScheme : 'https://sportspal-1b468.web.app';
             
             spinner.style.display = 'none';
@@ -411,11 +415,16 @@
         }
         
         // Try opening after a short delay to let content load
-        setTimeout(() => {
-            if (!redirectStopped) {
-                openApp();
-            }
-        }, 800);
+                if (!alreadyAttemptedThisSession) {
+                    setTimeout(() => {
+                            if (!redirectStopped) {
+                                    openApp();
+                            }
+                    }, 800);
+                } else {
+                    // If we already tried in this session, show fallback right away to avoid possible loops
+                    showFallback();
+                }
         
         // Show fallback after 3 seconds if app didn't open
         setTimeout(() => {

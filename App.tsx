@@ -206,6 +206,8 @@ function AppInner() {
   const [hasProfile, setHasProfile] = useState<boolean | null>(null);
   const [navReady, setNavReady] = useState(false);
   const splashHiddenRef = React.useRef(false);
+  // Store a deep link encountered before navigation is ready / auth resolved
+  const pendingDeepLinkRef = React.useRef<string | null>(null);
   const { theme, navTheme } = useTheme();
   const { currentNotification, dismissNotification, showNotification } = useInAppNotification();
 
@@ -329,24 +331,39 @@ function AppInner() {
 
   // Deep linking handler
   useEffect(() => {
-    if (!user) return; // Only handle deep links when user is authenticated
-
-    // Handle initial URL (app opened via deep link)
+    // Always fetch the initial URL once; store if we cannot navigate yet
     Linking.getInitialURL().then((url) => {
-      if (url && navRef.isReady()) {
-        handleDeepLinkNavigation(url);
+      if (url) {
+        if (user && navRef.isReady()) {
+          handleDeepLinkNavigation(url);
+        } else {
+          pendingDeepLinkRef.current = url;
+        }
       }
     }).catch(() => {});
 
-    // Handle URLs while app is running
+    // Listener for subsequent URLs while app is alive
     const subscription = Linking.addEventListener('url', ({ url }) => {
-      if (navRef.isReady()) {
+      if (user && navRef.isReady()) {
         handleDeepLinkNavigation(url);
+      } else {
+        pendingDeepLinkRef.current = url; // overwrite with most recent
       }
     });
-
     return () => subscription.remove();
   }, [user]);
+
+  // When auth + nav are ready AND user has/creates profile, consume pending deep link
+  useEffect(() => {
+    if (!pendingDeepLinkRef.current) return;
+    if (!user) return;
+    if (!navRef.isReady()) return;
+    if (hasProfile === null) return; // still checking profile
+    // Navigate now
+    const url = pendingDeepLinkRef.current;
+    pendingDeepLinkRef.current = null;
+    handleDeepLinkNavigation(url);
+  }, [user, navReady, hasProfile]);
 
   const handleDeepLinkNavigation = (url: string) => {
     const { type, id } = parseDeepLink(url);
