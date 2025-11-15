@@ -15,8 +15,9 @@ import {
   TextInput,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
-import { auth, db } from '../firebaseConfig';
+import { auth, db, functions } from '../firebaseConfig';
 import { doc, getDoc } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { 
   linkWithCredential,
   GoogleAuthProvider,
@@ -59,7 +60,14 @@ const SettingsScreen: React.FC = () => {
   const [rangeModalVisible, setRangeModalVisible] = useState(false);
   const [termsModalVisible, setTermsModalVisible] = useState(false);
   const [privacyModalVisible, setPrivacyModalVisible] = useState(false);
+  const [communityModalVisible, setCommunityModalVisible] = useState(false);
   const [linkedAccountsVisible, setLinkedAccountsVisible] = useState(false);
+  
+  // Account deletion state
+  const [deleteModalVisible, setDeleteModalVisible] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
+  
   // Linking UI state
   const [linking, setLinking] = useState<{ google: boolean; facebook: boolean; apple: boolean; password: boolean }>({ google: false, facebook: false, apple: false, password: false });
   const [passwordModalVisible, setPasswordModalVisible] = useState(false);
@@ -324,6 +332,75 @@ const SettingsScreen: React.FC = () => {
     }
   };
 
+  const handleDeleteAccount = () => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    
+    Alert.alert(
+      '😢 Delete Account?',
+      'We\'re sorry to see you go!\n\nDeleting your account will:\n\n• Permanently remove your profile\n• Delete all your activities\n• Remove you from all chats\n• Erase all your data\n\nThis action CANNOT be undone.',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+          onPress: () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light),
+        },
+        {
+          text: 'Continue',
+          style: 'destructive',
+          onPress: () => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            setDeleteModalVisible(true);
+          },
+        },
+      ]
+    );
+  };
+
+  const confirmDeleteAccount = async () => {
+    if (deleteConfirmText.toLowerCase() !== 'delete') {
+      Alert.alert('Incorrect Confirmation', 'Please type DELETE to confirm.');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      return;
+    }
+
+    setIsDeleting(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+
+    try {
+      const deleteAccountFunction = httpsCallable(functions, 'deleteAccount');
+      await deleteAccountFunction();
+      
+      // Success - account deleted
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert(
+        'Account Deleted',
+        'Your account and all data have been permanently deleted. Thank you for using SportsPal.',
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              setDeleteModalVisible(false);
+              // User is now signed out automatically by Firebase
+              navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+            },
+          },
+        ],
+        { cancelable: false }
+      );
+    } catch (error: any) {
+      console.error('Delete account error:', error);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Alert.alert(
+        'Deletion Failed',
+        error.message || 'Failed to delete account. Please try again or contact support.',
+        [{ text: 'OK' }]
+      );
+    } finally {
+      setIsDeleting(false);
+      setDeleteConfirmText('');
+    }
+  };
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       {/* Header with back button */}
@@ -354,6 +431,11 @@ const SettingsScreen: React.FC = () => {
             sub="Manage your sign-in methods"
             rightIcon="chevron-forward"
             onPress={() => setLinkedAccountsVisible(true)}
+          />
+          <RowDanger
+            icon="trash-outline"
+            label="Delete Account"
+            onPress={handleDeleteAccount}
           />
           <RowDanger
             icon="exit-outline"
@@ -427,8 +509,21 @@ const SettingsScreen: React.FC = () => {
             rightText={Constants.expoConfig?.version ?? '1.0.0'}
             disabled
           />
-          <Row label="Terms of Service" icon="document-text-outline" onPress={() => setTermsModalVisible(true)} />
-          <Row label="Privacy Policy" icon="shield-checkmark-outline" onPress={() => setPrivacyModalVisible(true)} />
+          <Row 
+            label="Terms of Service" 
+            icon="document-text-outline" 
+            onPress={() => setTermsModalVisible(true)} 
+          />
+          <Row 
+            label="Privacy Policy" 
+            icon="shield-checkmark-outline" 
+            onPress={() => setPrivacyModalVisible(true)} 
+          />
+          <Row 
+            label="Community Guidelines" 
+            icon="people-outline" 
+            onPress={() => setCommunityModalVisible(true)} 
+          />
         </Section>
 
         {/* LEGAL & POLICIES */}
@@ -545,6 +640,89 @@ const SettingsScreen: React.FC = () => {
               </TouchableOpacity>
               <TouchableOpacity style={[styles.modalBtn, styles.modalDanger]} onPress={handleSignOut}>
                 <Text style={[styles.modalBtnText, { color: '#111' }]}>Sign out</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Delete Account Confirmation Modal */}
+      <Modal
+        transparent
+        visible={deleteModalVisible}
+        onRequestClose={() => {
+          if (!isDeleting) {
+            setDeleteModalVisible(false);
+            setDeleteConfirmText('');
+          }
+        }}
+        animationType="fade"
+      >
+        <Pressable 
+          style={styles.modalBackdrop} 
+          onPress={() => {
+            if (!isDeleting) {
+              setDeleteModalVisible(false);
+              setDeleteConfirmText('');
+            }
+          }}
+        >
+          <Pressable style={[styles.modalCard, { minWidth: 320, paddingHorizontal: 24 }]}>
+            <Text style={{ fontSize: 48, marginBottom: 12 }}>😢</Text>
+            <Text style={[styles.modalTitle, { color: theme.danger }]}>Final Confirmation</Text>
+            <Text style={[styles.modalText, { marginBottom: 20, textAlign: 'center' }]}>
+              Type <Text style={{ fontWeight: '700', color: theme.danger }}>DELETE</Text> below to permanently delete your account.
+            </Text>
+            
+            <TextInput
+              style={{
+                backgroundColor: theme.card,
+                color: theme.text,
+                borderColor: theme.border,
+                borderWidth: 1,
+                borderRadius: 12,
+                padding: 12,
+                fontSize: 16,
+                marginBottom: 20,
+                textAlign: 'center',
+                fontWeight: '600',
+              }}
+              placeholder="Type DELETE"
+              placeholderTextColor={theme.muted}
+              value={deleteConfirmText}
+              onChangeText={setDeleteConfirmText}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              editable={!isDeleting}
+            />
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity 
+                style={[styles.modalBtn, styles.modalCancel, { opacity: isDeleting ? 0.5 : 1 }]} 
+                onPress={() => {
+                  if (!isDeleting) {
+                    setDeleteModalVisible(false);
+                    setDeleteConfirmText('');
+                  }
+                }}
+                disabled={isDeleting}
+              >
+                <Text style={[styles.modalBtnText, { color: theme.text }]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[
+                  styles.modalBtn, 
+                  styles.modalDanger,
+                  { opacity: (isDeleting || deleteConfirmText.toLowerCase() !== 'delete') ? 0.5 : 1 }
+                ]} 
+                onPress={confirmDeleteAccount}
+                disabled={isDeleting || deleteConfirmText.toLowerCase() !== 'delete'}
+              >
+                {isDeleting ? (
+                  <Text style={[styles.modalBtnText, { color: '#fff' }]}>Deleting...</Text>
+                ) : (
+                  <Text style={[styles.modalBtnText, { color: '#fff' }]}>Delete Forever</Text>
+                )}
               </TouchableOpacity>
             </View>
           </Pressable>
@@ -796,23 +974,41 @@ const SettingsScreen: React.FC = () => {
                 Legal notices must be sent by email with subject "Legal Notice." We may deliver notices via in-app messages, email, or postings.
               </Text>
             </ScrollView>
-            <TouchableOpacity 
-              style={[
-                styles.modalBtn, 
-                { 
-                  backgroundColor: theme.primary, 
-                  marginTop: 16, 
-                  width: '100%',
-                  flex: 0,
-                }
-              ]} 
-              onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                setTermsModalVisible(false);
-              }}
-            >
-              <Text style={[styles.modalBtnText, { color: theme.isDark ? '#111' : '#fff' }]}>I Understand</Text>
-            </TouchableOpacity>
+            <View style={{ width: '100%', flexDirection: 'row', gap: 10, marginTop: 16 }}>
+              <TouchableOpacity 
+                style={[
+                  styles.modalBtn, 
+                  { 
+                    backgroundColor: theme.border,
+                    flex: 1,
+                  }
+                ]} 
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  Linking.openURL('https://sportspal-1b468.web.app/terms.html').catch(() => {
+                    Alert.alert('Error', 'Could not open browser');
+                  });
+                }}
+              >
+                <Ionicons name="open-outline" size={16} color={theme.text} style={{ marginRight: 6 }} />
+                <Text style={[styles.modalBtnText, { color: theme.text }]}>View in Browser</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[
+                  styles.modalBtn, 
+                  { 
+                    backgroundColor: theme.primary, 
+                    flex: 1,
+                  }
+                ]} 
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setTermsModalVisible(false);
+                }}
+              >
+                <Text style={[styles.modalBtnText, { color: theme.isDark ? '#111' : '#fff' }]}>Close</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
@@ -1000,23 +1196,122 @@ const SettingsScreen: React.FC = () => {
                 We bind processors to confidentiality and data-protection obligations. A detailed vendor list is available upon request and will be updated as our stack evolves.
               </Text>
             </ScrollView>
-            <TouchableOpacity 
-              style={[
-                styles.modalBtn, 
-                { 
-                  backgroundColor: theme.primary, 
-                  marginTop: 16, 
-                  width: '100%',
-                  flex: 0,
-                }
-              ]} 
-              onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                setPrivacyModalVisible(false);
-              }}
-            >
-              <Text style={[styles.modalBtnText, { color: theme.isDark ? '#111' : '#fff' }]}>I Understand</Text>
-            </TouchableOpacity>
+            <View style={{ width: '100%', flexDirection: 'row', gap: 10, marginTop: 16 }}>
+              <TouchableOpacity 
+                style={[
+                  styles.modalBtn, 
+                  { 
+                    backgroundColor: theme.border,
+                    flex: 1,
+                  }
+                ]} 
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  Linking.openURL('https://sportspal-1b468.web.app/privacy.html').catch(() => {
+                    Alert.alert('Error', 'Could not open browser');
+                  });
+                }}
+              >
+                <Ionicons name="open-outline" size={16} color={theme.text} style={{ marginRight: 6 }} />
+                <Text style={[styles.modalBtnText, { color: theme.text }]}>View in Browser</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[
+                  styles.modalBtn, 
+                  { 
+                    backgroundColor: theme.primary, 
+                    flex: 1,
+                  }
+                ]} 
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setPrivacyModalVisible(false);
+                }}
+              >
+                <Text style={[styles.modalBtnText, { color: theme.isDark ? '#111' : '#fff' }]}>Close</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Community Guidelines Modal */}
+      <Modal transparent visible={communityModalVisible} onRequestClose={() => setCommunityModalVisible(false)} animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCard, { maxHeight: '80%', width: '90%' }]}>
+            <Ionicons name="people-outline" size={26} color={theme.primary} style={{ marginBottom: 8 }} />
+            <Text style={styles.modalTitle}>Community Guidelines</Text>
+            <ScrollView style={{ width: '100%', marginTop: 16 }} showsVerticalScrollIndicator={true}>
+              <Text style={styles.legalText}>
+                <Text style={{ fontWeight: 'bold', fontSize: 14 }}>Last Updated: November 2025{'\n\n'}</Text>
+                
+                <Text style={{ fontWeight: 'bold' }}>Purpose.</Text> Keep SportsPal respectful, safe, and useful for finding people to play sports with.{'\n'}
+                <Text style={{ fontWeight: 'bold' }}>Applies to:</Text> Profiles, usernames, photos, activity listings, chats, messages, and any in-app behavior—on and off the platform when arranged through SportsPal.{'\n\n'}
+
+                <Text style={{ fontWeight: 'bold' }}>A. Golden Rules{'\n'}</Text>
+                <Text style={{ fontWeight: 'bold' }}>Be respectful.</Text> No harassment, threats, stalking, or intimidation.{'\n'}
+                <Text style={{ fontWeight: 'bold' }}>No hate or violence.</Text> Prohibitions include slurs, dehumanization, extremist praise, or incitement.{'\n'}
+                <Text style={{ fontWeight: 'bold' }}>No sexual content/nudity.</Text> No explicit or pornographic content; no fetish content; no sexualization of minors (zero tolerance).{'\n'}
+                <Text style={{ fontWeight: 'bold' }}>No illegal or dangerous activity.</Text> Weapons trading, drugs, doping substances, fraud, hacking, or instructions to cause harm are banned.{'\n'}
+                <Text style={{ fontWeight: 'bold' }}>No doxxing/privacy invasions.</Text> Don't share private info (addresses, IDs, financials, medical data) without consent.{'\n'}
+                <Text style={{ fontWeight: 'bold' }}>No scams or spam.</Text> No pyramid schemes, fake giveaways, phishing, malware, mass unsolicited messages.{'\n'}
+                <Text style={{ fontWeight: 'bold' }}>No impersonation or misrepresentation.</Text> Don't claim to be someone you're not; parody must be clearly labeled.{'\n'}
+                <Text style={{ fontWeight: 'bold' }}>Accurate activities.</Text> Describe date, time, location, sport, skill level, participant limits, and any costs truthfully. Update or cancel if plans change.{'\n'}
+                <Text style={{ fontWeight: 'bold' }}>Respect IP.</Text> Only post photos and content you own or have rights to.{'\n'}
+                <Text style={{ fontWeight: 'bold' }}>Meet safely.</Text> Follow our Safety Guidelines. Leave if you feel unsafe—always.{'\n\n'}
+
+                <Text style={{ fontWeight: 'bold' }}>B. Three-Strike Moderation Ladder (with immediate-removal override){'\n'}</Text>
+                <Text style={{ fontWeight: 'bold' }}>Strike 1 (Warning):</Text> Content removal + feature limits (e.g., 24–72h chat/creation restriction).{'\n'}
+                <Text style={{ fontWeight: 'bold' }}>Strike 2 (Probation):</Text> 7–30 days suspension of some or all features.{'\n'}
+                <Text style={{ fontWeight: 'bold' }}>Strike 3 (Removal):</Text> Permanent ban.{'\n'}
+                <Text style={{ fontWeight: 'bold' }}>Immediate Removal:</Text> We may skip steps for child safety, credible violence threats, severe harassment, doxxing, hate speech, or explicit sexual content.{'\n'}
+                <Text style={{ fontWeight: 'bold' }}>Strike decay:</Text> Strikes typically expire after 12 months if no further violations.{'\n\n'}
+
+                <Text style={{ fontWeight: 'bold' }}>C. Appeals{'\n'}</Text>
+                <Text style={{ fontWeight: 'bold' }}>Window:</Text> 14 days from enforcement notice.{'\n'}
+                <Text style={{ fontWeight: 'bold' }}>How:</Text> Email sportspalapplication@gmail.com from your account email with subject "Appeal."{'\n'}
+                <Text style={{ fontWeight: 'bold' }}>What to include:</Text> Activity/Profile/Message screenshot or link, brief explanation, any relevant context.{'\n'}
+                <Text style={{ fontWeight: 'bold' }}>Outcome:</Text> We confirm, modify, or reverse within a reasonable time. Decisions after appeal are final.{'\n\n'}
+
+                <Text style={{ fontWeight: 'bold' }}>D. False Reporting & Abuse of Tools{'\n'}</Text>
+                Deliberate false reports or brigading may result in strikes or suspension.
+              </Text>
+            </ScrollView>
+            <View style={{ width: '100%', flexDirection: 'row', gap: 10, marginTop: 16 }}>
+              <TouchableOpacity 
+                style={[
+                  styles.modalBtn, 
+                  { 
+                    backgroundColor: theme.border,
+                    flex: 1,
+                  }
+                ]} 
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  Linking.openURL('https://sportspal-1b468.web.app/community-guidelines.html').catch(() => {
+                    Alert.alert('Error', 'Could not open browser');
+                  });
+                }}
+              >
+                <Ionicons name="open-outline" size={16} color={theme.text} style={{ marginRight: 6 }} />
+                <Text style={[styles.modalBtnText, { color: theme.text }]}>View in Browser</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[
+                  styles.modalBtn, 
+                  { 
+                    backgroundColor: theme.primary, 
+                    flex: 1,
+                  }
+                ]} 
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setCommunityModalVisible(false);
+                }}
+              >
+                <Text style={[styles.modalBtnText, { color: theme.isDark ? '#111' : '#fff' }]}>Close</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
@@ -1361,9 +1656,11 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
   modalActions: { flexDirection: 'row', width: '100%', gap: 10 },
   modalBtn: {
     flex: 1,
+    flexDirection: 'row',
     paddingVertical: 12,
     borderRadius: 10,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   modalCancel: { backgroundColor: t.border },
   modalDanger: { backgroundColor: t.danger },

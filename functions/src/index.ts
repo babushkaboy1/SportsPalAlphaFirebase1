@@ -1,13 +1,17 @@
 // @ts-nocheck
 import { onDocumentCreated } from 'firebase-functions/v2/firestore';
-import { onRequest } from 'firebase-functions/v2/https';
+import { onRequest, onCall, HttpsError } from 'firebase-functions/v2/https';
 import * as logger from 'firebase-functions/logger';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
+import { getAuth } from 'firebase-admin/auth';
+import { getStorage } from 'firebase-admin/storage';
 import { Expo, ExpoPushMessage } from 'expo-server-sdk';
 
 initializeApp();
 const db = getFirestore();
+const auth = getAuth();
+const storage = getStorage();
 const expo = new Expo();
 
 async function getExpoTokensForUser(userId: string): Promise<string[]> {
@@ -253,4 +257,170 @@ export const handleDeepLink = onRequest(async (request, response) => {
   // For iOS and Android, try to open the app first via Universal Links / App Links
   // If app not installed, show the fallback page with store links
   response.send(fallbackHtml);
+});
+
+/**
+ * Delete User Account
+ * Callable function that deletes:
+ * - User's Firebase Auth account
+ * - User's Firestore profile document
+ * - All activities created by the user
+ * - All chats where user is the only participant
+ * - All notifications related to the user
+ * - All user's storage files (profile pictures, chat images, audio messages)
+ */
+export const deleteAccount = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  
+  if (!uid) {
+    throw new HttpsError('unauthenticated', 'User must be authenticated to delete account');
+  }
+
+  try {
+    logger.info(`Starting account deletion for user: ${uid}`);
+
+    // 1. Delete user's activities (where they are the creator)
+    const activitiesSnap = await db.collection('activities')
+      .where('creatorId', '==', uid)
+      .get();
+    
+    const activitiesBatch = db.batch();
+    activitiesSnap.docs.forEach(doc => {
+      activitiesBatch.delete(doc.ref);
+    });
+    await activitiesBatch.commit();
+    logger.info(`Deleted ${activitiesSnap.size} activities for user ${uid}`);
+
+    // 2. Remove user from other activities' joinedUserIds
+    const joinedActivitiesSnap = await db.collection('activities')
+      .where('joinedUserIds', 'array-contains', uid)
+      .get();
+    
+    const joinedBatch = db.batch();
+    joinedActivitiesSnap.docs.forEach(doc => {
+      const currentJoined = doc.data().joinedUserIds || [];
+      const updated = currentJoined.filter((id: string) => id !== uid);
+      joinedBatch.update(doc.ref, { joinedUserIds: updated });
+    });
+    await joinedBatch.commit();
+    logger.info(`Removed user ${uid} from ${joinedActivitiesSnap.size} activities`);
+
+    // 3. Handle chats - delete if user is only participant, otherwise remove user
+    const chatsSnap = await db.collection('chats')
+      .where('participants', 'array-contains', uid)
+      .get();
+    
+    const chatsBatch = db.batch();
+    for (const chatDoc of chatsSnap.docs) {
+      const participants = chatDoc.data().participants || [];
+      if (participants.length <= 1) {
+        // Delete chat and all its messages
+        chatsBatch.delete(chatDoc.ref);
+        const messagesSnap = await chatDoc.ref.collection('messages').get();
+        messagesSnap.docs.forEach(msgDoc => {
+          chatsBatch.delete(msgDoc.ref);
+        });
+      } else {
+        // Remove user from participants
+        const updated = participants.filter((id: string) => id !== uid);
+        chatsBatch.update(chatDoc.ref, { participants: updated });
+      }
+    }
+    await chatsBatch.commit();
+    logger.info(`Processed ${chatsSnap.size} chats for user ${uid}`);
+
+    // 4. Delete all notifications (sent by user or sent to user)
+    const sentNotificationsSnap = await db.collection('notifications')
+      .where('fromUserId', '==', uid)
+      .get();
+    
+    const receivedNotificationsSnap = await db.collection('notifications')
+      .where('userId', '==', uid)
+      .get();
+    
+    const notifBatch = db.batch();
+    [...sentNotificationsSnap.docs, ...receivedNotificationsSnap.docs].forEach(doc => {
+      notifBatch.delete(doc.ref);
+    });
+    await notifBatch.commit();
+    logger.info(`Deleted ${sentNotificationsSnap.size + receivedNotificationsSnap.size} notifications for user ${uid}`);
+
+    // 5. Remove user from friends lists in other profiles
+    const friendsSnap = await db.collection('profiles')
+      .where('friends', 'array-contains', uid)
+      .get();
+    
+    const friendsBatch = db.batch();
+    friendsSnap.docs.forEach(doc => {
+      const currentFriends = doc.data().friends || [];
+      const updated = currentFriends.filter((id: string) => id !== uid);
+      friendsBatch.update(doc.ref, { friends: updated });
+    });
+    await friendsBatch.commit();
+    logger.info(`Removed user ${uid} from ${friendsSnap.size} friends lists`);
+
+    // 6. Remove user from requestsSent lists
+    const requestsSentSnap = await db.collection('profiles')
+      .where('requestsSent', 'array-contains', uid)
+      .get();
+    
+    const requestsBatch = db.batch();
+    requestsSentSnap.docs.forEach(doc => {
+      const currentRequests = doc.data().requestsSent || [];
+      const updated = currentRequests.filter((id: string) => id !== uid);
+      requestsBatch.update(doc.ref, { requestsSent: updated });
+    });
+    await requestsBatch.commit();
+    logger.info(`Removed user ${uid} from ${requestsSentSnap.size} friend requests`);
+
+    // 7. Delete user's Firestore profile
+    await db.doc(`profiles/${uid}`).delete();
+    logger.info(`Deleted profile document for user ${uid}`);
+
+    // 8. Delete user's storage files
+    try {
+      const bucket = storage.bucket();
+      
+      // Delete profile pictures
+      const [profilePictures] = await bucket.getFiles({ prefix: `profilePictures/${uid}/` });
+      await Promise.all(profilePictures.map(file => file.delete()));
+      logger.info(`Deleted ${profilePictures.length} profile pictures for user ${uid}`);
+
+      // Delete chat images
+      const [chatImages] = await bucket.getFiles({ prefix: `chatImages/${uid}/` });
+      await Promise.all(chatImages.map(file => file.delete()));
+      logger.info(`Deleted ${chatImages.length} chat images for user ${uid}`);
+
+      // Delete audio messages
+      const [audioMessages] = await bucket.getFiles({ prefix: `audioMessages/${uid}/` });
+      await Promise.all(audioMessages.map(file => file.delete()));
+      logger.info(`Deleted ${audioMessages.length} audio messages for user ${uid}`);
+
+      // Delete GPX files
+      const [gpxFiles] = await bucket.getFiles({ prefix: `gpx/${uid}/` });
+      await Promise.all(gpxFiles.map(file => file.delete()));
+      logger.info(`Deleted ${gpxFiles.length} GPX files for user ${uid}`);
+
+      // Delete debug files
+      const [debugFiles] = await bucket.getFiles({ prefix: `debug/${uid}/` });
+      await Promise.all(debugFiles.map(file => file.delete()));
+      logger.info(`Deleted ${debugFiles.length} debug files for user ${uid}`);
+    } catch (storageError) {
+      logger.warn(`Storage deletion warning for user ${uid}:`, storageError);
+      // Continue with auth deletion even if storage fails
+    }
+
+    // 9. Finally, delete the Firebase Auth user
+    await auth.deleteUser(uid);
+    logger.info(`Successfully deleted Firebase Auth account for user ${uid}`);
+
+    return { 
+      success: true, 
+      message: 'Account and all associated data have been permanently deleted' 
+    };
+
+  } catch (error) {
+    logger.error(`Error deleting account for user ${uid}:`, error);
+    throw new HttpsError('internal', `Failed to delete account: ${error}`);
+  }
 });

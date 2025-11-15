@@ -5,6 +5,7 @@ import { initializeApp, FirebaseApp } from "firebase/app";
 import { getReactNativePersistence, initializeAuth, Auth } from 'firebase/auth';
 import { getFirestore, Firestore } from "firebase/firestore";
 import { getStorage } from 'firebase/storage';
+import { getFunctions, Functions } from 'firebase/functions';
 import { Platform } from 'react-native';
 import {
   FIREBASE_API_KEY,
@@ -51,3 +52,4 @@ export const auth: Auth = initializeAuth(app, {
 export const db: Firestore = getFirestore(app);
 // Use gs:// only in getStorage
 export const storage = getStorage(app, toGsUrl(FIREBASE_STORAGE_BUCKET));
+export const functions: Functions = getFunctions(app);

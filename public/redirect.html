@@ -371,7 +371,12 @@
     let appOpenAttempted = false;
     let redirectStopped = false;
     const attemptKey = `spal_deeplink_attempted:${path}`;
-    const alreadyAttemptedThisSession = sessionStorage.getItem(attemptKey) === '1';
+    const attemptKeyTTL = `spal_deeplink_attempted_ttl:${path}`;
+    const now = Date.now();
+    const lastAttemptTs = Number(localStorage.getItem(attemptKeyTTL) || '0');
+    const withinRecentWindow = now - lastAttemptTs < 120000; // 2 minutes guard
+    const alreadyAttemptedThisSession = sessionStorage.getItem(attemptKey) === '1' || withinRecentWindow;
+    const sameSiteReferrer = document.referrer && document.referrer.includes('sportspal-1b468.web.app');
         
         // Stop redirecting if user comes back to page (app didn't open)
         document.addEventListener('visibilitychange', () => {
@@ -385,7 +390,10 @@
         function openApp() {
             if (appOpenAttempted || redirectStopped) return;
             appOpenAttempted = true;
-            try { sessionStorage.setItem(attemptKey, '1'); } catch {}
+                        try {
+                            sessionStorage.setItem(attemptKey, '1');
+                            localStorage.setItem(attemptKeyTTL, String(Date.now()));
+                        } catch {}
             
             if (isIOS) {
                 // Use custom scheme first to avoid Firebase rewrite causing a reload loop
@@ -415,7 +423,7 @@
         }
         
         // Try opening after a short delay to let content load
-                if (!alreadyAttemptedThisSession) {
+                        if (!alreadyAttemptedThisSession && !sameSiteReferrer) {
                     setTimeout(() => {
                             if (!redirectStopped) {
                                     openApp();

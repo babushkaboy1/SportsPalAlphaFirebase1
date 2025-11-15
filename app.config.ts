@@ -11,6 +11,8 @@ export default ({ config }: { config: any }) => ({
   icon: "./assets/app-icon.png",
   userInterfaceStyle: "dark",
   newArchEnabled: true,
+  // Root level backgroundColor prevents white flash
+  backgroundColor: "#000000",
   // Splash screen shown during app launch
   splash: {
     image: "./assets/splash-logo.png",
@@ -26,12 +28,25 @@ export default ({ config }: { config: any }) => ({
       image: "./assets/splash-logo.png",
       resizeMode: "contain",
       backgroundColor: "#000000",
-      tabletImage: "./assets/splash-logo.png"
+      tabletImage: "./assets/splash-logo.png",
+      // Prevent white/colored background flash
+      dark: {
+        image: "./assets/splash-logo.png",
+        resizeMode: "contain",
+        backgroundColor: "#000000",
+        tabletImage: "./assets/splash-logo.png"
+      }
     },
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false,
-      // Remove this to prevent icon showing before splash
-      // UILaunchStoryboardName: "SplashScreen",
+      // Prevent app icon flash before splash screen
+      UILaunchStoryboardName: "",
+      // Ensure splash screen loads immediately without showing app icon
+      UILaunchScreen: {
+        UIColorName: "SplashScreenBackground",
+        UIImageName: "SplashScreenLogo",
+        UIImageRespectsSafeAreaInsets: false
+      },
       NSCameraUsageDescription: "This app uses the camera to allow you to take and upload profile pictures and share photos with friends.",
       NSPhotoLibraryUsageDescription: "This app needs access to your photo library to let you select and upload images for your profile, activities, and to share with other users.",
       NSPhotoLibraryAddUsageDescription: "This app needs access to save images to your photo library.",
@@ -46,13 +61,19 @@ export default ({ config }: { config: any }) => ({
   android: {
     adaptiveIcon: {
       foregroundImage: "./assets/adaptive-icon.png",
-      backgroundColor: "#ffffff"
+      backgroundColor: "#000000" // Changed from #ffffff to match splash screen
     },
     // Android splash configuration - shows immediately on launch
     splash: {
       image: "./assets/splash-logo.png",
       resizeMode: "contain",
-      backgroundColor: "#000000"
+      backgroundColor: "#000000",
+      // Dark mode variant to prevent flash
+      dark: {
+        image: "./assets/splash-logo.png",
+        resizeMode: "contain",
+        backgroundColor: "#000000"
+      }
     },
     edgeToEdgeEnabled: true,
     package: "com.sportspal.app",

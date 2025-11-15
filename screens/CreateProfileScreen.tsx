@@ -21,13 +21,16 @@ import * as ImagePicker from 'expo-image-picker';
 import { MediaType } from 'expo-image-picker';
 import Logo from '../components/Logo';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { CommonActions } from '@react-navigation/native';
+import { CommonActions, useNavigation } from '@react-navigation/native';
+import { StackNavigationProp } from '@react-navigation/stack';
+import { RootStackParamList } from '../types/navigation';
 import { createUserWithEmailAndPassword, reauthenticateWithCredential, EmailAuthProvider, updatePassword, sendEmailVerification, reload, signOut, getIdToken, signInWithEmailAndPassword, getIdTokenResult } from 'firebase/auth';
 import { doc, setDoc, query, where, getDocs, collection, serverTimestamp } from 'firebase/firestore';
 import { auth, db, storage } from '../firebaseConfig';
 import { compressImage, uploadProfileImage, testStorageConnection } from '../utils/imageUtils';
 import { ref, uploadBytes, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import * as ImageManipulator from 'expo-image-manipulator';
+import { Linking } from 'react-native';
 
 // Sports Options for the grid (alphabetical order; grid renders 3 per row)
 const sportsOptions = [
@@ -55,7 +58,8 @@ const sportsOptions = [
   'Yoga',
 ];
 
-const CreateProfileScreen = ({ navigation, route }: any) => {
+const CreateProfileScreen = ({ route }: any) => {
+  const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
   const { theme } = useTheme();
   const styles = React.useMemo(() => createStyles(theme), [theme]);
   const isEdit = route?.params?.mode === 'edit';
@@ -1205,7 +1209,18 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
               {acceptedTerms && <Ionicons name="checkmark" size={18} color="#fff" />}
             </View>
             <Text style={styles.checkboxLabel}>
-              I have read and accept the <Text style={{ fontWeight: 'bold', color: theme.primary }}>Terms of Service</Text>
+              I have read and accept the{' '}
+              <Text 
+                style={{ fontWeight: 'bold', color: theme.primary, textDecorationLine: 'underline' }}
+                onPress={(e) => {
+                  e.stopPropagation();
+                  Linking.openURL('https://sportspal-1b468.web.app/terms.html').catch(() => {
+                    Alert.alert('Error', 'Could not open browser');
+                  });
+                }}
+              >
+                Terms of Service
+              </Text>
             </Text>
           </TouchableOpacity>
 
@@ -1218,7 +1233,18 @@ const CreateProfileScreen = ({ navigation, route }: any) => {
               {acceptedCommunity && <Ionicons name="checkmark" size={18} color="#fff" />}
             </View>
             <Text style={styles.checkboxLabel}>
-              I agree to comply with the <Text style={{ fontWeight: 'bold', color: theme.primary }}>Community Guidelines</Text>
+              I agree to comply with the{' '}
+              <Text 
+                style={{ fontWeight: 'bold', color: theme.primary, textDecorationLine: 'underline' }}
+                onPress={(e) => {
+                  e.stopPropagation();
+                  Linking.openURL('https://sportspal-1b468.web.app/community-guidelines.html').catch(() => {
+                    Alert.alert('Error', 'Could not open browser');
+                  });
+                }}
+              >
+                Community Guidelines
+              </Text>
             </Text>
           </TouchableOpacity>
         </>
