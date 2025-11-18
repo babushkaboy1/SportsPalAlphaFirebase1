@@ -29,11 +29,13 @@ import {
   ActivityIndicator,
   Modal,
   Pressable,
+  Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { PanGestureHandler, State as GestureState } from 'react-native-gesture-handler';
 import * as NavigationBar from 'expo-navigation-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+// Blur removed
 import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
@@ -229,6 +231,7 @@ const MessageBubble = React.memo<{
   onCopy: () => void;
   onImagePress: () => void;
   onUserPress: (uid: string) => void;
+  onBubbleMeasured?: (layout: { x: number; y: number; width: number; height: number }) => void;
   theme: any;
   styles: any;
 }>(({
@@ -248,6 +251,7 @@ const MessageBubble = React.memo<{
   onCopy,
   onImagePress,
   onUserPress,
+  onBubbleMeasured,
   theme,
   styles,
 }) => {
@@ -255,6 +259,8 @@ const MessageBubble = React.memo<{
   const reactionAnim = useRef(new Animated.Value(0)).current;
   const longPressTriggered = useRef(false);
   const touchStartX = useRef<number | null>(null);
+  const rowRef = useRef<View>(null);
+  const pickerRef = useRef<View>(null);
 
   // Animate reaction picker
   useEffect(() => {
@@ -266,6 +272,26 @@ const MessageBubble = React.memo<{
         friction: 6,
         tension: 120,
       }).start();
+      // Measure bubble + reaction picker to build union spotlight hole
+      setTimeout(() => {
+        try {
+          rowRef.current?.measureInWindow((bx, by, bW, bH) => {
+            if (!pickerRef.current) {
+              onBubbleMeasured?.({ x: bx, y: by, width: bW, height: bH });
+              return;
+            }
+            pickerRef.current?.measureInWindow((px, py, pW, pH) => {
+              const unionX = Math.min(bx, px);
+              const unionY = Math.min(by, py);
+              const unionRight = Math.max(bx + bW, px + pW);
+              const unionBottom = Math.max(by + bH, py + pH);
+              const unionW = unionRight - unionX;
+              const unionH = unionBottom - unionY;
+              onBubbleMeasured?.({ x: unionX, y: unionY, width: unionW, height: unionH });
+            });
+          });
+        } catch {}
+      }, 30); // slight delay ensures picker laid out
     }
   }, [showReactionPicker]);
 
@@ -309,9 +335,10 @@ const MessageBubble = React.memo<{
     }, {} as Record<string, number>);
 
   return (
-    <View style={[
+    <View ref={rowRef} style={[
       styles.messageRow,
       isOwn ? styles.messageRowRight : styles.messageRowLeft,
+      showReactionPicker && { zIndex: 100 },
     ]}>
       {/* Avatar column (for others, show on last message) */}
       {!isOwn && (
@@ -379,6 +406,7 @@ const MessageBubble = React.memo<{
                   isOwn ? styles.bubbleOwn : styles.bubbleOther,
                   cornerRadius,
                   message.type === 'image' && { padding: 4 },
+                  showReactionPicker && styles.bubbleHighlight,
                 ]}
                 onLongPress={() => {
                   longPressTriggered.current = true;
@@ -481,6 +509,7 @@ const MessageBubble = React.memo<{
           {/* Reaction picker */}
           {showReactionPicker && (
             <Animated.View
+              ref={pickerRef}
               style={[
                 styles.reactionPicker,
                 {
@@ -490,6 +519,7 @@ const MessageBubble = React.memo<{
                   right: isOwn ? 0 : undefined,
                   transform: [{ scale: reactionAnim }],
                   opacity: reactionAnim,
+                  zIndex: 200,
                 },
               ]}
             >
@@ -530,13 +560,28 @@ const MessageBubble = React.memo<{
   );
 }, (prevProps, nextProps) => {
   // Custom comparison for performance
+  // Important: also re-render when sender or replySender profile info changes
+  const prevSenderPhoto = prevProps.sender?.photo || prevProps.sender?.photoURL || '';
+  const nextSenderPhoto = nextProps.sender?.photo || nextProps.sender?.photoURL || '';
+  const prevReplySenderPhoto = prevProps.replySender?.photo || prevProps.replySender?.photoURL || '';
+  const nextReplySenderPhoto = nextProps.replySender?.photo || nextProps.replySender?.photoURL || '';
+
   return (
     prevProps.message.id === nextProps.message.id &&
     prevProps.message.text === nextProps.message.text &&
     prevProps.isOwn === nextProps.isOwn &&
     prevProps.showReactionPicker === nextProps.showReactionPicker &&
     prevProps.myReaction === nextProps.myReaction &&
-    JSON.stringify(prevProps.reactions) === JSON.stringify(nextProps.reactions)
+    JSON.stringify(prevProps.reactions) === JSON.stringify(nextProps.reactions) &&
+    // Re-render when sender profile changes (username/photo)
+    prevProps.sender?.uid === nextProps.sender?.uid &&
+    prevProps.sender?.username === nextProps.sender?.username &&
+    prevSenderPhoto === nextSenderPhoto &&
+    // Re-render when reply header identity or profile changes
+    (prevProps.replyToMessage?.id || null) === (nextProps.replyToMessage?.id || null) &&
+    (prevProps.replySender?.uid || null) === (nextProps.replySender?.uid || null) &&
+    (prevProps.replySender?.username || null) === (nextProps.replySender?.username || null) &&
+    prevReplySenderPhoto === nextReplySenderPhoto
   );
 });
 
@@ -564,6 +609,7 @@ const ChatDetailScreen = () => {
     // Reset restoration helpers when switching chats
     pendingAddedRestoreRef.current = null;
     messageHeightsRef.current = {};
+    setAnchored(false);
   }, [chatId]);
 
   // ========== STATE ==========
@@ -579,11 +625,13 @@ const ChatDetailScreen = () => {
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [reactionPickerId, setReactionPickerId] = useState<string | null>(null);
+  // Removed spotlight layout state
   const [myReactions, setMyReactions] = useState<Record<string, string>>({});
   const [reactionsMap, setReactionsMap] = useState<Record<string, Array<{ userId: string; emoji: string }>>>({});
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
   const [chatReads, setChatReads] = useState<Record<string, any>>({});
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
+  const [anchored, setAnchored] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const [viewerUri, setViewerUri] = useState<string | null>(null);
   const [optionsVisible, setOptionsVisible] = useState(false);
@@ -595,6 +643,8 @@ const ChatDetailScreen = () => {
 
   // Refs
   const flatListRef = useRef<FlatList>(null);
+  // Prefer native anchor maintenance for prepend (RN/FlatList)
+  const USE_NATIVE_MAINTAIN = true;
   const oldestSnapRef = useRef<any>(null);
   const noMoreOlderRef = useRef(false);
   const unsubLatestRef = useRef<(() => void) | undefined>(undefined);
@@ -607,6 +657,7 @@ const ChatDetailScreen = () => {
   const scrollButtonAnim = useRef(new Animated.Value(0)).current;
   const scrollOffsetRef = useRef(0);
   const contentHeightRef = useRef(0);
+  const layoutHeightRef = useRef(0);
   const isAtBottomRef = useRef(true);
   const initialScrollDoneRef = useRef(false);
   const isLoadingOlderRef = useRef(false);
@@ -654,8 +705,24 @@ const ChatDetailScreen = () => {
 
   // ========== SCROLL TO BOTTOM ==========
   const scrollToBottom = useCallback((animated: boolean = true) => {
-    // Scroll to the actual bottom of the list
-    flatListRef.current?.scrollToEnd({ animated });
+    // Compute exact bottom offset using tracked sizes
+    const contentH = contentHeightRef.current || 0;
+    const layoutH = layoutHeightRef.current || 0;
+    const target = Math.max(contentH - layoutH, 0);
+
+    if (Number.isFinite(target)) {
+      flatListRef.current?.scrollToOffset({ offset: target, animated });
+      // Re-affirm bottom on next frame in case of async size changes
+      requestAnimationFrame(() => {
+        const contentH2 = contentHeightRef.current || 0;
+        const layoutH2 = layoutHeightRef.current || 0;
+        const target2 = Math.max(contentH2 - layoutH2, 0);
+        flatListRef.current?.scrollToOffset({ offset: target2, animated: false });
+      });
+    } else {
+      // Fallback
+      flatListRef.current?.scrollToEnd({ animated });
+    }
     isAtBottomRef.current = true;
     setShowScrollButton(false);
   }, []);
@@ -693,16 +760,17 @@ const ChatDetailScreen = () => {
     }, 0);
   }, [navigation]);
 
-  // ========== FADE IN ANIMATION ==========
+  // ========== FADE IN ANIMATION (after initial anchor) ==========
   useEffect(() => {
-    if (isReady) {
+    if (anchored) {
+      fadeAnim.setValue(0);
       Animated.timing(fadeAnim, {
         toValue: 1,
-        duration: 350,
+        duration: 280,
         useNativeDriver: true,
       }).start();
     }
-  }, [isReady]);
+  }, [anchored]);
 
   // ========== ANDROID NAV BUTTONS ==========
   useEffect(() => {
@@ -720,16 +788,23 @@ const ChatDetailScreen = () => {
 
   // ========== KEYBOARD HANDLING ==========
   useEffect(() => {
-    const showListener = Keyboard.addListener('keyboardDidShow', () => {
-      if (isAtBottomRef.current) {
-        setTimeout(() => {
-          scrollToBottom(true);
-        }, 100);
-      }
-    });
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const changeEvt = Platform.OS === 'ios' ? 'keyboardWillChangeFrame' : null;
+
+    const onShow = () => {
+      if (!isAtBottomRef.current) return;
+      // Let layout/avoiding settle, then snap precisely to bottom
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => scrollToBottom(false));
+      });
+    };
+
+    const subShow = Keyboard.addListener(showEvt as any, onShow);
+    const subChange = changeEvt ? Keyboard.addListener(changeEvt as any, onShow) : { remove: () => {} } as any;
 
     return () => {
-      showListener.remove();
+      try { subShow.remove(); } catch {}
+      try { subChange.remove(); } catch {}
     };
   }, [scrollToBottom]);
 
@@ -1038,8 +1113,8 @@ const ChatDetailScreen = () => {
     // Mark that we're not at bottom to prevent auto-scroll during prepend
     isAtBottomRef.current = false;
 
-    // Capture current scroll metrics BEFORE data changes
-  const prevHeight = contentHeightRef.current;
+    // Capture current scroll metrics BEFORE data changes (fallback anchor)
+    const prevHeight = contentHeightRef.current;
     
     try {
       const { messages: older, lastSnapshot } = await fetchOlderMessagesPage(
@@ -1057,10 +1132,12 @@ const ChatDetailScreen = () => {
           return Array.from(map.values()) as any;
         });
 
-        // Remember previous content height so we can keep the user anchored seamlessly
-        pendingAddedRestoreRef.current = {
-          prevHeight,
-        };
+        // If native maintain isn't used, remember prev height to restore manually
+        if (!USE_NATIVE_MAINTAIN) {
+          pendingAddedRestoreRef.current = {
+            prevHeight,
+          };
+        }
       } else {
         noMoreOlderRef.current = true;
       }
@@ -1079,9 +1156,10 @@ const ChatDetailScreen = () => {
       const layoutHeight = e?.nativeEvent?.layoutMeasurement?.height || 0;
       const contentHeight = e?.nativeEvent?.contentSize?.height || 0;
       
-      // Store current scroll position and content height
+      // Store current scroll position and sizes
       scrollOffsetRef.current = y;
       contentHeightRef.current = contentHeight;
+      layoutHeightRef.current = layoutHeight;
       
       // Load older messages when scrolling near top (increased threshold for smoother trigger)
       if (y <= 100 && !isLoadingOlder) {
@@ -1108,27 +1186,32 @@ const ChatDetailScreen = () => {
       const previousHeight = contentHeightRef.current;
       contentHeightRef.current = height;
 
-      // Initial scroll to bottom when chat first loads
+      // Initial scroll to bottom when chat first loads; fade in only after anchored
       if (!initialScrollDoneRef.current && isReady && height > 0) {
         initialScrollDoneRef.current = true;
-        requestAnimationFrame(() => scrollToBottom(false));
+        requestAnimationFrame(() => {
+          scrollToBottom(false);
+          requestAnimationFrame(() => setAnchored(true));
+        });
         return;
       }
 
-      // If we have a pending restore (older messages were prepended), adjust offset once
-      const restore = pendingAddedRestoreRef.current;
-      if (restore) {
-        const delta = Math.max(height - (restore.prevHeight || 0), 0);
-        pendingAddedRestoreRef.current = null;
+      // If native maintain is disabled and we have a pending restore, adjust offset once
+      if (!USE_NATIVE_MAINTAIN) {
+        const restore = pendingAddedRestoreRef.current;
+        if (restore) {
+          const delta = Math.max(height - (restore.prevHeight || 0), 0);
+          pendingAddedRestoreRef.current = null;
 
-        if (delta > 0) {
-          const currentOffset = scrollOffsetRef.current || 0;
-          const targetOffset = Math.max(currentOffset + delta, 0);
-          scrollOffsetRef.current = targetOffset;
-          requestAnimationFrame(() => {
-            flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: false });
-          });
-          return;
+          if (delta > 0.5) {
+            const currentOffset = scrollOffsetRef.current || 0;
+            const targetOffset = Math.max(currentOffset + delta, 0);
+            scrollOffsetRef.current = targetOffset;
+            requestAnimationFrame(() => {
+              flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: false });
+            });
+            return;
+          }
         }
       }
 
@@ -1209,6 +1292,11 @@ const ChatDetailScreen = () => {
     // Fallback: if lastLengthRef smaller than current, treat as new messages
     const added = messages.length - lastLengthRef.current;
     if (added > 0) {
+      // Avoid any programmatic scroll while we're loading/prepending older messages
+      if (isLoadingOlderRef.current || pendingAddedRestoreRef.current) {
+        lastLengthRef.current = messages.length;
+        return;
+      }
       // If user near bottom OR the new messages are mine, scroll
       const lastMsg = messages[messages.length - 1];
       const isMine = lastMsg.senderId === auth.currentUser?.uid;
@@ -1896,10 +1984,13 @@ const ChatDetailScreen = () => {
               } catch {}
             }
             setReactionPickerId((prev) => (prev === item.id ? null : item.id));
+            // Reset spotlight layout when opening picker
+            // Spotlight layout removed
           }}
           onSwipeReply={() => {
             setReplyTo(item);
             setReactionPickerId(null);
+            // Spotlight layout removed
           }}
           onReact={(emoji) => handleReaction(item.id, emoji)}
           onCopy={async () => {
@@ -1908,9 +1999,11 @@ const ChatDetailScreen = () => {
               showToast('Copied');
             } catch {}
             setReactionPickerId(null);
+            // Spotlight layout removed
           }}
           onImagePress={() => setViewerUri(item.text)}
           onUserPress={(uid) => navigation.navigate('UserProfile', { userId: uid })}
+          // onBubbleMeasured removed (no spotlight)
           theme={theme}
           styles={styles}
         />
@@ -2084,21 +2177,21 @@ const ChatDetailScreen = () => {
               <ActivityIndicator size="large" color={theme.primary} />
             </View>
           ) : (
-            <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
-              {reactionPickerId && (
-                <Pressable 
-                  onPress={() => setReactionPickerId(null)} 
-                  style={StyleSheet.absoluteFill} 
-                />
-              )}
+            <Animated.View style={{ flex: 1, opacity: anchored ? fadeAnim : 0 }}>
+              {/* Blur spotlight removed */}
               <FlatList
                 ref={flatListRef}
                 data={messages}
                 keyExtractor={(item) => item.id}
                 renderItem={renderMessage}
                 contentContainerStyle={styles.messageList}
+                onLayout={(e) => {
+                  const h = e?.nativeEvent?.layout?.height || 0;
+                  if (h > 0) layoutHeightRef.current = h;
+                }}
                 onScroll={handleScroll}
                 onContentSizeChange={handleContentSizeChange}
+                maintainVisibleContentPosition={USE_NATIVE_MAINTAIN ? { minIndexForVisible: 1 } : undefined}
                 scrollEventThrottle={32}
                 keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
                 keyboardShouldPersistTaps="handled"
@@ -2106,17 +2199,28 @@ const ChatDetailScreen = () => {
                 maxToRenderPerBatch={10}
                 windowSize={5}
                 removeClippedSubviews={Platform.OS === 'android'}
-                ListHeaderComponent={
-                  isLoadingOlder ? (
-                    <View style={{ paddingVertical: 16, alignItems: 'center' }}>
-                      <ActivityIndicator size="small" color={theme.primary} />
-                      <Text style={{ color: theme.muted, fontSize: 12, marginTop: 6 }}>
-                        Loading older messages...
-                      </Text>
-                    </View>
-                  ) : null
-                }
+                ListHeaderComponent={() => (
+                  <View style={{ height: 44, alignItems: 'center', justifyContent: 'center' }}>
+                    {isLoadingOlder && (
+                      <>
+                        <ActivityIndicator size="small" color={theme.primary} />
+                        <Text style={{ color: theme.muted, fontSize: 12, marginTop: 6 }}>
+                          Loading older messages...
+                        </Text>
+                      </>
+                    )}
+                  </View>
+                )}
               />
+              {/* Outside tap overlay to dismiss reaction picker */}
+              {reactionPickerId && (
+                <Pressable
+                  onPress={() => setReactionPickerId(null)}
+                  style={[StyleSheet.absoluteFill, { zIndex: 5 }]}
+                  // Allow reaction picker (zIndex 200) & highlighted bubble (zIndex 100) to remain interactive
+                  pointerEvents="auto"
+                />
+              )}
             </Animated.View>
           )}
 
@@ -2964,6 +3068,15 @@ const createStyles = (theme: any) => StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 4,
     elevation: 5,
+  },
+  bubbleHighlight: {
+    borderWidth: 2,
+    borderColor: theme.primary,
+    shadowColor: '#000',
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 7,
   },
   reactionButton: {
     paddingHorizontal: 4,

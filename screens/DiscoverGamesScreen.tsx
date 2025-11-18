@@ -30,7 +30,11 @@ import {
   Platform,
   Animated,
   Modal,
+  Pressable,
+  Keyboard,
+  ActivityIndicator,
 } from 'react-native';
+import MapView, { Marker, Region } from 'react-native-maps';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -130,6 +134,18 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
   const [tempDate, setTempDate] = useState<Date | null>(null);
   const [isSortingByDistance, setIsSortingByDistance] = useState(false);
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [showMap, setShowMap] = useState(false);
+  const [mapRegion, setMapRegion] = useState<Region | null>(null);
+  const [mapActivities, setMapActivities] = useState<Activity[]>([]);
+  const [mapLoading, setMapLoading] = useState(false);
+  const [regionDirty, setRegionDirty] = useState(false);
+  const [selectedMapActivity, setSelectedMapActivity] = useState<Activity | null>(null);
+  const [mapSelectedFilter, setMapSelectedFilter] = useState('All');
+  const [mapSelectedDate, setMapSelectedDate] = useState<Date | null>(null);
+  const [isMapDatePickerVisible, setMapDatePickerVisible] = useState(false);
+  const [isMapIOSDatePickerVisible, setMapIOSDatePickerVisible] = useState(false);
+  const [mapTempDate, setMapTempDate] = useState<Date | null>(null);
+  const [showJoinedOnly, setShowJoinedOnly] = useState(true);
 
   // Load discovery range from AsyncStorage on mount and on screen focus
   useEffect(() => {
@@ -165,6 +181,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const searchDebounceRef = useRef<number | null>(null);
+  const mapRef = useRef<MapView>(null);
   const DEBOUNCE_MS = 300;
   const ITEM_HEIGHT = 120; // estimated fixed height for ActivityCard (used by getItemLayout)
 
@@ -208,6 +225,14 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
         if (!location) location = await Location.getCurrentPositionAsync({});
         if (location) {
           setUserLocation(location.coords);
+          if (!mapRegion) {
+            setMapRegion({
+              latitude: location.coords.latitude,
+              longitude: location.coords.longitude,
+              latitudeDelta: 0.25,
+              longitudeDelta: 0.25,
+            });
+          }
         }
       }
     })();
@@ -403,6 +428,141 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
     profile?.sportsPreferences,
   ]);
 
+  // Filter currently loaded activities for visible map region (only upcoming/current within 2 hours)
+  // No distance limit on map - can see activities worldwide
+  const filterForRegion = useCallback((region: Region | null) => {
+    if (!region) return [] as Activity[];
+    const { latitude, longitude, latitudeDelta, longitudeDelta } = region;
+    const minLat = latitude - latitudeDelta / 2;
+    const maxLat = latitude + latitudeDelta / 2;
+    const minLon = longitude - longitudeDelta / 2;
+    const maxLon = longitude + longitudeDelta / 2;
+    
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const now = new Date();
+    
+    let filtered = allActivities.filter(a => {
+      // Location check
+      if (!(typeof a.latitude === 'number' && typeof a.longitude === 'number' &&
+        a.latitude >= minLat && a.latitude <= maxLat && a.longitude >= minLon && a.longitude <= maxLon)) {
+        return false;
+      }
+      
+      // Time check: only show upcoming or currently happening (within 2 hours past start)
+      try {
+        const toYmd = (ad: any) => {
+          if (!ad) return null;
+          if (ad && typeof ad.toDate === 'function') {
+            const dt: Date = ad.toDate();
+            return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+          }
+          if (typeof ad === 'string') {
+            if (/^\d{4}-\d{2}-\d{2}$/.test(ad)) return ad;
+            if (/^\d{2}-\d{2}-\d{4}$/.test(ad)) {
+              const [dd, mm, yyyy] = ad.split('-');
+              return `${yyyy}-${mm}-${dd}`;
+            }
+          }
+          return null;
+        };
+        
+        const ymd = toYmd(a.date);
+        if (!ymd) return false;
+        
+        const [y, m, d] = ymd.split('-').map((x: string) => parseInt(x, 10));
+        let hh = 0, mmv = 0;
+        if (typeof a.time === 'string' && /^\d{2}:\d{2}$/.test(a.time)) {
+          const [h, m2] = a.time.split(':').map((x: string) => parseInt(x, 10));
+          hh = h;
+          mmv = m2;
+        }
+        
+        const start = new Date(y, m - 1, d, hh, mmv);
+        const end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
+        
+        return now <= end;
+      } catch {
+        return false;
+      }
+    });
+    
+    // Apply sport filter
+    if (mapSelectedFilter !== 'All') {
+      filtered = filtered.filter(a => a.activity === mapSelectedFilter);
+    }
+    
+    // Apply date filter
+    if (mapSelectedDate) {
+      const y = mapSelectedDate.getFullYear();
+      const m = pad(mapSelectedDate.getMonth() + 1);
+      const d = pad(mapSelectedDate.getDate());
+      const formattedSelected = `${y}-${m}-${d}`;
+      
+      filtered = filtered.filter(a => {
+        const toYmd = (ad: any) => {
+          if (!ad) return null;
+          if (ad && typeof ad.toDate === 'function') {
+            const dt: Date = ad.toDate();
+            return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+          }
+          if (typeof ad === 'string') {
+            if (/^\d{4}-\d{2}-\d{2}$/.test(ad)) return ad;
+            if (/^\d{2}-\d{2}-\d{4}$/.test(ad)) {
+              const [dd, mm, yyyy] = ad.split('-');
+              return `${yyyy}-${mm}-${dd}`;
+            }
+          }
+          return null;
+        };
+        return toYmd(a.date) === formattedSelected;
+      });
+    }
+    
+    // Apply joined activities filter
+    // When OFF, exclude joined activities (show only non-joined)
+    if (!showJoinedOnly) {
+      filtered = filtered.filter(a => !isActivityJoined(a.id));
+    }
+    // When ON, show all activities (both joined and non-joined)
+    
+    return filtered;
+  }, [allActivities, mapSelectedFilter, mapSelectedDate, showJoinedOnly, isActivityJoined]);
+
+  // Refresh map activities when activities list changes or region changes (if map open)
+  // Only update if not currently loading to prevent infinite refresh loop
+  useEffect(() => {
+    if (showMap && mapRegion && !mapLoading) {
+      setMapActivities(filterForRegion(mapRegion));
+    }
+  }, [showMap, mapRegion, filterForRegion]);
+  
+  // Separate effect for initial load when opening map
+  useEffect(() => {
+    if (showMap && mapRegion && mapActivities.length === 0 && !mapLoading) {
+      setMapActivities(filterForRegion(mapRegion));
+    }
+  }, [showMap]);
+
+  const handleLoadRegionActivities = useCallback(async () => {
+    if (!mapRegion || mapLoading) return;
+    setMapLoading(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    try {
+      // Re-fetch all activities
+      await reloadAllActivities(true);
+      // Small delay to ensure state updates
+      await new Promise(resolve => setTimeout(resolve, 100));
+      // Filter activities for the current map region
+      const filtered = filterForRegion(mapRegion);
+      setMapActivities(filtered);
+      setRegionDirty(false);
+    } catch (e) {
+      console.error('Error loading region activities:', e);
+    } finally {
+      setMapLoading(false);
+    }
+  }, [mapRegion, mapLoading, reloadAllActivities, filterForRegion]);
+
   // Debounce raw search input -> debouncedSearchQuery
   useEffect(() => {
     if (searchDebounceRef.current) {
@@ -533,11 +693,51 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <Animated.View style={{ flex: 1, opacity: fadeAnim, backgroundColor: theme.background }}>
-        <View style={styles.headerContainer}>
+        <Pressable 
+          style={styles.headerContainer}
+          onPress={Keyboard.dismiss}
+          pointerEvents="box-none"
+        >
+          <View style={{ width: 40 }} />
           <Text style={styles.headerTitle}>Discover Activities</Text>
-        </View>
+          <TouchableOpacity
+            style={styles.mapToggleButton}
+            onPress={() => {
+              const next = !showMap;
+              setShowMap(next);
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              if (next && mapRegion) {
+                const filtered = filterForRegion(mapRegion);
+                setMapActivities(filtered);
+              }
+              if (next && !mapRegion && userLocation) {
+                const region = {
+                  latitude: userLocation.latitude,
+                  longitude: userLocation.longitude,
+                  latitudeDelta: 0.25,
+                  longitudeDelta: 0.25,
+                } as Region;
+                setMapRegion(region);
+                const filtered = filterForRegion(region);
+                setMapActivities(filtered);
+              }
+            }}
+            activeOpacity={0.7}
+          >
+            <Ionicons 
+              name={showMap ? "list" : "location"} 
+              size={22} 
+              color={theme.primary} 
+            />
+          </TouchableOpacity>
+        </Pressable>
 
-        <View style={styles.topSection}>
+        {!showMap && (
+        <Pressable 
+          style={styles.topSection}
+          onPress={Keyboard.dismiss}
+          pointerEvents="box-none"
+        >
           <View style={styles.searchContainer}>
             <Ionicons name="search" size={18} color={theme.primary} />
             <TextInput
@@ -558,7 +758,12 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
             )}
           </View>
 
-          <View style={styles.sortButtons}>
+          <Pressable
+            style={styles.sortButtons}
+            onPress={Keyboard.dismiss}
+            pointerEvents="box-none"
+            hitSlop={{ top: 4, bottom: 4 }}
+          >
             <TouchableOpacity
               style={[styles.sortButton, isSortingByDistance && styles.activeButton]}
               onPress={toggleSortByDistance}
@@ -596,7 +801,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
                 <Text style={styles.clearButtonText}>Clear</Text>
               </TouchableOpacity>
             )}
-          </View>
+          </Pressable>
 
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterWrapper}>
             {orderedSportFilters.map(option => (
@@ -612,9 +817,281 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
               </TouchableOpacity>
             ))}
           </ScrollView>
-        </View>
+        </Pressable>
+        )}
 
-        {filteredActivities.length === 0 && (
+        {showMap && (
+          <View style={styles.mapContainer}>
+            {/* Map Filters */}
+            <View style={styles.mapFiltersContainer}>
+              <ScrollView 
+                horizontal 
+                showsHorizontalScrollIndicator={false} 
+                style={styles.mapFilterScroll}
+                contentContainerStyle={{ paddingHorizontal: 4 }}
+              >
+                {orderedSportFilters.map(option => (
+                  <TouchableOpacity
+                    key={option}
+                    style={[
+                      styles.mapFilterChip,
+                      mapSelectedFilter === option && styles.mapFilterChipActive,
+                    ]}
+                    onPress={() => {
+                      setMapSelectedFilter(option);
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      if (mapRegion) {
+                        // Update filter will trigger useEffect to refresh activities
+                      }
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.mapFilterChipText,
+                        mapSelectedFilter === option && { color: '#fff' },
+                      ]}
+                    >
+                      {option}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+              
+              <View style={styles.mapDatePickerRow}>
+                <TouchableOpacity
+                  style={styles.mapDateButton}
+                  onPress={() => {
+                    if (Platform.OS === 'ios') {
+                      setMapTempDate(mapSelectedDate ?? new Date());
+                      setMapIOSDatePickerVisible(true);
+                    } else {
+                      setMapDatePickerVisible(true);
+                    }
+                  }}
+                >
+                  <Ionicons name="calendar-outline" size={16} color={theme.primary} style={{ marginRight: 6 }} />
+                  <Text style={styles.mapDateButtonText}>
+                    {mapSelectedDate ? mapSelectedDate.toLocaleDateString() : 'Select Date'}
+                  </Text>
+                </TouchableOpacity>
+                {mapSelectedDate && (
+                  <TouchableOpacity
+                    style={styles.mapClearDateButton}
+                    onPress={() => {
+                      setMapSelectedDate(null);
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      if (mapRegion) {
+                        const filtered = filterForRegion(mapRegion);
+                        setMapActivities(filtered);
+                      }
+                    }}
+                  >
+                    <Ionicons name="close" size={18} color={theme.text} />
+                  </TouchableOpacity>
+                )}
+                
+                <TouchableOpacity
+                  style={[
+                    styles.mapJoinedToggle,
+                    showJoinedOnly && styles.mapJoinedToggleActive,
+                  ]}
+                  onPress={() => {
+                    setShowJoinedOnly(!showJoinedOnly);
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    if (mapRegion) {
+                      const filtered = filterForRegion(mapRegion);
+                      setMapActivities(filtered);
+                    }
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons 
+                    name={showJoinedOnly ? "checkmark-circle" : "checkmark-circle-outline"} 
+                    size={20} 
+                    color={showJoinedOnly ? '#fff' : theme.primary} 
+                  />
+                  <Text style={[
+                    styles.mapJoinedToggleText,
+                    showJoinedOnly && { color: '#fff' },
+                  ]}>Joined Activities</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+            
+            {mapRegion && (
+              <MapView
+                ref={mapRef}
+                style={styles.map}
+                initialRegion={mapRegion}
+                showsUserLocation={true}
+                showsMyLocationButton={false}
+                onRegionChangeComplete={(region) => {
+                  setMapRegion(region);
+                  setRegionDirty(true);
+                }}
+              >
+                {mapActivities.map(act => (
+                  <Marker
+                    key={act.id}
+                    coordinate={{ latitude: act.latitude, longitude: act.longitude }}
+                    onPress={() => setSelectedMapActivity(act)}
+                    tracksViewChanges={false}
+                  >
+                    <View style={styles.markerInner}>
+                      <ActivityIcon activity={act.activity} size={20} color={theme.primary} />
+                      {isActivityJoined(act.id) && (
+                        <View style={styles.markerBadge}>
+                          <Ionicons name="checkmark" size={10} color="#fff" />
+                        </View>
+                      )}
+                    </View>
+                  </Marker>
+                ))}
+              </MapView>
+            )}
+            
+            {/* My Location Button */}
+            <TouchableOpacity
+              style={styles.myLocationButton}
+              onPress={async () => {
+                if (userLocation && mapRef.current) {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  mapRef.current.animateToRegion(
+                    {
+                      latitude: userLocation.latitude,
+                      longitude: userLocation.longitude,
+                      latitudeDelta: 0.05,
+                      longitudeDelta: 0.05,
+                    },
+                    500
+                  );
+                }
+              }}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="locate" size={24} color={theme.primary} />
+            </TouchableOpacity>
+            
+            {regionDirty && (
+              <TouchableOpacity
+                style={styles.mapLoadButton}
+                onPress={handleLoadRegionActivities}
+                disabled={mapLoading}
+                activeOpacity={0.8}
+              >
+                {mapLoading ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <ActivityIndicator size="small" color="#fff" />
+                    <Text style={styles.mapLoadButtonText}>Loading...</Text>
+                  </View>
+                ) : (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Ionicons name="refresh" size={18} color="#fff" />
+                    <Text style={styles.mapLoadButtonText}>Load activities</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            )}
+            {selectedMapActivity && (
+              <View style={styles.mapActivityPanel}>
+                <View style={styles.mapPanelHeader}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                    <ActivityIcon activity={selectedMapActivity.activity} size={28} color={theme.primary} />
+                    <Text style={styles.mapActivityPanelTitle}>{selectedMapActivity.activity}</Text>
+                  </View>
+                  <TouchableOpacity onPress={() => setSelectedMapActivity(null)} style={styles.mapActivityPanelClose}>
+                    <Ionicons name="close" size={22} color={theme.text} />
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.mapPanelRow}>
+                  <Ionicons name="person" size={16} color={theme.primary} />
+                  <Text style={styles.mapPanelLabel}>Host:</Text>
+                  <HostUsername activity={selectedMapActivity} />
+                </View>
+
+                <View style={styles.mapPanelRow}>
+                  <Ionicons name="location" size={16} color={theme.primary} />
+                  <Text style={styles.mapPanelLabel}>Location:</Text>
+                  <Text style={styles.mapPanelValue} numberOfLines={1}>
+                    {simplifyLocation(selectedMapActivity.location)}
+                  </Text>
+                </View>
+
+                <View style={styles.mapPanelRow}>
+                  <Ionicons name="calendar" size={16} color={theme.primary} />
+                  <Text style={styles.mapPanelLabel}>Date:</Text>
+                  <Text style={styles.mapPanelValue}>{selectedMapActivity.date}</Text>
+                </View>
+
+                <View style={styles.mapPanelRow}>
+                  <Ionicons name="time" size={16} color={theme.primary} />
+                  <Text style={styles.mapPanelLabel}>Time:</Text>
+                  <Text style={styles.mapPanelValue}>{selectedMapActivity.time}</Text>
+                </View>
+
+                <View style={styles.mapPanelRow}>
+                  <Ionicons name="people" size={16} color={theme.primary} />
+                  <Text style={styles.mapPanelLabel}>Participants:</Text>
+                  <Text style={styles.mapPanelValue}>
+                    {selectedMapActivity.joinedUserIds ? selectedMapActivity.joinedUserIds.length : selectedMapActivity.joinedCount} / {selectedMapActivity.maxParticipants}
+                  </Text>
+                </View>
+
+                {userLocation && (
+                  <View style={styles.mapPanelRow}>
+                    <Ionicons name="navigate" size={16} color={theme.primary} />
+                    <Text style={styles.mapPanelLabel}>Distance:</Text>
+                    <Text style={styles.mapPanelValue}>
+                      {calculateDistance(
+                        userLocation.latitude,
+                        userLocation.longitude,
+                        selectedMapActivity.latitude,
+                        selectedMapActivity.longitude
+                      ).toFixed(2)} km away
+                    </Text>
+                  </View>
+                )}
+
+                <View style={styles.mapPanelActions}>
+                  <TouchableOpacity
+                    style={[
+                      styles.mapJoinButton,
+                      isActivityJoined(selectedMapActivity.id) && {
+                        backgroundColor: theme.isDark ? '#007E84' : darkenHex(theme.primary, 0.12),
+                      },
+                    ]}
+                    onPress={async () => {
+                      try {
+                        await toggleJoinActivity(selectedMapActivity);
+                      } catch (err) {
+                        console.error('Error toggling join:', err);
+                      }
+                    }}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.mapJoinButtonText}>
+                      {isActivityJoined(selectedMapActivity.id) ? 'Leave' : 'Join'}
+                    </Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity
+                    onPress={() => {
+                      navigation.navigate('ActivityDetails', { activityId: selectedMapActivity.id });
+                      setSelectedMapActivity(null);
+                    }}
+                    style={styles.mapDetailsButton}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.mapDetailsButtonText}>View Details</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+          </View>
+        )}
+
+        {!showMap && filteredActivities.length === 0 && (
           <View style={{ alignItems: 'center', marginTop: 32, marginBottom: 12, paddingHorizontal: 24 }}>
             <Ionicons name="search-outline" size={48} color={theme.primary} style={{ marginBottom: 10 }} />
             <Text style={{ color: theme.text, fontSize: 20, fontWeight: 'bold', textAlign: 'center', marginBottom: 8 }}>
@@ -645,6 +1122,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
           </View>
         )}
 
+        {!showMap && (
         <FlatList
           data={filteredActivities}
           renderItem={({ item }) => <ActivityCard item={item} />}
@@ -666,6 +1144,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
           windowSize={7}
           removeClippedSubviews
         />
+        )}
 
         {/* Android date picker (modal wrapper) */}
         {Platform.OS === 'android' && (
@@ -707,6 +1186,62 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
             </View>
           </Modal>
         )}
+        
+        {/* Map Date Pickers */}
+        {Platform.OS === 'android' && (
+          <DateTimePickerModal
+            isVisible={isMapDatePickerVisible}
+            mode="date"
+            onConfirm={(date) => { 
+              setMapSelectedDate(date); 
+              setMapDatePickerVisible(false);
+              if (mapRegion) {
+                const filtered = filterForRegion(mapRegion);
+                setMapActivities(filtered);
+              }
+            }}
+            onCancel={() => setMapDatePickerVisible(false)}
+          />
+        )}
+        
+        {Platform.OS === 'ios' && (
+          <Modal
+            transparent
+            animationType="slide"
+            visible={isMapIOSDatePickerVisible}
+            onRequestClose={() => setMapIOSDatePickerVisible(false)}
+          >
+            <View style={styles.pickerModal}>
+              <View style={styles.rollerContainer}>
+                <View style={styles.rollerHeader}>
+                  <TouchableOpacity onPress={() => setMapIOSDatePickerVisible(false)}>
+                    <Text style={styles.rollerCancel}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => { 
+                    if (mapTempDate) {
+                      setMapSelectedDate(mapTempDate); 
+                      if (mapRegion) {
+                        const filtered = filterForRegion(mapRegion);
+                        setMapActivities(filtered);
+                      }
+                    }
+                    setMapIOSDatePickerVisible(false); 
+                  }}>
+                    <Text style={styles.rollerDone}>Done</Text>
+                  </TouchableOpacity>
+                </View>
+                <DateTimePicker
+                  value={mapTempDate ?? new Date()}
+                  mode="date"
+                  display="spinner"
+                  themeVariant={theme.isDark ? 'dark' : 'light'}
+                  onChange={(event, d) => d && setMapTempDate(d)}
+                  style={styles.rollerPicker}
+                />
+              </View>
+            </View>
+          </Modal>
+        )}
       </Animated.View>
     </SafeAreaView>
   );
@@ -719,18 +1254,256 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
 
   headerContainer: {
     flexDirection: 'row',
-    justifyContent: 'center',
+    justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 15,
     marginTop: 10,
     marginBottom: 18,
-    position: 'relative',
   },
   headerTitle: {
     fontSize: 28,
     color: t.primary,
     fontWeight: 'bold',
     textAlign: 'center',
+    flex: 1,
+  },
+  mapToggleButton: {
+    backgroundColor: t.card,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: t.border,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mapContainer: { flex: 1, marginHorizontal: 15, borderRadius: 12, overflow: 'hidden', marginBottom: 10 },
+  mapFiltersContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 100,
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 8,
+  },
+  mapDatePickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    gap: 8,
+  },
+  mapDateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: t.card,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: t.border,
+  },
+  mapDateButtonText: {
+    color: t.text,
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  mapClearDateButton: {
+    backgroundColor: t.card,
+    padding: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: t.border,
+  },
+  mapJoinedToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: t.card,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: t.border,
+    gap: 6,
+    marginLeft: 'auto',
+  },
+  mapJoinedToggleActive: {
+    backgroundColor: t.primary,
+    borderColor: t.primary,
+  },
+  mapJoinedToggleText: {
+    color: t.text,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  mapFilterScroll: {
+    maxHeight: 42,
+  },
+  mapFilterChip: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: t.card,
+    borderRadius: 16,
+    marginRight: 6,
+    borderWidth: 1,
+    borderColor: t.border,
+  },
+  mapFilterChipActive: {
+    backgroundColor: t.primary,
+    borderColor: t.primary,
+  },
+  mapFilterChipText: {
+    color: t.text,
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  map: { flex: 1 },
+  markerInner: { 
+    backgroundColor: t.card, 
+    padding: 6, 
+    borderRadius: 24, 
+    borderWidth: 2, 
+    borderColor: t.primary,
+    position: 'relative',
+  },
+  markerBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    backgroundColor: t.primary,
+    borderRadius: 8,
+    width: 16,
+    height: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: t.card,
+  },
+  mapLoadButton: {
+    position: 'absolute',
+    bottom: 24,
+    left: 16,
+    backgroundColor: t.primary,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 24,
+    shadowColor: t.primary,
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  mapLoadButtonText: { color: '#fff', fontWeight: 'bold', fontSize: 15 },
+  myLocationButton: {
+    position: 'absolute',
+    bottom: 24,
+    right: 16,
+    backgroundColor: t.card,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
+    borderWidth: 1,
+    borderColor: t.border,
+  },
+  mapActivityPanel: {
+    position: 'absolute',
+    bottom: 16,
+    left: 16,
+    right: 16,
+    backgroundColor: t.card,
+    borderRadius: 14,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 6,
+    maxHeight: '60%',
+  },
+  mapPanelHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: t.border,
+  },
+  mapActivityPanelTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: t.primary,
+    marginLeft: 8,
+    flex: 1,
+  },
+  mapActivityPanelClose: { 
+    padding: 6,
+    backgroundColor: t.background,
+    borderRadius: 6,
+  },
+  mapPanelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 4,
+  },
+  mapPanelLabel: {
+    fontSize: 14,
+    color: t.primary,
+    fontWeight: '600',
+    marginLeft: 8,
+    marginRight: 6,
+  },
+  mapPanelValue: {
+    fontSize: 14,
+    color: t.muted,
+    fontWeight: '500',
+    flex: 1,
+  },
+  mapPanelActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: t.border,
+    gap: 10,
+  },
+  mapJoinButton: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    backgroundColor: t.primary,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  mapJoinButtonText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 15,
+  },
+  mapDetailsButton: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    backgroundColor: t.card,
+    borderRadius: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: t.border,
+  },
+  mapDetailsButtonText: {
+    color: t.primary,
+    fontWeight: '600',
+    fontSize: 15,
   },
 
   pickerModal: {

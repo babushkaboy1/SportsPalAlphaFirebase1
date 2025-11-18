@@ -74,7 +74,6 @@ const CreateProfileScreen = ({ route }: any) => {
   const [photo, setPhoto] = useState<string | null>(profileData?.photo || null);
   const [instagram, setInstagram] = useState(profileData?.socials?.instagram || '');
   const [facebook, setFacebook] = useState(profileData?.socials?.facebook || '');
-  const [whatsapp, setWhatsapp] = useState(profileData?.socials?.whatsapp || '');
   // Preselect favorites in edit mode (supports either key name from stored profile)
   const [selectedSports, setSelectedSports] = useState<string[]>(profileData?.sportsPreferences || profileData?.selectedSports || []);
   const [isReady, setIsReady] = useState(false);
@@ -104,7 +103,6 @@ const CreateProfileScreen = ({ route }: any) => {
   const scrollRef = useRef<ScrollView>(null);
   const instagramRef = useRef<TextInput>(null);
   const facebookRef = useRef<TextInput>(null);
-  const whatsappRef = useRef<TextInput>(null);
   const insets = useSafeAreaInsets();
 
   // Keyboard state for adjusting ScrollView padding so inputs appear above keyboard
@@ -519,7 +517,6 @@ const CreateProfileScreen = ({ route }: any) => {
           socials: {
             instagram,
             facebook,
-            whatsapp,
           },
           photo: photoURL,
           sportsPreferences: selectedSports,
@@ -576,7 +573,6 @@ const CreateProfileScreen = ({ route }: any) => {
             socials: {
               instagram,
               facebook,
-              whatsapp,
             },
             photo: photoURL,
             sportsPreferences: selectedSports,
@@ -717,7 +713,6 @@ const CreateProfileScreen = ({ route }: any) => {
           socials: {
             instagram,
             facebook,
-            whatsapp,
           },
           photo: photoURL,
           sportsPreferences: selectedSports,
@@ -855,9 +850,10 @@ const CreateProfileScreen = ({ route }: any) => {
           onChangeText={setBio}
           multiline
           numberOfLines={2}
-          maxLength={57}
+          maxLength={62}
           textAlignVertical="top"
         />
+        <Text style={styles.characterCount}>{bio.length}/62</Text>
         <TextInput
           style={[styles.input, ((isEdit || emailLocked || isSocialAuthUser) ? styles.inputDisabled : null)]}
           placeholder="Email"
@@ -1145,30 +1141,11 @@ const CreateProfileScreen = ({ route }: any) => {
           placeholderTextColor="#999"
           value={facebook}
           onChangeText={setFacebook}
-          returnKeyType="next"
-          blurOnSubmit={false}
-          onSubmitEditing={() => whatsappRef.current?.focus()}
+          returnKeyType="done"
+          blurOnSubmit={true}
           onFocus={() => {
             setTimeout(() => {
               scrollRef.current?.scrollTo({ y: 1150, animated: true });
-            }, 100);
-          }}
-        />
-      </View>
-
-      <View style={styles.socialInputContainer}>
-        <Ionicons name="logo-whatsapp" size={24} color={theme.primary} style={styles.socialIcon} />
-        <TextInput
-          ref={whatsappRef}
-          style={styles.socialInput}
-          placeholder="WhatsApp (link or number)"
-          placeholderTextColor="#999"
-          value={whatsapp}
-          onChangeText={setWhatsapp}
-          returnKeyType="done"
-          onFocus={() => {
-            setTimeout(() => {
-              scrollRef.current?.scrollTo({ y: 1200, animated: true });
             }, 100);
           }}
         />
@@ -1575,6 +1552,13 @@ const createStyles = (t: any) => StyleSheet.create({
     minHeight: 70,
     maxHeight: 70,
     paddingTop: 14,
+  },
+  characterCount: {
+    fontSize: 12,
+    color: t.muted,
+    textAlign: 'right',
+    marginTop: -4,
+    marginBottom: 8,
   },
   inputDisabled: {
     opacity: 0.6,

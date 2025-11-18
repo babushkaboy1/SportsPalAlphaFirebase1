@@ -153,12 +153,6 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
       const data: any = activitySnap.data();
       const latestJoinedUserIds: string[] = Array.isArray(data.joinedUserIds) ? data.joinedUserIds : [];
 
-      const currentUserId = auth.currentUser?.uid;
-      if (currentUserId) {
-        const addedToCalendarIds: string[] = data.addedToCalendarByUsers || [];
-        setIsAddedToCalendar(addedToCalendarIds.includes(currentUserId));
-      }
-
       if (latestJoinedUserIds.length) {
         const users = await fetchUsersByIds(latestJoinedUserIds);
         setJoinedUsers(users);
@@ -287,17 +281,28 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
 
   const getSportEmoji = (sport: string): string => {
     const emojiMap: Record<string, string> = {
-      Basketball: '🏀',
-      Soccer: '⚽',
-      Running: '🏃',
-      Gym: '🏋️',
-      Calisthenics: '💪',
-      Padel: '🎾',
-      Tennis: '🎾',
-      Cycling: '🚴',
-      Swimming: '🏊',
-      Badminton: '🏸',
-      Volleyball: '🏐',
+      'American Football': '🏈',
+      'Badminton': '🏸',
+      'Baseball': '⚾',
+      'Basketball': '🏀',
+      'Boxing': '🥊',
+      'Calisthenics': '💪',
+      'Cricket': '🏏',
+      'Cycling': '🚴',
+      'Field Hockey': '🏑',
+      'Golf': '⛳',
+      'Gym': '🏋️',
+      'Hiking': '🥾',
+      'Ice Hockey': '🏒',
+      'Martial Arts': '🥋',
+      'Padel': '🎾',
+      'Running': '🏃',
+      'Soccer': '⚽',
+      'Swimming': '🏊',
+      'Table Tennis': '🏓',
+      'Tennis': '🎾',
+      'Volleyball': '🏐',
+      'Yoga': '🧘',
     };
     return emojiMap[sport] || '⚽';
   };
@@ -555,23 +560,9 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
         calendarColor: '#1ae9ef',
       };
 
-      const eventId = await Calendar.createEventAsync(calendarId, eventDetails);
+      await Calendar.createEventAsync(calendarId, eventDetails);
 
-      const currentUserId = auth.currentUser?.uid;
-      if (currentUserId) {
-        const activityRef = doc(db, 'activities', activity.id);
-        const activitySnap = await getDoc(activityRef);
-        let calendarEventIds: Record<string, string> = {};
-        if (activitySnap.exists()) {
-          const data = activitySnap.data();
-          calendarEventIds = (data.calendarEventIds as Record<string, string>) || {};
-        }
-        calendarEventIds[currentUserId] = eventId;
-        await updateDoc(activityRef, {
-          addedToCalendarByUsers: arrayUnion(currentUserId),
-          calendarEventIds,
-        });
-      }
+      // Only update local state - don't write to Firebase
       setIsAddedToCalendar(true);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Alert.alert(

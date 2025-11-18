@@ -19,6 +19,7 @@ import {
   Pressable,
   Alert,
   Clipboard,
+  Linking,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
@@ -1113,38 +1114,44 @@ const ProfileScreen = () => {
       </View>
 
       {/* Bio and Social Media Row - Above Action Buttons */}
-      {(profile?.bio || profile?.socials?.instagram || profile?.socials?.facebook || profile?.socials?.whatsapp) ? (
+      {(profile?.bio || profile?.socials?.instagram || profile?.socials?.facebook) ? (
         <View style={styles.bioSocialRow}>
           {/* Bio Section - Left Side (to center) */}
-          <View style={styles.bioSectionHorizontal}>
-            {profile?.bio ? (
-              <View style={styles.bioIconRow}>
-                <Ionicons name="information-circle-outline" size={16} color={theme.primary} />
+            <View style={styles.bioSectionHorizontal}>
+              {profile?.bio ? (
                 <Text style={styles.bioText} numberOfLines={2} ellipsizeMode="tail">
                   {profile.bio}
                 </Text>
-              </View>
-            ) : null}
-          </View>
+              ) : null}
+            </View>
 
-          {/* Social Media Icons - Right Side (from center) */}
-          {(profile?.socials?.instagram || profile?.socials?.facebook || profile?.socials?.whatsapp) ? (
+            {/* Social Media Icons - Right Side (from center) */}
+            {(profile?.socials?.instagram || profile?.socials?.facebook) ? (
             <View style={styles.socialSectionHorizontal}>
               {profile.socials.instagram ? (
                 <TouchableOpacity 
                   style={styles.socialIconButton} 
                   onPress={() => {
-                    Alert.alert(
-                      'Instagram',
-                      profile.socials.instagram,
-                      [
-                        { text: 'Copy', onPress: () => {
-                          Clipboard.setString(profile.socials.instagram);
-                          Alert.alert('Copied', 'Instagram handle copied to clipboard');
-                        }},
-                        { text: 'Cancel', style: 'cancel' }
-                      ]
-                    );
+                    const value = profile.socials.instagram;
+                    const isLink = value.startsWith('http://') || value.startsWith('https://');
+                    
+                    if (isLink) {
+                      Linking.openURL(value).catch(() => {
+                        Alert.alert('Error', 'Could not open link');
+                      });
+                    } else {
+                      Alert.alert(
+                        'Instagram',
+                        value,
+                        [
+                          { text: 'Copy', onPress: () => {
+                            Clipboard.setString(value);
+                            Alert.alert('Copied', 'Instagram handle copied to clipboard');
+                          }},
+                          { text: 'Cancel', style: 'cancel' }
+                        ]
+                      );
+                    }
                   }}
                 >
                   <Ionicons name="logo-instagram" size={26} color={theme.primary} />
@@ -1154,40 +1161,29 @@ const ProfileScreen = () => {
                 <TouchableOpacity 
                   style={styles.socialIconButton} 
                   onPress={() => {
-                    Alert.alert(
-                      'Facebook',
-                      profile.socials.facebook,
-                      [
-                        { text: 'Copy', onPress: () => {
-                          Clipboard.setString(profile.socials.facebook);
-                          Alert.alert('Copied', 'Facebook handle copied to clipboard');
-                        }},
-                        { text: 'Cancel', style: 'cancel' }
-                      ]
-                    );
+                    const value = profile.socials.facebook;
+                    const isLink = value.startsWith('http://') || value.startsWith('https://');
+                    
+                    if (isLink) {
+                      Linking.openURL(value).catch(() => {
+                        Alert.alert('Error', 'Could not open link');
+                      });
+                    } else {
+                      Alert.alert(
+                        'Facebook',
+                        value,
+                        [
+                          { text: 'Copy', onPress: () => {
+                            Clipboard.setString(value);
+                            Alert.alert('Copied', 'Facebook handle copied to clipboard');
+                          }},
+                          { text: 'Cancel', style: 'cancel' }
+                        ]
+                      );
+                    }
                   }}
                 >
                   <Ionicons name="logo-facebook" size={26} color={theme.primary} />
-                </TouchableOpacity>
-              ) : null}
-              {profile.socials.whatsapp ? (
-                <TouchableOpacity 
-                  style={styles.socialIconButton} 
-                  onPress={() => {
-                    Alert.alert(
-                      'WhatsApp',
-                      profile.socials.whatsapp,
-                      [
-                        { text: 'Copy', onPress: () => {
-                          Clipboard.setString(profile.socials.whatsapp);
-                          Alert.alert('Copied', 'WhatsApp contact copied to clipboard');
-                        }},
-                        { text: 'Cancel', style: 'cancel' }
-                      ]
-                    );
-                  }}
-                >
-                  <Ionicons name="logo-whatsapp" size={26} color={theme.primary} />
                 </TouchableOpacity>
               ) : null}
             </View>
@@ -1499,11 +1495,9 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
     alignItems: 'flex-start',
   },
   bioText: {
-    flex: 1,
     color: t.text,
     fontSize: 13,
     lineHeight: 18,
-    marginLeft: 6,
   },
   socialSectionHorizontal: {
     flexDirection: 'row',

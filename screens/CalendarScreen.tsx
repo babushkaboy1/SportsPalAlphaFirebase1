@@ -108,17 +108,28 @@ const kmDistance = (
 
 const getSportEmoji = (sport: string): string => {
   const emojiMap: Record<string, string> = {
-    Basketball: '🏀',
-    Soccer: '⚽',
-    Running: '🏃',
-    Gym: '🏋️',
-    Calisthenics: '💪',
-    Padel: '🎾',
-    Tennis: '🎾',
-    Cycling: '🚴',
-    Swimming: '🏊',
-    Badminton: '🏸',
-    Volleyball: '🏐',
+    'American Football': '🏈',
+    'Badminton': '🏸',
+    'Baseball': '⚾',
+    'Basketball': '🏀',
+    'Boxing': '🥊',
+    'Calisthenics': '💪',
+    'Cricket': '🏏',
+    'Cycling': '🚴',
+    'Field Hockey': '🏑',
+    'Golf': '⛳',
+    'Gym': '🏋️',
+    'Hiking': '🥾',
+    'Ice Hockey': '🏒',
+    'Martial Arts': '🥋',
+    'Padel': '🎾',
+    'Running': '🏃',
+    'Soccer': '⚽',
+    'Swimming': '🏊',
+    'Table Tennis': '🏓',
+    'Tennis': '🎾',
+    'Volleyball': '🏐',
+    'Yoga': '🧘',
   };
   return emojiMap[sport] || '⚽';
 };
@@ -145,27 +156,8 @@ const CalendarScreen = ({ navigation, route }: any) => {
     })();
   }, []);
 
-  // Calendar status per activity
+  // Calendar status per activity (local state only)
   const [calendarStatus, setCalendarStatus] = useState<Record<string, boolean>>({});
-  useEffect(() => {
-    const loadCalendarStatus = async () => {
-      const currentUserId = auth.currentUser?.uid;
-      if (!currentUserId || !allActivities.length) return;
-
-      const statusMap: Record<string, boolean> = {};
-      for (const activity of allActivities) {
-        const activityRef = doc(db, 'activities', activity.id);
-        const activitySnap = await getDoc(activityRef);
-        if (activitySnap.exists()) {
-          const data = activitySnap.data();
-          const addedToCalendarIds = (data as any).addedToCalendarByUsers || [];
-          statusMap[activity.id] = addedToCalendarIds.includes(currentUserId);
-        }
-      }
-      setCalendarStatus(statusMap);
-    };
-    loadCalendarStatus();
-  }, [allActivities]);
 
   // Selected date (dd-mm-yyyy)
   const selectedDate = route.params?.selectedDate;
@@ -331,13 +323,8 @@ const CalendarScreen = ({ navigation, route }: any) => {
 
       await ExpoCalendar.createEventAsync(calendarId, eventDetails);
 
-      // Save to Firebase that this user added the activity to calendar
-      const currentUserId = auth.currentUser?.uid;
-      if (currentUserId) {
-        const activityRef = doc(db, 'activities', activity.id);
-        await updateDoc(activityRef, { addedToCalendarByUsers: arrayUnion(currentUserId) });
-        setCalendarStatus((prev) => ({ ...prev, [activity.id]: true }));
-      }
+      // Only update local state - don't write to Firebase
+      setCalendarStatus((prev) => ({ ...prev, [activity.id]: true }));
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Alert.alert(

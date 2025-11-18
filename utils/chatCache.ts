@@ -43,7 +43,6 @@ export type CachedProfile = {
   socials?: {
     instagram?: string;
     facebook?: string;
-    whatsapp?: string;
   };
   selectedSports?: string[];
   [key: string]: any;
