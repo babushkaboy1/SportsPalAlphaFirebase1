@@ -5,7 +5,7 @@ export default ({ config }: { config: any }) => ({
   name: "SportsPal",
   slug: "SportsPal4",
   scheme: "sportspal", // 👈 Add this line
-  version: "1.0.0",
+  version: "1.0.3",
   orientation: "portrait",
   // Updated app icon to new turquoise orb asset
   icon: "./assets/app-icon.png",

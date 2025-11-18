@@ -773,12 +773,24 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
               </View>
             )}
             {/* GPX / Route statistics (if present) only for Hiking/Running/Cycling */}
-            {gpxSupported && (activity as any).gpx && (
+            {gpxSupported && ((activity as any).gpx || (activity as any).drawnRoute) && (
               <>
                 <View style={{ marginBottom: 8 }}>
                   <TouchableOpacity
                     style={[styles.actionButton, { alignSelf: 'center', justifyContent: 'center' }]}
                     onPress={async () => {
+                      // Handle both GPX and drawn routes
+                      if ((activity as any).drawnRoute && (activity as any).drawnRoute.length > 0) {
+                        // Show drawn route directly
+                        setShowGpxModal(true);
+                        setGpxError(null);
+                        setGpxCoords((activity as any).drawnRoute);
+                        setGpxWaypoints([]);
+                        setGpxLoading(false);
+                        return;
+                      }
+                      
+                      // Original GPX handling code
                       // Diagnostic logs to help identify why "No GPX URL available" appears
                       console.log('Opening GPX viewer for activity id:', activity.id);
                       console.log('activity.gpx payload:', (activity as any).gpx);
@@ -971,38 +983,48 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                     }}
                   >
                     <Ionicons name="map" size={18} style={[styles.actionIconBold, { marginRight: 8 }]} />
-                    <Text style={styles.actionText}>View {(activity as any).activity} Route (GPX)</Text>
+                    <Text style={styles.actionText}>
+                      View {(activity as any).activity} Route {(activity as any).gpx ? '(GPX)' : '(Drawn)'}
+                    </Text>
                   </TouchableOpacity>
                 </View>
 
-                <View style={{ marginVertical: 10, backgroundColor: theme.card, padding: 12, borderRadius: 8 }}>
-                  <Text style={{ color: theme.primary, fontWeight: '700', marginBottom: 8 }}>Route Statistics</Text>
-                  {(() => {
-                    const s: any = (activity as any).gpx.stats || {};
-                    const rows = [
-                      ['Distance', s.distance || '—'],
-                      ['Ascent', s.ascent || '—'],
-                      ['Descent', s.descent || '—'],
-                      ['Max Elevation', s.maxElevation || '—'],
-                      ['Min Elevation', s.minElevation || '—'],
-                      ['Difficulty', s.difficulty || '—'],
-                      ['TrailRank', s.trailRank || '—'],
-                      ['Route Type', s.routeType || '—'],
-                    ];
-                    return rows.map(([label, val]) => (
-                      <View key={label as string} style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                        <Text style={{ color: theme.muted }}>{label}:</Text>
-                        <Text style={{ color: theme.text }}>{val}</Text>
-                      </View>
-                    ));
-                  })()}
-
-                  {(activity as any).gpx.downloadUrl && (
-                    <TouchableOpacity style={{ marginTop: 8 }} onPress={() => { try { Linking.openURL((activity as any).gpx.downloadUrl); } catch {} }}>
-                      <Text style={{ color: theme.primary, fontWeight: '700' }}>Open GPX</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
+                {(activity as any).gpx && (
+                  <View style={{ marginVertical: 10, backgroundColor: theme.card, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: theme.border }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+                      <Ionicons name="stats-chart" size={20} color={theme.primary} style={{ marginRight: 8 }} />
+                      <Text style={{ color: theme.primary, fontWeight: '700', fontSize: 16 }}>Route Statistics</Text>
+                    </View>
+                    {(() => {
+                      const s: any = (activity as any).gpx.stats || {};
+                      const iconMap: Record<string, string> = {
+                        'Distance': 'trail-sign',
+                        'Ascent': 'trending-up',
+                        'Descent': 'trending-down',
+                        'Max Elevation': 'arrow-up-circle',
+                        'Difficulty': 'speedometer',
+                        'Route Type': 'git-branch',
+                      };
+                      const rows = [
+                        ['Distance', s.distance || '—'],
+                        ['Ascent', s.ascent || '—'],
+                        ['Descent', s.descent || '—'],
+                        ['Max Elevation', s.maxElevation || '—'],
+                        ['Difficulty', s.difficulty || '—'],
+                        ['Route Type', s.routeType || '—'],
+                      ];
+                      return rows.map(([label, val]) => (
+                        <View key={label as string} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, paddingVertical: 4 }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                            <Ionicons name={iconMap[label as string] as any} size={16} color={theme.primary} />
+                            <Text style={{ color: theme.muted, fontWeight: '600' }}>{label}:</Text>
+                          </View>
+                          <Text style={{ color: theme.text, fontWeight: '500' }}>{val}</Text>
+                        </View>
+                      ));
+                    })()}
+                  </View>
+                )}
               </>
             )}
 
@@ -1146,6 +1168,18 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                       {/* Start and end markers */}
                       <Marker coordinate={gpxCoords[0]} />
                       <Marker coordinate={gpxCoords[gpxCoords.length - 1]} />
+                      
+                      {/* Meeting point marker for drawn routes */}
+                      {(activity as any).drawnRoute && activity.latitude && activity.longitude && (
+                        <Marker
+                          coordinate={{ latitude: activity.latitude, longitude: activity.longitude }}
+                          title="Meeting Point"
+                        >
+                          <View style={{ backgroundColor: theme.primary, width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: '#fff' }}>
+                            <Ionicons name="location" size={24} color="#fff" />
+                          </View>
+                        </Marker>
+                      )}
                     </>
                   )}
                   {/* If no track/route but waypoints exist, optionally connect with dashed line for context */}

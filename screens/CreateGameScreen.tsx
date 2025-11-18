@@ -34,6 +34,95 @@ import { normalizeDateFormat, uploadGpxFile } from '../utils/storage';
 import { auth } from '../firebaseConfig'; // Add this import
 import * as Haptics from 'expo-haptics';
 import { useTheme } from '../context/ThemeContext';
+import MapView, { Marker, Polyline } from 'react-native-maps';
+import * as FileSystem from 'expo-file-system/legacy';
+
+// Haversine formula to calculate distance between two coordinates
+const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+  const R = 6371; // Earth's radius in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+};
+
+// Parse GPX file and extract statistics
+const parseGpxStats = (gpxContent: string) => {
+  const stats = {
+    distance: '',
+    ascent: '',
+    descent: '',
+    maxElevation: '',
+  };
+
+  try {
+    // Extract all trackpoints with elevation
+    const trkptRegex = /<trkpt[^>]*lat="([^"]+)"[^>]*lon="([^"]+)"[^>]*>[\s\S]*?<ele>([\d.]+)<\/ele>/g;
+    const points: Array<{ lat: number; lon: number; ele: number }> = [];
+    let match;
+    
+    while ((match = trkptRegex.exec(gpxContent)) !== null) {
+      points.push({
+        lat: parseFloat(match[1]),
+        lon: parseFloat(match[2]),
+        ele: parseFloat(match[3]),
+      });
+    }
+
+    if (points.length === 0) {
+      // Try without elevation for distance-only calculation
+      const basicTrkptRegex = /<trkpt[^>]*lat="([^"]+)"[^>]*lon="([^"]+)"/g;
+      while ((match = basicTrkptRegex.exec(gpxContent)) !== null) {
+        points.push({
+          lat: parseFloat(match[1]),
+          lon: parseFloat(match[2]),
+          ele: 0,
+        });
+      }
+    }
+
+    if (points.length < 2) return stats;
+
+    // Calculate total distance
+    let totalDistance = 0;
+    for (let i = 1; i < points.length; i++) {
+      totalDistance += calculateDistance(
+        points[i - 1].lat,
+        points[i - 1].lon,
+        points[i].lat,
+        points[i].lon
+      );
+    }
+    stats.distance = `${totalDistance.toFixed(2)} km`;
+
+    // Calculate elevation statistics (if elevation data exists)
+    const hasElevation = points.some(p => p.ele > 0);
+    if (hasElevation) {
+      let totalAscent = 0;
+      let totalDescent = 0;
+      let maxEle = points[0].ele;
+      
+      for (let i = 1; i < points.length; i++) {
+        const elevDiff = points[i].ele - points[i - 1].ele;
+        if (elevDiff > 0) totalAscent += elevDiff;
+        if (elevDiff < 0) totalDescent += Math.abs(elevDiff);
+        if (points[i].ele > maxEle) maxEle = points[i].ele;
+      }
+
+      if (totalAscent > 0) stats.ascent = `${Math.round(totalAscent)} m`;
+      if (totalDescent > 0) stats.descent = `${Math.round(totalDescent)} m`;
+      if (maxEle > 0) stats.maxElevation = `${Math.round(maxEle)} m`;
+    }
+  } catch (err) {
+    console.warn('Error parsing GPX:', err);
+  }
+
+  return stats;
+};
 
 const THEME_COLOR = '#1ae9ef';
 
@@ -532,13 +621,14 @@ const CreateGameScreen = () => {
   const [gpxStats, setGpxStats] = useState<any>({
     distance: '',
     ascent: '',
-    difficulty: '',
     descent: '',
     maxElevation: '',
-    trailRank: '',
-    minElevation: '',
+    difficulty: '',
     routeType: '',
   });
+  const [drawnRoute, setDrawnRoute] = useState<Array<{ latitude: number; longitude: number }>>([]);
+  const [showRouteDrawer, setShowRouteDrawer] = useState(false);
+  const [isDrawingMode, setIsDrawingMode] = useState(false);
 
   // Keyboard state for adjusting ScrollView padding so inputs appear above keyboard
   const [keyboardHeight, setKeyboardHeight] = useState<number>(0);
@@ -546,16 +636,17 @@ const CreateGameScreen = () => {
   // Refs for route stats inputs so 'Next' moves to the next field
   const distanceRef = useRef<any>(null);
   const ascentRef = useRef<any>(null);
-  const difficultyRef = useRef<any>(null);
   const descentRef = useRef<any>(null);
   const maxElevationRef = useRef<any>(null);
-  const trailRankRef = useRef<any>(null);
+  const difficultyRef = useRef<any>(null);
   const routeTypeRef = useRef<any>(null);
 
   // Picker modals
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [showParticipantsPicker, setShowParticipantsPicker] = useState(false);
+  const [showDifficultyPicker, setShowDifficultyPicker] = useState(false);
+  const [showRouteTypePicker, setShowRouteTypePicker] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scrollRef = useRef<ScrollView>(null);
@@ -574,7 +665,8 @@ const CreateGameScreen = () => {
     const supportsGpx = sport === 'Hiking' || sport === 'Running' || sport === 'Cycling';
     if (!supportsGpx) {
       setGpxFile(null);
-      setGpxStats({ distance: '', ascent: '', difficulty: '', descent: '', maxElevation: '', trailRank: '', minElevation: '', routeType: '' });
+      setDrawnRoute([]);
+      setGpxStats({ distance: '', ascent: '', descent: '', maxElevation: '', difficulty: '', routeType: '' });
     }
   }, [sport]);
 
@@ -609,7 +701,8 @@ const CreateGameScreen = () => {
     setLocation('');
     setGpxFile(null);
     setGpxUploading(false);
-    setGpxStats({ distance: '', ascent: '', difficulty: '', descent: '', maxElevation: '', trailRank: '', minElevation: '', routeType: '' });
+    setDrawnRoute([]);
+    setGpxStats({ distance: '', ascent: '', descent: '', maxElevation: '', difficulty: '', routeType: '' });
     // Restore defaults for date/time
   setDate(normalizeDateFormat(new Date().toISOString().split('T')[0]));
     const now = new Date();
@@ -674,6 +767,26 @@ const CreateGameScreen = () => {
         Alert.alert('Invalid file', 'Please choose a .gpx file.');
         return;
       }
+      
+      // Show loading indicator
+      setGpxUploading(true);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      
+      // Parse GPX to extract statistics
+      try {
+        const gpxContent = await FileSystem.readAsStringAsync(uri);
+        const stats = parseGpxStats(gpxContent);
+        
+        // Auto-fill stats if they were successfully extracted
+        if (stats.distance) setGpxStats((s: any) => ({ ...s, distance: stats.distance }));
+        if (stats.ascent) setGpxStats((s: any) => ({ ...s, ascent: stats.ascent }));
+        if (stats.descent) setGpxStats((s: any) => ({ ...s, descent: stats.descent }));
+        if (stats.maxElevation) setGpxStats((s: any) => ({ ...s, maxElevation: stats.maxElevation }));
+      } catch (parseErr) {
+        console.warn('Could not parse GPX stats:', parseErr);
+        // Don't block - user can still upload and enter manually
+      }
+      
       // Start upload
       const uid = auth.currentUser?.uid;
       if (!uid) {
@@ -781,6 +894,12 @@ const CreateGameScreen = () => {
                 downloadUrl: effectiveGpx.downloadUrl || null,
                 stats: gpxStats,
               },
+            }
+          : {}),
+        // include drawn route if present
+        ...(drawnRoute.length > 0
+          ? {
+              drawnRoute: drawnRoute,
             }
           : {}),
       };
@@ -1228,26 +1347,67 @@ const CreateGameScreen = () => {
                   : sport === 'Running' ? 'Running Route (optional)'
                   : 'Cycling Route (optional)'}
               </Text>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8, gap: 8 }}>
                 <TouchableOpacity
                   style={[
                     styles.mapButton,
                     gpxFile ? { backgroundColor: theme.isDark ? '#009fa3' : '#1ae9ef' } : null,
+                    drawnRoute.length > 0 && { opacity: 0.5 },
                   ]}
                   onPress={pickGpxFile}
-                  disabled={gpxUploading}
+                  disabled={gpxUploading || drawnRoute.length > 0}
                 >
                   {gpxUploading ? (
                     <ActivityIndicator size="small" color={'#fff'} />
                   ) : (
-                    <Text style={{ color: '#fff', fontWeight: 'bold' }}>{gpxFile ? 'Replace GPX' : 'Upload GPX'}</Text>
+                    <>
+                      <Ionicons name="map" size={18} color="#fff" style={{ marginRight: 6 }} />
+                      <Text style={{ color: '#fff', fontWeight: 'bold' }}>{gpxFile ? 'Replace GPX' : 'Upload GPX'}</Text>
+                    </>
                   )}
                 </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={[
+                    styles.mapButton,
+                    drawnRoute.length > 0 ? { backgroundColor: theme.isDark ? '#009fa3' : '#1ae9ef' } : null,
+                    gpxFile && { opacity: 0.5 },
+                  ]}
+                  disabled={!!gpxFile}
+                  onPress={() => {
+                    if (!selectedCoords) {
+                      Alert.alert('Meeting Point Required', 'Please select a meeting point first before drawing a route on the map.');
+                      return;
+                    }
+                    setShowRouteDrawer(true);
+                  }}
+                >
+                  <Ionicons name="pencil" size={16} color="#fff" style={{ marginRight: 4 }} />
+                  <Text style={{ color: '#fff', fontWeight: 'bold' }}>
+                    {drawnRoute.length > 0 ? 'Edit Route' : 'Draw Route'}
+                  </Text>
+                </TouchableOpacity>
+                
                 {gpxFile ? (
                   <View style={{ marginLeft: 12, flex: 1, alignItems: 'center' }}>
                     <Text style={{ color: theme.text, fontWeight: '600' }} numberOfLines={1}>{gpxFile.name || gpxFile.filename}</Text>
-                    <TouchableOpacity onPress={() => { setGpxFile(null); setGpxStats({ distance: '', ascent: '', difficulty: '', descent: '', maxElevation: '', trailRank: '', minElevation: '', routeType: '' }); }} style={{ marginTop: 6 }}>
+                    <TouchableOpacity onPress={() => { 
+                      setGpxFile(null); 
+                      setGpxStats({ distance: '', ascent: '', descent: '', maxElevation: '', difficulty: '', routeType: '' });
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    }} style={{ marginTop: 6 }}>
                       <Text style={{ color: theme.danger, fontWeight: '700' }}>Remove</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : drawnRoute.length > 0 ? (
+                  <View style={{ marginLeft: 12, flex: 1, alignItems: 'center' }}>
+                    <Text style={{ color: theme.text, fontWeight: '600' }}>{drawnRoute.length} points</Text>
+                    <TouchableOpacity onPress={() => { 
+                      setDrawnRoute([]); 
+                      setGpxStats({ distance: '', ascent: '', descent: '', maxElevation: '', difficulty: '', routeType: '' });
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    }} style={{ marginTop: 6 }}>
+                      <Text style={{ color: theme.danger, fontWeight: '700' }}>Clear Route</Text>
                     </TouchableOpacity>
                   </View>
                 ) : null}
@@ -1260,6 +1420,13 @@ const CreateGameScreen = () => {
                   <Text style={styles.routeStatsOptional}>(optional)</Text>
                 </View>
                 
+                {gpxUploading ? (
+                  <View style={{ paddingVertical: 40, alignItems: 'center', gap: 12 }}>
+                    <ActivityIndicator size="large" color={theme.primary} />
+                    <Text style={{ color: theme.muted, fontSize: 15 }}>Loading route statistics...</Text>
+                  </View>
+                ) : (
+                  <>
                 <View style={styles.statRow}>
                   <View style={styles.statLabelContainer}>
                     <Ionicons name="trail-sign" size={16} color={theme.primary} style={{ marginRight: 6 }} />
@@ -1297,33 +1464,10 @@ const CreateGameScreen = () => {
                     onChangeText={(t) => setGpxStats((s: any) => ({ ...s, ascent: t }))}
                     returnKeyType="next"
                     blurOnSubmit={false}
-                    onSubmitEditing={() => difficultyRef.current?.focus()}
-                    onFocus={() => {
-                      setTimeout(() => {
-                        scrollRef.current?.scrollTo({ y: 350, animated: true });
-                      }, 100);
-                    }}
-                  />
-                </View>
-                
-                <View style={styles.statRow}>
-                  <View style={styles.statLabelContainer}>
-                    <Ionicons name="speedometer" size={16} color={theme.primary} style={{ marginRight: 6 }} />
-                    <Text style={styles.statLabel}>Difficulty</Text>
-                  </View>
-                  <TextInput
-                    ref={difficultyRef}
-                    style={styles.statInput}
-                    placeholder="e.g. Moderate"
-                    placeholderTextColor={theme.muted}
-                    value={gpxStats.difficulty}
-                    onChangeText={(t) => setGpxStats((s: any) => ({ ...s, difficulty: t }))}
-                    returnKeyType="next"
-                    blurOnSubmit={false}
                     onSubmitEditing={() => descentRef.current?.focus()}
                     onFocus={() => {
                       setTimeout(() => {
-                        scrollRef.current?.scrollTo({ y: 400, animated: true });
+                        scrollRef.current?.scrollTo({ y: 350, animated: true });
                       }, 100);
                     }}
                   />
@@ -1346,7 +1490,7 @@ const CreateGameScreen = () => {
                     onSubmitEditing={() => maxElevationRef.current?.focus()}
                     onFocus={() => {
                       setTimeout(() => {
-                        scrollRef.current?.scrollTo({ y: 450, animated: true });
+                        scrollRef.current?.scrollTo({ y: 400, animated: true });
                       }, 100);
                     }}
                   />
@@ -1366,10 +1510,10 @@ const CreateGameScreen = () => {
                     onChangeText={(t) => setGpxStats((s: any) => ({ ...s, maxElevation: t }))}
                     returnKeyType="next"
                     blurOnSubmit={false}
-                    onSubmitEditing={() => trailRankRef.current?.focus()}
+                    onSubmitEditing={() => difficultyRef.current?.focus()}
                     onFocus={() => {
                       setTimeout(() => {
-                        scrollRef.current?.scrollTo({ y: 500, animated: true });
+                        scrollRef.current?.scrollTo({ y: 450, animated: true });
                       }, 100);
                     }}
                   />
@@ -1377,25 +1521,18 @@ const CreateGameScreen = () => {
                 
                 <View style={styles.statRow}>
                   <View style={styles.statLabelContainer}>
-                    <Ionicons name="star" size={16} color={theme.primary} style={{ marginRight: 6 }} />
-                    <Text style={styles.statLabel}>TrailRank</Text>
+                    <Ionicons name="speedometer" size={16} color={theme.primary} style={{ marginRight: 6 }} />
+                    <Text style={styles.statLabel}>Difficulty</Text>
                   </View>
-                  <TextInput
-                    ref={trailRankRef}
-                    style={styles.statInput}
-                    placeholder="e.g. 10"
-                    placeholderTextColor={theme.muted}
-                    value={gpxStats.trailRank}
-                    onChangeText={(t) => setGpxStats((s: any) => ({ ...s, trailRank: t }))}
-                    returnKeyType="next"
-                    blurOnSubmit={false}
-                    onSubmitEditing={() => routeTypeRef.current?.focus()}
-                    onFocus={() => {
-                      setTimeout(() => {
-                        scrollRef.current?.scrollTo({ y: 550, animated: true });
-                      }, 100);
-                    }}
-                  />
+                  <TouchableOpacity
+                    style={[styles.statInput, { justifyContent: 'center' }]}
+                    onPress={() => setShowDifficultyPicker(true)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={{ color: gpxStats.difficulty ? theme.text : theme.muted, fontWeight: gpxStats.difficulty ? '600' : '400' }}>
+                      {gpxStats.difficulty || 'Select difficulty'}
+                    </Text>
+                  </TouchableOpacity>
                 </View>
                 
                 <View style={styles.statRow}>
@@ -1403,22 +1540,18 @@ const CreateGameScreen = () => {
                     <Ionicons name="git-branch" size={16} color={theme.primary} style={{ marginRight: 6 }} />
                     <Text style={styles.statLabel}>Route Type</Text>
                   </View>
-                  <TextInput
-                    ref={routeTypeRef}
-                    style={styles.statInput}
-                    placeholder="e.g. Loop, One-way"
-                    placeholderTextColor={theme.muted}
-                    value={gpxStats.routeType}
-                    onChangeText={(t) => setGpxStats((s: any) => ({ ...s, routeType: t }))}
-                    returnKeyType="done"
-                    onSubmitEditing={() => Keyboard.dismiss()}
-                    onFocus={() => {
-                      setTimeout(() => {
-                        scrollRef.current?.scrollTo({ y: 600, animated: true });
-                      }, 100);
-                    }}
-                  />
+                  <TouchableOpacity
+                    style={[styles.statInput, { justifyContent: 'center' }]}
+                    onPress={() => setShowRouteTypePicker(true)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={{ color: gpxStats.routeType ? theme.text : theme.muted, fontWeight: gpxStats.routeType ? '600' : '400' }}>
+                      {gpxStats.routeType || 'Select route type'}
+                    </Text>
+                  </TouchableOpacity>
                 </View>
+                </>
+                )}
               </View>
             </>
           )}
@@ -1600,6 +1733,112 @@ const CreateGameScreen = () => {
             </Modal>
           )}
 
+          {/* Difficulty Picker Modal (iOS only) */}
+          {Platform.OS === 'ios' && (
+            <Modal transparent animationType="slide" visible={showDifficultyPicker} onRequestClose={() => setShowDifficultyPicker(false)}>
+              <View style={styles.pickerModal}>
+                <View style={styles.rollerContainer}>
+                  <View style={styles.rollerHeader}>
+                    <TouchableOpacity onPress={() => setShowDifficultyPicker(false)}>
+                      <Text style={styles.rollerCancel}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setShowDifficultyPicker(false)}>
+                      <Text style={styles.rollerDone}>Done</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <Picker
+                    selectedValue={gpxStats.difficulty}
+                    onValueChange={(value) => setGpxStats((s: any) => ({ ...s, difficulty: value }))}
+                    style={styles.rollerPicker}
+                    itemStyle={{ fontSize: 22 }}
+                  >
+                    <Picker.Item label="Select difficulty" value="" />
+                    <Picker.Item label="Easy" value="Easy" />
+                    <Picker.Item label="Moderate" value="Moderate" />
+                    <Picker.Item label="Hard" value="Hard" />
+                    <Picker.Item label="Very Hard" value="Very Hard" />
+                    <Picker.Item label="Expert" value="Expert" />
+                  </Picker>
+                </View>
+              </View>
+            </Modal>
+          )}
+          {Platform.OS === 'android' && showDifficultyPicker && (
+            <Modal transparent animationType="slide" visible={showDifficultyPicker} onRequestClose={() => setShowDifficultyPicker(false)}>
+              <View style={styles.pickerModal}>
+                <View style={styles.rollerContainer}>
+                  <Picker
+                    selectedValue={gpxStats.difficulty}
+                    onValueChange={(value) => {
+                      setGpxStats((s: any) => ({ ...s, difficulty: value }));
+                      setShowDifficultyPicker(false);
+                    }}
+                    style={{ width: '100%' }}
+                    itemStyle={{ fontSize: 22 }}
+                  >
+                    <Picker.Item label="Select difficulty" value="" />
+                    <Picker.Item label="Easy" value="Easy" />
+                    <Picker.Item label="Moderate" value="Moderate" />
+                    <Picker.Item label="Hard" value="Hard" />
+                    <Picker.Item label="Very Hard" value="Very Hard" />
+                    <Picker.Item label="Expert" value="Expert" />
+                  </Picker>
+                </View>
+              </View>
+            </Modal>
+          )}
+
+          {/* Route Type Picker Modal (iOS only) */}
+          {Platform.OS === 'ios' && (
+            <Modal transparent animationType="slide" visible={showRouteTypePicker} onRequestClose={() => setShowRouteTypePicker(false)}>
+              <View style={styles.pickerModal}>
+                <View style={styles.rollerContainer}>
+                  <View style={styles.rollerHeader}>
+                    <TouchableOpacity onPress={() => setShowRouteTypePicker(false)}>
+                      <Text style={styles.rollerCancel}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setShowRouteTypePicker(false)}>
+                      <Text style={styles.rollerDone}>Done</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <Picker
+                    selectedValue={gpxStats.routeType}
+                    onValueChange={(value) => setGpxStats((s: any) => ({ ...s, routeType: value }))}
+                    style={styles.rollerPicker}
+                    itemStyle={{ fontSize: 22 }}
+                  >
+                    <Picker.Item label="Select route type" value="" />
+                    <Picker.Item label="Loop" value="Loop" />
+                    <Picker.Item label="Out and back" value="Out and back" />
+                    <Picker.Item label="Point to point" value="Point to point" />
+                  </Picker>
+                </View>
+              </View>
+            </Modal>
+          )}
+          {Platform.OS === 'android' && showRouteTypePicker && (
+            <Modal transparent animationType="slide" visible={showRouteTypePicker} onRequestClose={() => setShowRouteTypePicker(false)}>
+              <View style={styles.pickerModal}>
+                <View style={styles.rollerContainer}>
+                  <Picker
+                    selectedValue={gpxStats.routeType}
+                    onValueChange={(value) => {
+                      setGpxStats((s: any) => ({ ...s, routeType: value }));
+                      setShowRouteTypePicker(false);
+                    }}
+                    style={{ width: '100%' }}
+                    itemStyle={{ fontSize: 22 }}
+                  >
+                    <Picker.Item label="Select route type" value="" />
+                    <Picker.Item label="Loop" value="Loop" />
+                    <Picker.Item label="Out and back" value="Out and back" />
+                    <Picker.Item label="Point to point" value="Point to point" />
+                  </Picker>
+                </View>
+              </View>
+            </Modal>
+          )}
+
           <TouchableOpacity
             style={[
               styles.createButton,
@@ -1615,6 +1854,233 @@ const CreateGameScreen = () => {
           </TouchableOpacity>
           </ScrollView>
         </Animated.View>
+
+        {/* Route Drawing Modal */}
+        {showRouteDrawer && selectedCoords && (
+          <Modal
+            visible={showRouteDrawer}
+            animationType="slide"
+            onRequestClose={() => setShowRouteDrawer(false)}
+          >
+            <View style={{ flex: 1, backgroundColor: theme.background, paddingTop: insets.top }}>
+              {/* Header */}
+              <View style={{ backgroundColor: theme.card, borderBottomWidth: 1, borderBottomColor: theme.border }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12 }}>
+                  <TouchableOpacity onPress={() => setShowRouteDrawer(false)}>
+                    <Ionicons name="close" size={28} color={theme.text} />
+                  </TouchableOpacity>
+                  <Text style={{ fontSize: 18, fontWeight: 'bold', color: theme.primary }}>Draw Your Route</Text>
+                  <TouchableOpacity onPress={() => {
+                    if (drawnRoute.length < 2) {
+                      Alert.alert('Route Too Short', 'Please draw a route with at least 2 points.');
+                      return;
+                    }
+                    
+                    // Calculate distance and auto-fill
+                    let totalDistance = 0;
+                    for (let i = 1; i < drawnRoute.length; i++) {
+                      totalDistance += calculateDistance(
+                        drawnRoute[i - 1].latitude,
+                        drawnRoute[i - 1].longitude,
+                        drawnRoute[i].latitude,
+                        drawnRoute[i].longitude
+                      );
+                    }
+                    
+                    // Set the distance in gpxStats
+                    setGpxStats((s: any) => ({ ...s, distance: `${totalDistance.toFixed(2)} km` }));
+                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                    setShowRouteDrawer(false);
+                  }}>
+                    <Text style={{ fontSize: 16, fontWeight: 'bold', color: theme.primary }}>Done</Text>
+                  </TouchableOpacity>
+                </View>
+                <Text style={{ paddingHorizontal: 16, paddingBottom: 12, fontSize: 13, color: theme.muted }}>
+                  {isDrawingMode ? 'Drawing mode active - drag your finger to draw the route' : 'Scroll and zoom to explore, then enable drawing mode'}
+                </Text>
+              </View>
+
+              {/* Map */}
+              <MapView
+                style={{ flex: 1 }}
+                initialRegion={{
+                  latitude: selectedCoords.latitude,
+                  longitude: selectedCoords.longitude,
+                  latitudeDelta: 0.01,
+                  longitudeDelta: 0.01,
+                }}
+                scrollEnabled={!isDrawingMode}
+                zoomEnabled={!isDrawingMode}
+                rotateEnabled={!isDrawingMode}
+                pitchEnabled={!isDrawingMode}
+                onPanDrag={isDrawingMode ? (e) => {
+                  const { latitude, longitude } = e.nativeEvent.coordinate;
+                  setDrawnRoute(prev => {
+                    // Avoid adding duplicate points too close together
+                    if (prev.length > 0) {
+                      const last = prev[prev.length - 1];
+                      const distance = Math.sqrt(
+                        Math.pow(latitude - last.latitude, 2) + 
+                        Math.pow(longitude - last.longitude, 2)
+                      );
+                      // Only add point if it's far enough from the last one
+                      if (distance < 0.0001) return prev;
+                    }
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    return [...prev, { latitude, longitude }];
+                  });
+                } : undefined}
+                userInterfaceStyle={theme.isDark ? 'dark' : 'light'}
+              >
+                {/* Meeting Point Marker */}
+                <Marker
+                  coordinate={selectedCoords}
+                  title="Meeting Point"
+                  pinColor={theme.primary}
+                >
+                  <View style={{ backgroundColor: theme.primary, width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: '#fff' }}>
+                    <Ionicons name="location" size={24} color="#fff" />
+                  </View>
+                </Marker>
+
+                {/* Drawn Route Polyline */}
+                {drawnRoute.length > 1 && (
+                  <Polyline
+                    coordinates={drawnRoute}
+                    strokeColor={theme.primary}
+                    strokeWidth={4}
+                  />
+                )}
+
+                {/* Start and End Markers */}
+                {drawnRoute.length > 0 && (
+                  <Marker
+                    coordinate={drawnRoute[0]}
+                    anchor={{ x: 0.5, y: 0.5 }}
+                  >
+                    <View style={{ backgroundColor: '#4CAF50', width: 24, height: 24, borderRadius: 12, borderWidth: 3, borderColor: '#fff', alignItems: 'center', justifyContent: 'center' }}>
+                      <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>S</Text>
+                    </View>
+                  </Marker>
+                )}
+                {drawnRoute.length > 1 && (
+                  <Marker
+                    coordinate={drawnRoute[drawnRoute.length - 1]}
+                    anchor={{ x: 0.5, y: 0.5 }}
+                  >
+                    <View style={{ backgroundColor: '#f44336', width: 24, height: 24, borderRadius: 12, borderWidth: 3, borderColor: '#fff', alignItems: 'center', justifyContent: 'center' }}>
+                      <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>E</Text>
+                    </View>
+                  </Marker>
+                )}
+              </MapView>
+
+              {/* Bottom Controls */}
+              <View style={{ backgroundColor: theme.card, borderTopWidth: 1, borderTopColor: theme.border, padding: 16, paddingBottom: Math.max(16, insets.bottom) }}>
+                {/* Route Distance Display */}
+                {drawnRoute.length > 1 && (
+                  <View style={{ backgroundColor: theme.background, padding: 12, borderRadius: 10, marginBottom: 12, borderWidth: 1, borderColor: theme.primary }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                      <Ionicons name="trail-sign" size={18} color={theme.primary} />
+                      <Text style={{ color: theme.text, fontWeight: 'bold', fontSize: 16 }}>
+                        Route Distance: {(() => {
+                          let totalDistance = 0;
+                          for (let i = 1; i < drawnRoute.length; i++) {
+                            totalDistance += calculateDistance(
+                              drawnRoute[i - 1].latitude,
+                              drawnRoute[i - 1].longitude,
+                              drawnRoute[i].latitude,
+                              drawnRoute[i].longitude
+                            );
+                          }
+                          return `${totalDistance.toFixed(2)} km`;
+                        })()}
+                      </Text>
+                    </View>
+                  </View>
+                )}
+                
+                {/* Drawing Mode Toggle */}
+                <TouchableOpacity
+                  style={{
+                    backgroundColor: isDrawingMode ? theme.primary : theme.card,
+                    paddingVertical: 14,
+                    borderRadius: 10,
+                    alignItems: 'center',
+                    marginBottom: 12,
+                    borderWidth: 2,
+                    borderColor: theme.primary,
+                    flexDirection: 'row',
+                    justifyContent: 'center',
+                    gap: 8,
+                  }}
+                  onPress={() => {
+                    setIsDrawingMode(!isDrawingMode);
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                  }}
+                >
+                  <Ionicons name={isDrawingMode ? "lock-closed" : "lock-open"} size={20} color={isDrawingMode ? '#fff' : theme.primary} />
+                  <Text style={{ color: isDrawingMode ? '#fff' : theme.primary, fontWeight: 'bold', fontSize: 16 }}>
+                    {isDrawingMode ? 'Drawing Mode ON' : 'Enable Drawing'}
+                  </Text>
+                </TouchableOpacity>
+                
+                <View style={{ flexDirection: 'row', gap: 12 }}>
+                  <TouchableOpacity
+                    style={{
+                      flex: 1,
+                      backgroundColor: theme.danger,
+                      paddingVertical: 14,
+                      borderRadius: 10,
+                      alignItems: 'center',
+                      opacity: drawnRoute.length === 0 ? 0.5 : 1,
+                    }}
+                    onPress={() => {
+                      if (drawnRoute.length > 0) {
+                        Alert.alert(
+                          'Clear Route',
+                          'Are you sure you want to clear the entire route?',
+                          [
+                            { text: 'Cancel', style: 'cancel' },
+                            { text: 'Clear', style: 'destructive', onPress: () => setDrawnRoute([]) },
+                          ]
+                        );
+                      }
+                    }}
+                    disabled={drawnRoute.length === 0}
+                  >
+                    <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 16 }}>Clear</Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity
+                    style={{
+                      flex: 1,
+                      backgroundColor: drawnRoute.length > 0 ? theme.primary : theme.muted,
+                      paddingVertical: 14,
+                      borderRadius: 10,
+                      alignItems: 'center',
+                      opacity: drawnRoute.length === 0 ? 0.5 : 1,
+                    }}
+                    onPress={() => {
+                      if (drawnRoute.length > 0) {
+                        const undoCount = Math.min(50, Math.floor(drawnRoute.length / 10));
+                        setDrawnRoute(prev => prev.slice(0, -undoCount));
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                      }
+                    }}
+                    disabled={drawnRoute.length === 0}
+                  >
+                    <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 16 }}>Undo</Text>
+                  </TouchableOpacity>
+                </View>
+                
+                <Text style={{ textAlign: 'center', marginTop: 12, color: theme.muted, fontSize: 13 }}>
+                  {drawnRoute.length === 0 ? 'Enable drawing mode to start' : `${drawnRoute.length} point${drawnRoute.length === 1 ? '' : 's'} drawn`}
+                </Text>
+              </View>
+            </View>
+          </Modal>
+        )}
     </SafeAreaView>
   );
 };
@@ -1680,6 +2146,8 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
     fontWeight: '500',
   },
   mapButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: t.primary,
     paddingVertical: 8,
     paddingHorizontal: 16,
