@@ -4,7 +4,7 @@ export default ({ config }: { config: any }) => ({
   ...config,
   name: "SportsPal",
   slug: "SportsPal4",
-  owner: "SportsPal",
+  owner: "sportspal",
   scheme: "sportspal", // 👈 Add this line
   version: "1.0.4",
   orientation: "portrait",
