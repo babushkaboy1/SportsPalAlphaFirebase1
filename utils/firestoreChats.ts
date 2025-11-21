@@ -638,6 +638,12 @@ export async function createCustomGroupChat(
       lastMessageSenderId: createdBy,
     });
     
+    // Add welcome system message
+    try {
+      const groupTitle = title || 'Group Chat';
+      await addSystemMessage(ref.id, `Welcome to ${groupTitle}! 👋`);
+    } catch {}
+    
     return { id: ref.id };
   } catch (e) {
     throw e;

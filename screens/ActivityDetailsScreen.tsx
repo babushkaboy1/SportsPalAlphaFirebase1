@@ -16,6 +16,7 @@ import {
   Animated,
   ActivityIndicator,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -33,6 +34,7 @@ import { ActivityIcon } from '../components/ActivityIcons';
 import { sendActivityInvites } from '../utils/firestoreInvites';
 import { useTheme } from '../context/ThemeContext';
 import { shareActivity } from '../utils/deepLinking';
+import { useFocusEffect } from '@react-navigation/native';
 
 // Slight darken helper for hex colors (fallback to original on parse failure)
 function darkenHex(color: string, amount = 0.12): string {
@@ -75,6 +77,32 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshLocked, setRefreshLocked] = useState(false);
   const [isAddedToCalendar, setIsAddedToCalendar] = useState(false);
+  
+  // Load calendar status from AsyncStorage on mount and when screen comes into focus
+  const loadCalendarStatus = async () => {
+    try {
+      const stored = await AsyncStorage.getItem('calendarStatus');
+      if (stored) {
+        const calendarStatus = JSON.parse(stored);
+        setIsAddedToCalendar(!!calendarStatus[activityId]);
+      } else {
+        setIsAddedToCalendar(false);
+      }
+    } catch (error) {
+      console.error('Failed to load calendar status:', error);
+    }
+  };
+  
+  useEffect(() => {
+    loadCalendarStatus();
+  }, [activityId]);
+  
+  // Reload calendar status when screen comes into focus (syncs with CalendarScreen)
+  useFocusEffect(
+    React.useCallback(() => {
+      loadCalendarStatus();
+    }, [activityId])
+  );
   
   // GPX viewer modal state
   const [showGpxModal, setShowGpxModal] = useState(false);
@@ -372,6 +400,19 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
       // Only refetch if we didn't navigate (activity wasn't deleted)
       if (!didNavigate) {
         await fetchAndSetJoinedUsers();
+        
+        // If user left the activity, clear calendar status from AsyncStorage
+        if (wasJoined) {
+          try {
+            const stored = await AsyncStorage.getItem('calendarStatus');
+            const calendarStatus = stored ? JSON.parse(stored) : {};
+            calendarStatus[activity.id] = false;
+            await AsyncStorage.setItem('calendarStatus', JSON.stringify(calendarStatus));
+            setIsAddedToCalendar(false);
+          } catch (error) {
+            console.error('Failed to clear calendar status:', error);
+          }
+        }
       }
     } catch (error) {
       console.warn('Error in handleJoinLeave:', error);
@@ -562,8 +603,16 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
 
       await Calendar.createEventAsync(calendarId, eventDetails);
 
-      // Only update local state - don't write to Firebase
+      // Update local state and persist to AsyncStorage
       setIsAddedToCalendar(true);
+      try {
+        const stored = await AsyncStorage.getItem('calendarStatus');
+        const calendarStatus = stored ? JSON.parse(stored) : {};
+        calendarStatus[activity.id] = true;
+        await AsyncStorage.setItem('calendarStatus', JSON.stringify(calendarStatus));
+      } catch (error) {
+        console.error('Failed to save calendar status:', error);
+      }
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Alert.alert(
         'Added to Calendar! 📅',
@@ -695,6 +744,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
               }}
               showsUserLocation={!!userLocation}
               showsMyLocationButton={false}
+              userInterfaceStyle={theme.isDark ? 'dark' : 'light'}
             >
               <Marker
                 coordinate={{ latitude: activity.latitude, longitude: activity.longitude }}
@@ -1152,6 +1202,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                     latitudeDelta: 0.05,
                     longitudeDelta: 0.05,
                   }}
+                  userInterfaceStyle={theme.isDark ? 'dark' : 'light'}
                 >
                   {/* OpenStreetMap tiles for the GPX modal only */}
                   <UrlTile

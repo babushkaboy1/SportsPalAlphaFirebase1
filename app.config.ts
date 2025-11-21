@@ -4,8 +4,9 @@ export default ({ config }: { config: any }) => ({
   ...config,
   name: "SportsPal",
   slug: "SportsPal4",
+  owner: "SportsPal",
   scheme: "sportspal", // 👈 Add this line
-  version: "1.0.3",
+  version: "1.0.4",
   orientation: "portrait",
   // Updated app icon to new turquoise orb asset
   icon: "./assets/app-icon.png",
@@ -153,5 +154,11 @@ export default ({ config }: { config: any }) => ({
     eas: {
       projectId: "c08f930c-531d-4919-ad9b-e99408d8edad"
     }
+  },
+  updates: {
+    url: "https://u.expo.dev/c08f930c-531d-4919-ad9b-e99408d8edad"
+  },
+  runtimeVersion: {
+    policy: "appVersion"
   }
 });

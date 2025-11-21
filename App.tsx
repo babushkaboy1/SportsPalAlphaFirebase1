@@ -334,7 +334,8 @@ function AppInner() {
     // Always fetch the initial URL once; store if we cannot navigate yet
     Linking.getInitialURL().then((url) => {
       if (url) {
-        if (user && navRef.isReady()) {
+        console.log('📱 Initial deep link URL:', url);
+        if (user && navRef.isReady() && hasProfile !== null && hasProfile !== false) {
           handleDeepLinkNavigation(url);
         } else {
           pendingDeepLinkRef.current = url;
@@ -344,14 +345,16 @@ function AppInner() {
 
     // Listener for subsequent URLs while app is alive
     const subscription = Linking.addEventListener('url', ({ url }) => {
-      if (user && navRef.isReady()) {
-        handleDeepLinkNavigation(url);
+      console.log('📱 Deep link received:', url);
+      if (user && navRef.isReady() && hasProfile !== null && hasProfile !== false) {
+        // Small delay to ensure navigation state is settled
+        setTimeout(() => handleDeepLinkNavigation(url), 100);
       } else {
         pendingDeepLinkRef.current = url; // overwrite with most recent
       }
     });
     return () => subscription.remove();
-  }, [user]);
+  }, [user, hasProfile]);
 
   // When auth + nav are ready AND user has/creates profile, consume pending deep link
   useEffect(() => {
@@ -359,33 +362,62 @@ function AppInner() {
     if (!user) return;
     if (!navRef.isReady()) return;
     if (hasProfile === null) return; // still checking profile
-    // Navigate now
+    if (hasProfile === false) return; // user needs to create profile first
+    
+    // Navigate now with a small delay to ensure navigation is fully ready
     const url = pendingDeepLinkRef.current;
     pendingDeepLinkRef.current = null;
-    handleDeepLinkNavigation(url);
+    console.log('📱 Processing pending deep link:', url);
+    setTimeout(() => handleDeepLinkNavigation(url), 300);
   }, [user, navReady, hasProfile]);
 
   const handleDeepLinkNavigation = (url: string) => {
     const { type, id } = parseDeepLink(url);
     
-    if (!id || !navRef.isReady()) return;
+    console.log('🔗 Deep link parsed:', { type, id, url });
+    
+    if (!id || !navRef.isReady()) {
+      console.log('❌ Deep link navigation blocked: missing id or nav not ready');
+      return;
+    }
 
     try {
       switch (type) {
         case 'activity':
-          (navRef as any).navigate('ActivityDetails', { activityId: id });
+          console.log('✅ Navigating to ActivityDetails:', id);
+          // Navigate to MainTabs first to ensure proper stack, then to activity
+          if ((navRef as any).getCurrentRoute()?.name !== 'MainTabs') {
+            (navRef as any).navigate('MainTabs', { screen: 'Discover' });
+          }
+          setTimeout(() => {
+            (navRef as any).navigate('ActivityDetails', { activityId: id });
+          }, 100);
           break;
         case 'profile':
-          (navRef as any).navigate('UserProfile', { userId: id });
+          console.log('✅ Navigating to UserProfile:', id);
+          // Navigate to MainTabs first to ensure proper stack
+          if ((navRef as any).getCurrentRoute()?.name !== 'MainTabs') {
+            (navRef as any).navigate('MainTabs', { screen: 'Profile' });
+          }
+          setTimeout(() => {
+            (navRef as any).navigate('UserProfile', { userId: id });
+          }, 100);
           break;
         case 'chat':
-          (navRef as any).navigate('ChatDetail', { chatId: id });
+          console.log('✅ Navigating to ChatDetail:', id);
+          // Navigate to MainTabs first to ensure proper stack
+          if ((navRef as any).getCurrentRoute()?.name !== 'MainTabs') {
+            (navRef as any).navigate('MainTabs', { screen: 'Inbox' });
+          }
+          setTimeout(() => {
+            (navRef as any).navigate('ChatDetail', { chatId: id });
+          }, 100);
           break;
         default:
-          console.log('Unknown deep link type:', type);
+          console.log('❌ Unknown deep link type:', type);
       }
     } catch (error) {
-      console.error('Error navigating to deep link:', error);
+      console.error('❌ Error navigating to deep link:', error);
     }
   };
 

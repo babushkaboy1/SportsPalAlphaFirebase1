@@ -146,6 +146,10 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
   const [isMapIOSDatePickerVisible, setMapIOSDatePickerVisible] = useState(false);
   const [mapTempDate, setMapTempDate] = useState<Date | null>(null);
   const [showJoinedOnly, setShowJoinedOnly] = useState(true);
+  const [mapSearchQuery, setMapSearchQuery] = useState('');
+  const [locationSuggestions, setLocationSuggestions] = useState<Array<{ name: string; lat: number; lon: number }>>([]);
+  const [isSearchingLocation, setIsSearchingLocation] = useState(false);
+  const locationSearchDebounceRef = useRef<number | null>(null);
 
   // Load discovery range from AsyncStorage on mount and on screen focus
   useEffect(() => {
@@ -486,6 +490,16 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
       }
     });
     
+    // Apply search filter
+    if (mapSearchQuery.trim()) {
+      const q = mapSearchQuery.toLowerCase();
+      filtered = filtered.filter(a =>
+        a.activity.toLowerCase().includes(q) ||
+        a.creator.toLowerCase().includes(q) ||
+        (a.location && a.location.toLowerCase().includes(q))
+      );
+    }
+    
     // Apply sport filter
     if (mapSelectedFilter !== 'All') {
       filtered = filtered.filter(a => a.activity === mapSelectedFilter);
@@ -526,15 +540,15 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
     // When ON, show all activities (both joined and non-joined)
     
     return filtered;
-  }, [allActivities, mapSelectedFilter, mapSelectedDate, showJoinedOnly, isActivityJoined]);
+  }, [allActivities, mapSelectedFilter, mapSelectedDate, showJoinedOnly, isActivityJoined, mapSearchQuery]);
 
-  // Refresh map activities when activities list changes or region changes (if map open)
+  // Refresh map activities when activities list changes or region/filters change (if map open)
   // Only update if not currently loading to prevent infinite refresh loop
   useEffect(() => {
     if (showMap && mapRegion && !mapLoading) {
       setMapActivities(filterForRegion(mapRegion));
     }
-  }, [showMap, mapRegion, filterForRegion]);
+  }, [showMap, mapRegion, filterForRegion, mapSelectedFilter, mapSelectedDate, showJoinedOnly, mapSearchQuery]);
   
   // Separate effect for initial load when opening map
   useEffect(() => {
@@ -548,11 +562,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
     setMapLoading(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     try {
-      // Re-fetch all activities
-      await reloadAllActivities(true);
-      // Small delay to ensure state updates
-      await new Promise(resolve => setTimeout(resolve, 100));
-      // Filter activities for the current map region
+      // Filter activities for the current map region from existing data
       const filtered = filterForRegion(mapRegion);
       setMapActivities(filtered);
       setRegionDirty(false);
@@ -561,7 +571,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
     } finally {
       setMapLoading(false);
     }
-  }, [mapRegion, mapLoading, reloadAllActivities, filterForRegion]);
+  }, [mapRegion, mapLoading, filterForRegion]);
 
   // Debounce raw search input -> debouncedSearchQuery
   useEffect(() => {
@@ -580,6 +590,70 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
       }
     };
   }, [rawSearchQuery]);
+
+  // Location search with debouncing
+  useEffect(() => {
+    if (locationSearchDebounceRef.current) {
+      clearTimeout(locationSearchDebounceRef.current as any);
+      locationSearchDebounceRef.current = null;
+    }
+
+    if (!mapSearchQuery.trim()) {
+      setLocationSuggestions([]);
+      return;
+    }
+
+    // @ts-ignore - window.setTimeout returns number in RN env
+    locationSearchDebounceRef.current = setTimeout(async () => {
+      setIsSearchingLocation(true);
+      try {
+        // Using Nominatim (OpenStreetMap) geocoding API - free and no API key required
+        const response = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(mapSearchQuery)}&limit=5`,
+          {
+            headers: {
+              'User-Agent': 'SportsPal/1.0',
+            },
+          }
+        );
+        const data = await response.json();
+        const suggestions = data.map((item: any) => ({
+          name: item.display_name,
+          lat: parseFloat(item.lat),
+          lon: parseFloat(item.lon),
+        }));
+        setLocationSuggestions(suggestions);
+      } catch (error) {
+        console.error('Location search error:', error);
+        setLocationSuggestions([]);
+      } finally {
+        setIsSearchingLocation(false);
+      }
+    }, DEBOUNCE_MS) as unknown as number;
+
+    return () => {
+      if (locationSearchDebounceRef.current) {
+        clearTimeout(locationSearchDebounceRef.current as any);
+        locationSearchDebounceRef.current = null;
+      }
+    };
+  }, [mapSearchQuery]);
+
+  const handleLocationSelect = useCallback((lat: number, lon: number) => {
+    if (mapRef.current) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      const newRegion = {
+        latitude: lat,
+        longitude: lon,
+        latitudeDelta: 0.15,
+        longitudeDelta: 0.15,
+      };
+      setMapRegion(newRegion);
+      mapRef.current.animateToRegion(newRegion, 500);
+      setLocationSuggestions([]);
+      setMapSearchQuery('');
+    }
+  }, []);
 
   const ActivityCard = React.memo(({ item }: { item: Activity }) => {
     const distance = useMemo(() => {
@@ -768,6 +842,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
               style={[styles.sortButton, isSortingByDistance && styles.activeButton]}
               onPress={toggleSortByDistance}
             >
+              <Ionicons name="navigate" size={14} color={isSortingByDistance ? '#fff' : theme.primary} style={{ marginRight: 6 }} />
               <Text style={[
                 styles.sortButtonText,
                 isSortingByDistance && { color: '#fff' },
@@ -785,6 +860,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
                 }
               }}
             >
+              <Ionicons name="calendar" size={14} color={theme.primary} style={{ marginRight: 6 }} />
               <Text style={styles.sortButtonText}>
                 {selectedDate ? selectedDate.toDateString() : 'Select Date'}
               </Text>
@@ -798,7 +874,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
                   await loadActivities();
                 }}
               >
-                <Text style={styles.clearButtonText}>Clear</Text>
+                <Ionicons name="close" size={16} color={theme.text} />
               </TouchableOpacity>
             )}
           </Pressable>
@@ -810,6 +886,15 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
                 style={[styles.filterChip, selectedFilter === option && styles.filterChipActive]}
                 onPress={() => setSelectedFilter(option)}
               >
+                {option !== 'All' && (
+                  <View style={{ marginRight: 6 }}>
+                    <ActivityIcon 
+                      activity={option} 
+                      size={14} 
+                      color={selectedFilter === option ? '#fff' : theme.primary}
+                    />
+                  </View>
+                )}
                 <Text style={[
                   styles.filterChipText,
                   selectedFilter === option && { color: '#fff' },
@@ -824,27 +909,142 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
           <View style={styles.mapContainer}>
             {/* Map Filters */}
             <View style={styles.mapFiltersContainer}>
+              {/* Search Bar with Suggestions */}
+              <View>
+                <View style={styles.mapSearchContainer}>
+                  <Ionicons name="search" size={18} color={theme.primary} />
+                  <TextInput
+                    style={styles.mapSearchInput}
+                    placeholder="Search cities, countries..."
+                    placeholderTextColor={theme.muted}
+                    value={mapSearchQuery}
+                    onChangeText={setMapSearchQuery}
+                    returnKeyType="search"
+                    onSubmitEditing={() => {
+                      if (locationSuggestions.length > 0) {
+                        handleLocationSelect(locationSuggestions[0].lat, locationSuggestions[0].lon);
+                      }
+                    }}
+                  />
+                  {isSearchingLocation && (
+                    <ActivityIndicator size="small" color={theme.primary} style={{ marginRight: 4 }} />
+                  )}
+                  {mapSearchQuery.length > 0 && !isSearchingLocation && (
+                    <TouchableOpacity
+                      onPress={() => {
+                        setMapSearchQuery('');
+                        setLocationSuggestions([]);
+                      }}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <Ionicons name="close-circle" size={20} color={theme.primary} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+                
+                {/* Location Suggestions Dropdown */}
+                {locationSuggestions.length > 0 && (
+                  <View style={styles.locationSuggestionsContainer}>
+                    <ScrollView 
+                      style={styles.locationSuggestionsList}
+                      keyboardShouldPersistTaps="handled"
+                      nestedScrollEnabled
+                    >
+                      {locationSuggestions.map((suggestion, index) => (
+                        <TouchableOpacity
+                          key={index}
+                          style={styles.locationSuggestionItem}
+                          onPress={() => handleLocationSelect(suggestion.lat, suggestion.lon)}
+                          activeOpacity={0.7}
+                        >
+                          <Ionicons name="location" size={16} color={theme.primary} style={{ marginRight: 8 }} />
+                          <Text style={styles.locationSuggestionText} numberOfLines={1}>
+                            {suggestion.name}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                )}
+              </View>
+
+              {/* Buttons Row */}
+              <View style={styles.mapSortButtons}>
+                <TouchableOpacity
+                  style={[styles.mapSortButton, showJoinedOnly && styles.mapActiveButton]}
+                  onPress={() => {
+                    const newValue = !showJoinedOnly;
+                    setShowJoinedOnly(newValue);
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="checkmark-circle" size={14} color={showJoinedOnly ? '#fff' : theme.primary} style={{ marginRight: 6 }} />
+                  <Text style={[
+                    styles.mapSortButtonText,
+                    showJoinedOnly && { color: '#fff' },
+                  ]}>Joined Activities</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.mapSortButton}
+                  onPress={() => {
+                    if (Platform.OS === 'ios') {
+                      setMapTempDate(mapSelectedDate ?? new Date());
+                      setMapIOSDatePickerVisible(true);
+                    } else {
+                      setMapDatePickerVisible(true);
+                    }
+                  }}
+                >
+                  <Ionicons name="calendar" size={14} color={theme.primary} style={{ marginRight: 6 }} />
+                  <Text style={styles.mapSortButtonText}>
+                    {mapSelectedDate ? mapSelectedDate.toDateString() : 'Select Date'}
+                  </Text>
+                </TouchableOpacity>
+
+                {mapSelectedDate && (
+                  <TouchableOpacity
+                    style={styles.mapClearButton}
+                    onPress={() => {
+                      setMapSelectedDate(null);
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    }}
+                  >
+                    <Ionicons name="close" size={16} color={theme.text} />
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {/* Sport Filters */}
               <ScrollView 
                 horizontal 
                 showsHorizontalScrollIndicator={false} 
-                style={styles.mapFilterScroll}
-                contentContainerStyle={{ paddingHorizontal: 4 }}
+                style={styles.mapFilterWrapper}
               >
-                {orderedSportFilters.map(option => (
+                {orderedSportFilters.map((option, index) => (
                   <TouchableOpacity
                     key={option}
                     style={[
                       styles.mapFilterChip,
                       mapSelectedFilter === option && styles.mapFilterChipActive,
+                      index === 0 && { marginLeft: 0 },
+                      index === orderedSportFilters.length - 1 && { marginRight: 15 },
                     ]}
                     onPress={() => {
                       setMapSelectedFilter(option);
                       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                      if (mapRegion) {
-                        // Update filter will trigger useEffect to refresh activities
-                      }
                     }}
                   >
+                    {option !== 'All' && (
+                      <View style={{ marginRight: 6 }}>
+                        <ActivityIcon 
+                          activity={option} 
+                          size={14} 
+                          color={mapSelectedFilter === option ? '#fff' : theme.primary}
+                        />
+                      </View>
+                    )}
                     <Text
                       style={[
                         styles.mapFilterChipText,
@@ -856,66 +1056,6 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
                   </TouchableOpacity>
                 ))}
               </ScrollView>
-              
-              <View style={styles.mapDatePickerRow}>
-                <TouchableOpacity
-                  style={styles.mapDateButton}
-                  onPress={() => {
-                    if (Platform.OS === 'ios') {
-                      setMapTempDate(mapSelectedDate ?? new Date());
-                      setMapIOSDatePickerVisible(true);
-                    } else {
-                      setMapDatePickerVisible(true);
-                    }
-                  }}
-                >
-                  <Ionicons name="calendar-outline" size={16} color={theme.primary} style={{ marginRight: 6 }} />
-                  <Text style={styles.mapDateButtonText}>
-                    {mapSelectedDate ? mapSelectedDate.toLocaleDateString() : 'Select Date'}
-                  </Text>
-                </TouchableOpacity>
-                {mapSelectedDate && (
-                  <TouchableOpacity
-                    style={styles.mapClearDateButton}
-                    onPress={() => {
-                      setMapSelectedDate(null);
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                      if (mapRegion) {
-                        const filtered = filterForRegion(mapRegion);
-                        setMapActivities(filtered);
-                      }
-                    }}
-                  >
-                    <Ionicons name="close" size={18} color={theme.text} />
-                  </TouchableOpacity>
-                )}
-                
-                <TouchableOpacity
-                  style={[
-                    styles.mapJoinedToggle,
-                    showJoinedOnly && styles.mapJoinedToggleActive,
-                  ]}
-                  onPress={() => {
-                    setShowJoinedOnly(!showJoinedOnly);
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    if (mapRegion) {
-                      const filtered = filterForRegion(mapRegion);
-                      setMapActivities(filtered);
-                    }
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons 
-                    name={showJoinedOnly ? "checkmark-circle" : "checkmark-circle-outline"} 
-                    size={20} 
-                    color={showJoinedOnly ? '#fff' : theme.primary} 
-                  />
-                  <Text style={[
-                    styles.mapJoinedToggleText,
-                    showJoinedOnly && { color: '#fff' },
-                  ]}>Joined Activities</Text>
-                </TouchableOpacity>
-              </View>
             </View>
             
             {mapRegion && (
@@ -925,6 +1065,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
                 initialRegion={mapRegion}
                 showsUserLocation={true}
                 showsMyLocationButton={false}
+                userInterfaceStyle={theme.isDark ? 'dark' : 'light'}
                 onRegionChangeComplete={(region) => {
                   setMapRegion(region);
                   setRegionDirty(true);
@@ -941,7 +1082,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
                       <ActivityIcon activity={act.activity} size={20} color={theme.primary} />
                       {isActivityJoined(act.id) && (
                         <View style={styles.markerBadge}>
-                          <Ionicons name="checkmark" size={10} color="#fff" />
+                          <Ionicons name="checkmark" size={10} color={theme.isDark ? '#000' : '#fff'} />
                         </View>
                       )}
                     </View>
@@ -1281,17 +1422,101 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
     alignItems: 'center',
     justifyContent: 'center',
   },
-  mapContainer: { flex: 1, marginHorizontal: 15, borderRadius: 12, overflow: 'hidden', marginBottom: 10 },
+  mapContainer: { flex: 1, borderRadius: 0, overflow: 'hidden', marginBottom: 10 },
   mapFiltersContainer: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     zIndex: 100,
-    paddingHorizontal: 12,
-    paddingTop: 12,
-    paddingBottom: 8,
+    paddingHorizontal: 15,
   },
+  mapSearchContainer: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    backgroundColor: t.card, 
+    borderRadius: 8, 
+    paddingHorizontal: 10, 
+    paddingVertical: 8, 
+    marginBottom: 10 
+  },
+  mapSearchInput: {
+    flex: 1,
+    marginLeft: 8,
+    backgroundColor: 'transparent',
+    borderRadius: 8,
+    paddingVertical: 0,
+    color: t.text,
+    fontSize: 16,
+  },
+  locationSuggestionsContainer: {
+    backgroundColor: t.card,
+    borderRadius: 8,
+    marginBottom: 8,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 4,
+    maxHeight: 200,
+  },
+  locationSuggestionsList: {
+    maxHeight: 200,
+  },
+  locationSuggestionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: t.border,
+  },
+  locationSuggestionText: {
+    flex: 1,
+    color: t.text,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  mapSortButtons: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    marginBottom: 10
+  },
+  mapSortButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 15,
+    backgroundColor: t.card,
+    borderRadius: 5,
+    marginRight: 8,
+  },
+  mapActiveButton: { backgroundColor: t.primary },
+  mapSortButtonText: { color: t.text, fontSize: 14, fontWeight: '500' },
+  mapClearButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: t.danger,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 5,
+    marginLeft: 5,
+  },
+  mapClearButtonText: { color: t.text, fontSize: 14, fontWeight: '500' },
+  mapFilterWrapper: { 
+    flexDirection: 'row',
+    marginVertical: 10,
+  },
+  mapFilterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 15,
+    backgroundColor: t.card,
+    borderRadius: 20,
+    marginRight: 8,
+  },
+  mapFilterChipActive: { backgroundColor: t.primary },
+  mapFilterChipText: { color: t.text, fontSize: 14, fontWeight: '500' },
   mapDatePickerRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1343,24 +1568,6 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
   },
   mapFilterScroll: {
     maxHeight: 42,
-  },
-  mapFilterChip: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    backgroundColor: t.card,
-    borderRadius: 16,
-    marginRight: 6,
-    borderWidth: 1,
-    borderColor: t.border,
-  },
-  mapFilterChipActive: {
-    backgroundColor: t.primary,
-    borderColor: t.primary,
-  },
-  mapFilterChipText: {
-    color: t.text,
-    fontSize: 13,
-    fontWeight: '500',
   },
   map: { flex: 1 },
   markerInner: { 
@@ -1543,6 +1750,8 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
   },
   sortButtons: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
   sortButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingVertical: 8,
     paddingHorizontal: 15,
     backgroundColor: t.card,
@@ -1552,6 +1761,8 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
   activeButton: { backgroundColor: t.primary },
   sortButtonText: { color: t.text, fontSize: 14, fontWeight: '500' },
   clearButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: t.danger,
     paddingVertical: 5,
     paddingHorizontal: 10,
@@ -1562,6 +1773,8 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
 
   filterWrapper: { flexDirection: 'row', marginVertical: 10 },
   filterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingVertical: 8,
     paddingHorizontal: 15,
     backgroundColor: t.card,

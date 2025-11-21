@@ -28,8 +28,7 @@ test
 tests
 docs
 coverage/
-.env
-.env.*
+# Note: .env files are NOT ignored - they're generated during build by scripts/generate-env.js
 
 # Miscellaneous
 *.log

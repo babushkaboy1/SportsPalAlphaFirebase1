@@ -41,6 +41,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Constants from 'expo-constants';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Updates from 'expo-updates';
 
 type SettingsScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Settings'>;
 
@@ -54,6 +55,11 @@ const SettingsScreen: React.FC = () => {
   // State
   const [pushEnabled, setPushEnabled] = useState(true);
   const [discoveryRange, setDiscoveryRange] = useState(70); // km
+  
+  // Update checker state
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [isDownloadingUpdate, setIsDownloadingUpdate] = useState(false);
 
   const [confirmSignOutVisible, setConfirmSignOutVisible] = useState(false);
   const [themeModalVisible, setThemeModalVisible] = useState(false);
@@ -313,14 +319,82 @@ const SettingsScreen: React.FC = () => {
 
   const handleRateApp = () => {
     const storeUrl = Platform.select({
-      ios: 'https://apps.apple.com/app/id123456789', // TODO: Replace with actual App Store ID
-      android: 'https://play.google.com/store/apps/details?id=com.sportspal', // TODO: Replace with actual package name
+      ios: 'https://apps.apple.com/app/id6747342752?action=write-review', // Opens directly to write review
+      android: 'https://play.google.com/store/apps/details?id=com.sportspal.app', // Android package name
     });
 
     if (storeUrl) {
       Linking.openURL(storeUrl).catch(() => {
         Alert.alert('Error', 'Could not open store. Please search for SportsPal in your app store.');
       });
+    }
+  };
+
+  const handleCheckForUpdates = async () => {
+    // Only works in production builds, not in development
+    if (__DEV__) {
+      Alert.alert('Development Mode', 'Update checks only work in production builds from EAS.');
+      return;
+    }
+
+    try {
+      setIsCheckingUpdate(true);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+      const update = await Updates.checkForUpdateAsync();
+
+      if (update.isAvailable) {
+        setUpdateAvailable(true);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        Alert.alert(
+          'Update Available! 🎉',
+          'A new version of SportsPal is ready to download.',
+          [
+            { text: 'Later', style: 'cancel' },
+            {
+              text: 'Download Now',
+              onPress: handleDownloadUpdate,
+            },
+          ]
+        );
+      } else {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        Alert.alert('You\'re Up to Date! ✅', 'You\'re using the latest version of SportsPal.');
+        setUpdateAvailable(false);
+      }
+    } catch (error) {
+      console.error('Error checking for updates:', error);
+      Alert.alert('Error', 'Could not check for updates. Please try again later.');
+    } finally {
+      setIsCheckingUpdate(false);
+    }
+  };
+
+  const handleDownloadUpdate = async () => {
+    try {
+      setIsDownloadingUpdate(true);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+      await Updates.fetchUpdateAsync();
+
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert(
+        'Update Downloaded! 🚀',
+        'The update has been downloaded. The app will restart to apply the changes.',
+        [
+          {
+            text: 'Restart Now',
+            onPress: async () => {
+              await Updates.reloadAsync();
+            },
+          },
+        ]
+      );
+    } catch (error) {
+      console.error('Error downloading update:', error);
+      Alert.alert('Error', 'Could not download the update. Please try again later.');
+    } finally {
+      setIsDownloadingUpdate(false);
     }
   };
 
@@ -499,6 +573,13 @@ const SettingsScreen: React.FC = () => {
         <Section title="Support">
           <Row icon="mail-open-outline" label="Contact support" onPress={handleContactSupport} />
           <Row icon="star-outline" label="Rate us" onPress={handleRateApp} />
+          <Row 
+            icon={updateAvailable ? "download-outline" : "refresh-outline"} 
+            label={isCheckingUpdate ? "Checking for updates..." : updateAvailable ? "Update Available" : "Check for updates"}
+            sub={updateAvailable ? "Tap to download and install" : "See if there's a new version"}
+            onPress={updateAvailable ? handleDownloadUpdate : handleCheckForUpdates}
+            loading={isCheckingUpdate || isDownloadingUpdate}
+          />
         </Section>
 
         {/* ABOUT */}
@@ -1027,8 +1108,6 @@ const SettingsScreen: React.FC = () => {
                 
                 <Text style={{ fontWeight: '600' }}>Important:</Text> This Privacy Policy explains how we collect, use, disclose, and protect your information. Some countries give you non-waivable rights. Nothing here limits those.{'\n\n'}
                 
-                <Text style={{ fontWeight: '600' }}>Reality check:</Text> No policy can guarantee disputes never occur, but this notice is designed to minimize risk by being precise, conservative, and transparent.{'\n\n'}
-                
                 <Text style={{ fontWeight: 'bold' }}>Quick Summary (plain language){'\n\n'}</Text>
                 We collect: the info you provide (profile, messages, photos), device/usage data, optional location, and data from sign-in providers.{'\n\n'}
                 We use data to run SportsPal (profiles, discovery, activities, messaging), keep users safe (moderation, anti-abuse), and improve performance/analytics.{'\n\n'}
@@ -1508,15 +1587,16 @@ const Row: React.FC<{
   rightText?: string;
   rightIcon?: keyof typeof Ionicons.glyphMap;
   disabled?: boolean;
+  loading?: boolean;
   onPress?: () => void;
-}> = ({ icon, label, sub, rightText, rightIcon = 'chevron-forward', disabled, onPress }) => {
+}> = ({ icon, label, sub, rightText, rightIcon = 'chevron-forward', disabled, loading, onPress }) => {
   const { theme } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
   return (
   <TouchableOpacity
-    activeOpacity={disabled ? 1 : 0.85}
-    style={[styles.row, disabled && { opacity: 0.6 }]}
-    onPress={disabled ? undefined : onPress}
+    activeOpacity={disabled || loading ? 1 : 0.85}
+    style={[styles.row, (disabled || loading) && { opacity: 0.6 }]}
+    onPress={disabled || loading ? undefined : onPress}
   >
     <View style={styles.rowLeft}>
       {icon && <Ionicons name={icon} size={22} color={theme.primary} style={{ marginRight: 12 }} />}
@@ -1527,7 +1607,11 @@ const Row: React.FC<{
     </View>
     <View style={styles.rowRight}>
       {rightText ? <Text style={styles.rowRightText}>{rightText}</Text> : null}
-      <Ionicons name={rightIcon} size={18} color={theme.muted} />
+      {loading ? (
+        <Text style={[styles.rowRightText, { color: theme.primary }]}>...</Text>
+      ) : (
+        <Ionicons name={rightIcon} size={18} color={theme.muted} />
+      )}
     </View>
   </TouchableOpacity>
 )};

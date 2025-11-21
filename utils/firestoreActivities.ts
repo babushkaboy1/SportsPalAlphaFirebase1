@@ -18,33 +18,50 @@ export const getUserJoinedActivities = async (): Promise<string[]> => {
 
 export const joinActivity = async (activityId: string, userId: string) => {
   const activityRef = doc(db, 'activities', activityId);
+  
+  // Get current activity data
+  const activitySnap = await getDoc(activityRef);
+  const currentJoined = activitySnap.exists() ? (activitySnap.data().joinedUserIds || []) : [];
+  const isFirstToJoin = currentJoined.length === 0;
+  
   await updateDoc(activityRef, {
     joinedUserIds: arrayUnion(userId),
   });
+  
   // Post a system message into the activity chat
   try {
     const chatId = await getOrCreateChatForActivity(activityId, userId);
     if (chatId) {
       const p = await getDoc(doc(db, 'profiles', userId));
       const name = p.exists() ? ((p.data() as any).username || 'Someone') : 'Someone';
-      await addSystemMessage(chatId, `${name} joined the activity`);
+      
+      if (isFirstToJoin) {
+        // Welcome message for the first person joining
+        await addSystemMessage(chatId, `Welcome to this activity! 🎉`);
+      } else {
+        // Regular join message
+        await addSystemMessage(chatId, `${name} joined this activity`);
+      }
     }
   } catch {}
 };
 
 export const leaveActivity = async (activityId: string, userId: string) => {
   const activityRef = doc(db, 'activities', activityId);
-  await updateDoc(activityRef, {
-    joinedUserIds: arrayRemove(userId),
-  });
-  // Remove user from chat participants as well
-  await removeUserFromChat(activityId, userId);
-  // Post a system message into the activity chat
+  
+  // Get username before leaving
   try {
     const p = await getDoc(doc(db, 'profiles', userId));
     const name = p.exists() ? ((p.data() as any).username || 'Someone') : 'Someone';
-    await addSystemMessage(activityId, `${name} left the activity`);
+    await addSystemMessage(activityId, `${name} left this activity`);
   } catch {}
+  
+  await updateDoc(activityRef, {
+    joinedUserIds: arrayRemove(userId),
+  });
+  
+  // Remove user from chat participants as well
+  await removeUserFromChat(activityId, userId);
 };
 
 export const fetchAllActivities = async (): Promise<Activity[]> => {

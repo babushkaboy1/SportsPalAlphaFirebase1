@@ -1,5 +1,6 @@
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // ...existing code...
 
@@ -156,8 +157,44 @@ const CalendarScreen = ({ navigation, route }: any) => {
     })();
   }, []);
 
-  // Calendar status per activity (local state only)
+  // Calendar status per activity (persisted in AsyncStorage)
   const [calendarStatus, setCalendarStatus] = useState<Record<string, boolean>>({});
+  
+  // Load calendar status from AsyncStorage on mount and when screen comes into focus
+  const loadCalendarStatus = async () => {
+    try {
+      const stored = await AsyncStorage.getItem('calendarStatus');
+      if (stored) {
+        setCalendarStatus(JSON.parse(stored));
+      } else {
+        setCalendarStatus({});
+      }
+    } catch (error) {
+      console.error('Failed to load calendar status:', error);
+    }
+  };
+  
+  useEffect(() => {
+    loadCalendarStatus();
+  }, []);
+  
+  // Reload calendar status when screen comes into focus (syncs with ActivityDetailsScreen)
+  useFocusEffect(
+    useCallback(() => {
+      loadCalendarStatus();
+    }, [])
+  );
+  
+  // Save calendar status to AsyncStorage whenever it changes
+  const updateCalendarStatus = async (activityId: string, status: boolean) => {
+    try {
+      const newStatus = { ...calendarStatus, [activityId]: status };
+      setCalendarStatus(newStatus);
+      await AsyncStorage.setItem('calendarStatus', JSON.stringify(newStatus));
+    } catch (error) {
+      console.error('Failed to save calendar status:', error);
+    }
+  };
 
   // Selected date (dd-mm-yyyy)
   const selectedDate = route.params?.selectedDate;
@@ -323,8 +360,8 @@ const CalendarScreen = ({ navigation, route }: any) => {
 
       await ExpoCalendar.createEventAsync(calendarId, eventDetails);
 
-      // Only update local state - don't write to Firebase
-      setCalendarStatus((prev) => ({ ...prev, [activity.id]: true }));
+      // Update local state and persist to AsyncStorage
+      await updateCalendarStatus(activity.id, true);
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Alert.alert(
@@ -439,8 +476,8 @@ const CalendarScreen = ({ navigation, route }: any) => {
                 const handleToggleJoin = async () => {
                   const wasJoined = isJoined;
                   await toggleJoinActivity(item);
-                  // If the user just left, clear local calendar badge
-                  if (wasJoined) setCalendarStatus((prev) => ({ ...prev, [item.id]: false }));
+                  // If the user just left, clear calendar badge from AsyncStorage
+                  if (wasJoined) await updateCalendarStatus(item.id, false);
                 };
 
                 return (

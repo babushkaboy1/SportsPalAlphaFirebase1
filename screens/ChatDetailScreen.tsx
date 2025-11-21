@@ -20,6 +20,7 @@ import {
   TextInput,
   FlatList,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   Image,
   KeyboardAvoidingView,
   Platform,
@@ -84,6 +85,7 @@ type Message = {
   type: 'text' | 'image' | 'system';
   timestamp?: any;
   replyToId?: string;
+  isPending?: boolean; // For optimistic UI
 };
 
 type Profile = {
@@ -231,6 +233,8 @@ const MessageBubble = React.memo<{
   onCopy: () => void;
   onImagePress: () => void;
   onUserPress: (uid: string) => void;
+  onClosePicker: () => void;
+  onReactionsPress: () => void;
   onBubbleMeasured?: (layout: { x: number; y: number; width: number; height: number }) => void;
   theme: any;
   styles: any;
@@ -251,6 +255,8 @@ const MessageBubble = React.memo<{
   onCopy,
   onImagePress,
   onUserPress,
+  onClosePicker,
+  onReactionsPress,
   onBubbleMeasured,
   theme,
   styles,
@@ -390,8 +396,12 @@ const MessageBubble = React.memo<{
                   useNativeDriver: true,
                 }).start();
 
-                // Trigger reply if swiped past threshold
-                if (dx > THRESHOLD) {
+                // Trigger reply based on message ownership
+                // Own messages: swipe left (negative dx)
+                // Other messages: swipe right (positive dx)
+                const shouldTrigger = isOwn ? dx < -THRESHOLD : dx > THRESHOLD;
+                
+                if (shouldTrigger) {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
                   onSwipeReply();
                 }
@@ -426,9 +436,13 @@ const MessageBubble = React.memo<{
                   }
 
                   // Quick swipe detection
+                  // Own messages: swipe left (negative dx)
+                  // Other messages: swipe right (positive dx)
                   if (typeof start === 'number') {
                     const dx = e.nativeEvent.pageX - start;
-                    if (dx > 40) {
+                    const shouldTrigger = isOwn ? dx < -40 : dx > 40;
+                    
+                    if (shouldTrigger) {
                       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
                       onSwipeReply();
                     }
@@ -477,8 +491,8 @@ const MessageBubble = React.memo<{
                   </TouchableOpacity>
                 )}
 
-                {/* Timestamp */}
-                {message.timestamp && (
+                {/* Timestamp or loading indicator */}
+                {message.timestamp ? (
                   <Text style={[
                     styles.timestamp,
                     isOwn && styles.timestampOwn,
@@ -488,14 +502,32 @@ const MessageBubble = React.memo<{
                       minute: '2-digit',
                     })}
                   </Text>
-                )}
+                ) : isOwn && message.isPending ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+                    <ActivityIndicator size="small" color={isOwn ? '#fff' : theme.muted} style={{ marginRight: 4 }} />
+                    <Text style={[
+                      styles.timestamp,
+                      isOwn && styles.timestampOwn,
+                      { fontSize: 11 }
+                    ]}>
+                      Sending...
+                    </Text>
+                  </View>
+                ) : null}
               </Pressable>
             </Animated.View>
           </PanGestureHandler>
 
           {/* Reaction chips */}
           {Object.keys(reactionCounts).length > 0 && (
-            <View style={[styles.reactionChips, { right: 6 }]}>
+            <TouchableOpacity 
+              style={[
+                styles.reactionChips, 
+                isOwn ? { left: 6 } : { right: 6 }
+              ]}
+              onPress={onReactionsPress}
+              activeOpacity={0.7}
+            >
               {Object.entries(reactionCounts).map(([emoji, count]) => (
                 <View key={emoji} style={styles.reactionChip}>
                   <Text style={styles.reactionChipText}>
@@ -503,7 +535,7 @@ const MessageBubble = React.memo<{
                   </Text>
                 </View>
               ))}
-            </View>
+            </TouchableOpacity>
           )}
 
           {/* Reaction picker */}
@@ -552,6 +584,12 @@ const MessageBubble = React.memo<{
                   <Ionicons name="copy-outline" size={18} color={theme.text} />
                 </TouchableOpacity>
               )}
+              <TouchableOpacity
+                onPress={onClosePicker}
+                style={[styles.reactionButton, { paddingHorizontal: 8 }]}
+              >
+                <Ionicons name="close" size={18} color={theme.muted} />
+              </TouchableOpacity>
             </Animated.View>
           )}
         </View>
@@ -640,6 +678,8 @@ const ChatDetailScreen = () => {
   const [toastVisible, setToastVisible] = useState(false);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
+  const [reactionsModalVisible, setReactionsModalVisible] = useState(false);
+  const [selectedMessageReactions, setSelectedMessageReactions] = useState<Array<{ userId: string; emoji: string }>>([]);
 
   // Refs
   const flatListRef = useRef<FlatList>(null);
@@ -1036,7 +1076,11 @@ const ChatDetailScreen = () => {
             chatId,
             20,
             async (latest) => {
-              setMessages(latest as any);
+              // Remove any pending messages when real messages arrive
+              setMessages((prev) => {
+                const nonPending = prev.filter((m) => !m.isPending);
+                return latest as any;
+              });
               markChatRead(chatId);
 
               // ========== UPDATE CACHE WITH NEW MESSAGES ==========
@@ -1311,6 +1355,7 @@ const ChatDetailScreen = () => {
   useEffect(() => {
     const limit = 60;
     const currentIds = new Set(messages.slice(-limit).map((m) => m.id));
+    const myUid = auth.currentUser?.uid;
 
     // Add listeners for new messages
     messages.slice(-limit).forEach((m) => {
@@ -1318,7 +1363,23 @@ const ChatDetailScreen = () => {
         const unsub = listenToReactions(
           chatId,
           m.id,
-          (items) => setReactionsMap((prev) => ({ ...prev, [m.id]: items })),
+          (items) => {
+            setReactionsMap((prev) => ({ ...prev, [m.id]: items }));
+            
+            // Update myReactions based on the reactions
+            if (myUid) {
+              const myReaction = items.find((r) => r.userId === myUid);
+              setMyReactions((prev) => {
+                if (myReaction?.emoji) {
+                  return { ...prev, [m.id]: myReaction.emoji };
+                } else {
+                  const next = { ...prev };
+                  delete next[m.id];
+                  return next;
+                }
+              });
+            }
+          },
           () => {}
         );
         reactionUnsubsRef.current[m.id] = unsub;
@@ -1355,30 +1416,70 @@ const ChatDetailScreen = () => {
   const handleSend = useCallback(async () => {
     if (!auth.currentUser) return;
 
-    // Send images
+    // Send images with optimistic UI
     for (const uri of selectedImages) {
+      // Create optimistic pending message
+      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const pendingMessage: Message = {
+        id: tempId,
+        senderId: auth.currentUser.uid,
+        text: uri,
+        type: 'image',
+        isPending: true,
+      };
+      
+      // Add to messages immediately
+      setMessages((prev) => [...prev, pendingMessage]);
+      setTimeout(() => scrollToBottom(true), 50);
+      
       try {
         const imageId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         const downloadUrl = await uploadChatImage(uri, auth.currentUser.uid, imageId);
         await sendMessage(chatId, auth.currentUser.uid, downloadUrl, 'image');
+        
+        // Remove pending message (real one will come from listener)
+        setMessages((prev) => prev.filter((m) => m.id !== tempId));
       } catch (error: any) {
+        // Remove pending message on error
+        setMessages((prev) => prev.filter((m) => m.id !== tempId));
         Alert.alert('Upload failed', error?.message || 'Could not upload image.');
       }
     }
     setSelectedImages([]);
 
-    // Send text
+    // Send text with optimistic UI
     if (messageText.trim()) {
+      const textToSend = messageText.trim();
       const extra: any = {};
       if (replyTo?.id) extra.replyToId = replyTo.id;
-
-      await sendMessage(chatId, auth.currentUser.uid, messageText.trim(), 'text', extra);
+      
+      // Create optimistic pending message
+      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const pendingMessage: Message = {
+        id: tempId,
+        senderId: auth.currentUser.uid,
+        text: textToSend,
+        type: 'text',
+        isPending: true,
+        replyToId: extra.replyToId,
+      };
+      
+      // Add to messages immediately and clear input
+      setMessages((prev) => [...prev, pendingMessage]);
       setReplyTo(null);
       setMessageText('');
+      setTimeout(() => scrollToBottom(true), 50);
 
-      setTimeout(() => {
-        scrollToBottom(true);
-      }, 50);
+      try {
+        await sendMessage(chatId, auth.currentUser.uid, textToSend, 'text', extra);
+        
+        // Remove pending message (real one will come from listener)
+        setMessages((prev) => prev.filter((m) => m.id !== tempId));
+      } catch (error) {
+        // Remove pending message on error
+        setMessages((prev) => prev.filter((m) => m.id !== tempId));
+        console.error('Failed to send message:', error);
+      }
     }
   }, [chatId, messageText, selectedImages, replyTo, scrollToBottom]);
 
@@ -1676,7 +1777,7 @@ const ChatDetailScreen = () => {
 
         // System message
         const me = auth.currentUser?.uid;
-        if (me) {
+        if (me && toAdd.length > 0) {
           const myProfile = await getDoc(doc(db, 'profiles', me));
           const myName = myProfile.exists() 
             ? myProfile.data().username || 'Someone' 
@@ -1726,7 +1827,7 @@ const ChatDetailScreen = () => {
                 ? myProfile.data().username || 'Someone'
                 : 'Someone';
 
-              await addSystemMessage(chatId, `${myName} left the group`);
+              await addSystemMessage(chatId, `${myName} left this group chat`);
               await leaveChatWithAutoDelete(chatId, me);
               exitChat();
             } catch {}
@@ -2003,6 +2104,11 @@ const ChatDetailScreen = () => {
           }}
           onImagePress={() => setViewerUri(item.text)}
           onUserPress={(uid) => navigation.navigate('UserProfile', { userId: uid })}
+          onClosePicker={() => setReactionPickerId(null)}
+          onReactionsPress={() => {
+            setSelectedMessageReactions(reactionsMap[item.id] || []);
+            setReactionsModalVisible(true);
+          }}
           // onBubbleMeasured removed (no spotlight)
           theme={theme}
           styles={styles}
@@ -2191,6 +2297,7 @@ const ChatDetailScreen = () => {
                 }}
                 onScroll={handleScroll}
                 onContentSizeChange={handleContentSizeChange}
+                onScrollBeginDrag={() => setReactionPickerId(null)}
                 maintainVisibleContentPosition={USE_NATIVE_MAINTAIN ? { minIndexForVisible: 1 } : undefined}
                 scrollEventThrottle={32}
                 keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
@@ -2211,16 +2318,67 @@ const ChatDetailScreen = () => {
                     )}
                   </View>
                 )}
+                ListEmptyComponent={() => (
+                  <View style={{ 
+                    flex: 1, 
+                    alignItems: 'center', 
+                    justifyContent: 'center', 
+                    paddingHorizontal: 40,
+                    paddingVertical: 60,
+                  }}>
+                    <View style={{ 
+                      width: 80, 
+                      height: 80, 
+                      borderRadius: 40, 
+                      backgroundColor: theme.card,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      marginBottom: 20,
+                      borderWidth: 2,
+                      borderColor: theme.primary,
+                    }}>
+                      {chatMeta.isActivity && chatMeta.activityInfo?.type ? (
+                        <ActivityIcon 
+                          activity={chatMeta.activityInfo.type} 
+                          size={36} 
+                          color={theme.primary} 
+                        />
+                      ) : (
+                        <Ionicons 
+                          name={chatMeta.isDm ? "chatbubbles" : "people"} 
+                          size={36} 
+                          color={theme.primary} 
+                        />
+                      )}
+                    </View>
+                    <Text style={{ 
+                      fontSize: 20, 
+                      fontWeight: 'bold', 
+                      color: theme.text, 
+                      textAlign: 'center',
+                      marginBottom: 8,
+                    }}>
+                      {chatMeta.isDm 
+                        ? `Start chatting with ${chatMeta.dmPeer?.username || 'this user'}` 
+                        : chatMeta.isActivity 
+                        ? 'Welcome to the activity chat!' 
+                        : 'Welcome to the group!'}
+                    </Text>
+                    <Text style={{ 
+                      fontSize: 15, 
+                      color: theme.muted, 
+                      textAlign: 'center',
+                      lineHeight: 22,
+                    }}>
+                      {chatMeta.isDm 
+                        ? 'Send a message to start the conversation' 
+                        : chatMeta.isActivity 
+                        ? `This is the group chat for ${chatMeta.activityInfo?.name || 'this activity'}. Share updates, coordinate plans, or just chat!`
+                        : 'This is the beginning of your group chat. Share your thoughts!'}
+                    </Text>
+                  </View>
+                )}
               />
-              {/* Outside tap overlay to dismiss reaction picker */}
-              {reactionPickerId && (
-                <Pressable
-                  onPress={() => setReactionPickerId(null)}
-                  style={[StyleSheet.absoluteFill, { zIndex: 5 }]}
-                  // Allow reaction picker (zIndex 200) & highlighted bubble (zIndex 100) to remain interactive
-                  pointerEvents="auto"
-                />
-              )}
             </Animated.View>
           )}
 
@@ -2874,6 +3032,72 @@ const ChatDetailScreen = () => {
 
         {/* Toast */}
         <Toast message={toastMessage} visible={toastVisible} />
+
+        {/* Reactions Modal */}
+        <Modal
+          visible={reactionsModalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setReactionsModalVisible(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <Pressable 
+              style={StyleSheet.absoluteFill} 
+              onPress={() => setReactionsModalVisible(false)} 
+            />
+            <View style={[styles.modalPanel, { maxHeight: '60%' }]} pointerEvents="auto">
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                <Text style={styles.modalTitle}>Reactions</Text>
+                <TouchableOpacity onPress={() => setReactionsModalVisible(false)}>
+                  <Ionicons name="close" size={24} color={theme.muted} />
+                </TouchableOpacity>
+              </View>
+              
+              <FlatList
+                data={selectedMessageReactions}
+                keyExtractor={(item, index) => `${item.userId}-${index}`}
+                renderItem={({ item }) => {
+                  const user = profiles[item.userId];
+                  const username = user?.username || 'User';
+                  const photo = user?.photo || user?.photoURL || 
+                    `https://ui-avatars.com/api/?name=${encodeURIComponent(username)}`;
+                  
+                  return (
+                    <TouchableOpacity
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        paddingVertical: 10,
+                        paddingHorizontal: 12,
+                        backgroundColor: theme.background,
+                        borderRadius: 10,
+                        marginBottom: 6,
+                      }}
+                      onPress={() => {
+                        setReactionsModalVisible(false);
+                        navigation.navigate('UserProfile', { userId: item.userId });
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Image source={{ uri: photo }} style={styles.avatar} />
+                      <Text style={{ color: theme.text, fontSize: 15, fontWeight: '500', flex: 1, marginLeft: 10 }}>
+                        {username}
+                      </Text>
+                      <Text style={{ fontSize: 20, marginLeft: 10 }}>
+                        {item.emoji}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                }}
+                ListEmptyComponent={
+                  <Text style={{ color: theme.muted, textAlign: 'center', paddingVertical: 20 }}>
+                    No reactions yet
+                  </Text>
+                }
+              />
+            </View>
+          </View>
+        </Modal>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -2930,6 +3154,7 @@ const createStyles = (theme: any) => StyleSheet.create({
 
   // Messages
   messageList: {
+    flexGrow: 1,
     paddingTop: 6,
     paddingBottom: 8,
   },
