@@ -34,7 +34,7 @@ import {
   Keyboard,
   ActivityIndicator,
 } from 'react-native';
-import MapView, { Marker, Region } from 'react-native-maps';
+import MapView, { Marker, Region, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -106,6 +106,9 @@ const sportFilterOptions = [
   'Volleyball',
   'Yoga',
 ];
+
+// Note: We intentionally use the default Google Maps styling on Android
+// (no dark theme customMapStyle) so it matches the system look.
 
 type RootStackParamList = {
   ActivityDetails: { activityId: string };
@@ -1062,10 +1065,21 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
               <MapView
                 ref={mapRef}
                 style={styles.map}
+                // iOS: default (Apple Maps), Android: Google Maps
+                provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
                 initialRegion={mapRegion}
                 showsUserLocation={true}
                 showsMyLocationButton={false}
-                userInterfaceStyle={theme.isDark ? 'dark' : 'light'}
+                // Disable Android default toolbar (navigation/directions button)
+                toolbarEnabled={false}
+                // Disable Google Maps logo and controls
+                liteMode={false}
+                mapPadding={{ top: 0, right: 0, bottom: 0, left: 0 }}
+                showsCompass={false}
+                showsScale={false}
+                showsBuildings={true}
+                showsTraffic={false}
+                showsIndoors={true}
                 onRegionChangeComplete={(region) => {
                   setMapRegion(region);
                   setRegionDirty(true);
@@ -1076,7 +1090,8 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
                     key={act.id}
                     coordinate={{ latitude: act.latitude, longitude: act.longitude }}
                     onPress={() => setSelectedMapActivity(act)}
-                    tracksViewChanges={false}
+                    // On Android keep tracking initially so vector icons render, then stop for perf
+                    tracksViewChanges={Platform.OS === 'android'}
                   >
                     <View style={styles.markerInner}>
                       <ActivityIcon activity={act.activity} size={20} color={theme.primary} />
@@ -1233,33 +1248,100 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
         )}
 
         {!showMap && filteredActivities.length === 0 && (
-          <View style={{ alignItems: 'center', marginTop: 32, marginBottom: 12, paddingHorizontal: 24 }}>
-            <Ionicons name="search-outline" size={48} color={theme.primary} style={{ marginBottom: 10 }} />
-            <Text style={{ color: theme.text, fontSize: 20, fontWeight: 'bold', textAlign: 'center', marginBottom: 8 }}>
-              No activities found
-            </Text>
-            <Text style={{ color: theme.muted, fontSize: 16, textAlign: 'center', marginBottom: 18 }}>
-              Be the first to create an event in your area!
-              Others will be able to discover and join your activity from this page!
-            </Text>
-            <TouchableOpacity
-              onPress={() => navigation.navigate('CreateGame')}
-              style={{
-                paddingVertical: 14,
-                paddingHorizontal: 36,
-                borderRadius: 24,
-                backgroundColor: theme.primary,
+          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'flex-start', paddingTop: 100 }}>
+            
+            {/* Background Icons - Scattered more widely and colorfully */}
+            <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+               {/* Top Left */}
+               <View style={{ position: 'absolute', top: '15%', left: '10%', transform: [{ rotate: '-15deg' }], opacity: 0.6 }}>
+                  <Ionicons name="basketball" size={54} color="#FF8C00" />
+               </View>
+               {/* Top Right */}
+               <View style={{ position: 'absolute', top: '18%', right: '12%', transform: [{ rotate: '15deg' }], opacity: 0.6 }}>
+                  <Ionicons name="football" size={50} color="#22C55E" />
+               </View>
+               {/* Middle Left */}
+               <View style={{ position: 'absolute', top: '40%', left: '5%', transform: [{ rotate: '-10deg' }], opacity: 0.5 }}>
+                  <Ionicons name="tennisball" size={44} color="#EAB308" />
+               </View>
+               {/* Middle Right */}
+               <View style={{ position: 'absolute', top: '45%', right: '8%', transform: [{ rotate: '20deg' }], opacity: 0.5 }}>
+                  <Ionicons name="bicycle" size={48} color="#06B6D4" />
+               </View>
+               {/* Bottom Left */}
+               <View style={{ position: 'absolute', bottom: '25%', left: '15%', transform: [{ rotate: '-25deg' }], opacity: 0.5 }}>
+                  <Ionicons name="barbell" size={46} color="#8B5CF6" />
+               </View>
+               {/* Bottom Right */}
+               <View style={{ position: 'absolute', bottom: '20%', right: '15%', transform: [{ rotate: '10deg' }], opacity: 0.5 }}>
+                  <Ionicons name="walk" size={42} color="#EC4899" />
+               </View>
+            </View>
+
+            {/* Central Content */}
+            <View style={{ alignItems: 'center', paddingHorizontal: 32, zIndex: 10 }}>
+              <View style={{ 
+                width: 80, 
+                height: 80, 
+                borderRadius: 40, 
+                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+                alignItems: 'center', 
+                justifyContent: 'center',
+                marginBottom: 24,
                 shadowColor: theme.primary,
-                shadowOpacity: 0.4,
-                shadowRadius: 8,
-                elevation: 4,
-              }}
-              activeOpacity={0.85}
-            >
-              <Text style={{ color: theme.isDark ? '#111' : '#fff', fontWeight: 'bold', fontSize: 17, letterSpacing: 0.5 }}>
-                Create an Event
+                shadowOpacity: 0.3,
+                shadowRadius: 15,
+                elevation: 5
+              }}>
+                <Ionicons name="flame" size={40} color={theme.primary} />
+              </View>
+
+              <Text style={{ 
+                fontSize: 26, 
+                fontWeight: '800', 
+                color: theme.text, 
+                textAlign: 'center', 
+                marginBottom: 12,
+                letterSpacing: 0.5
+              }}>
+                Be the Spark
               </Text>
-            </TouchableOpacity>
+              
+              <Text style={{ 
+                fontSize: 16, 
+                color: theme.muted, 
+                textAlign: 'center', 
+                lineHeight: 24, 
+                marginBottom: 32,
+                fontWeight: '500'
+              }}>
+                Others might be hesitating. Be the one to make it happen—create an activity and bring the community together.
+              </Text>
+
+              <TouchableOpacity
+                onPress={() => navigation.navigate('CreateGame')}
+                style={{
+                  backgroundColor: theme.primary,
+                  paddingVertical: 16,
+                  paddingHorizontal: 32,
+                  borderRadius: 30,
+                  shadowColor: theme.primary,
+                  shadowOpacity: 0.4,
+                  shadowRadius: 12,
+                  shadowOffset: { width: 0, height: 6 },
+                  elevation: 8,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 8
+                }}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="add-circle" size={24} color="#fff" />
+                <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
+                  Create Activity
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
 

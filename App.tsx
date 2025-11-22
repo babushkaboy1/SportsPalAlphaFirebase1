@@ -19,6 +19,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { registerPushNotificationsForCurrentUser, subscribeNotificationResponses, getLastNotificationResponseData, setInAppNotificationHandler } from './utils/notifications';
 import * as Linking from 'expo-linking';
 import { parseDeepLink } from './utils/deepLinking';
+import * as Updates from 'expo-updates';
 
 // Import your screens
 import DiscoverGamesScreen from './screens/DiscoverGamesScreen';
@@ -210,6 +211,41 @@ function AppInner() {
   const pendingDeepLinkRef = React.useRef<string | null>(null);
   const { theme, navTheme } = useTheme();
   const { currentNotification, dismissNotification, showNotification } = useInAppNotification();
+  const [updateChecked, setUpdateChecked] = useState(false);
+
+  // Check for OTA updates on app launch (only in production)
+  useEffect(() => {
+    const checkForUpdates = async () => {
+      // Skip in development mode
+      if (__DEV__) {
+        console.log('[Updates] Skipping update check in development mode');
+        setUpdateChecked(true);
+        return;
+      }
+
+      try {
+        console.log('[Updates] Checking for updates...');
+        const update = await Updates.checkForUpdateAsync();
+
+        if (update.isAvailable) {
+          console.log('[Updates] Update available! Downloading...');
+          await Updates.fetchUpdateAsync();
+          console.log('[Updates] Update downloaded! Reloading app...');
+          // Reload immediately to apply the update
+          await Updates.reloadAsync();
+        } else {
+          console.log('[Updates] App is up to date');
+          setUpdateChecked(true);
+        }
+      } catch (error) {
+        console.error('[Updates] Error checking for updates:', error);
+        // Continue anyway - don't block app launch
+        setUpdateChecked(true);
+      }
+    };
+
+    checkForUpdates();
+  }, []);
 
   // Connect in-app notification handler
   useEffect(() => {
@@ -428,7 +464,7 @@ function AppInner() {
           <InboxBadgeProvider>
           <NavigationContainer ref={navRef} theme={navTheme} onReady={() => setNavReady(true)}>
           <StatusBar style={theme.isDark ? 'light' : 'dark'} backgroundColor={theme.background} />
-          {initializing || (user && hasProfile === null) ? (
+          {initializing || (user && hasProfile === null) || !updateChecked ? (
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#121212' }}>
               <ActivityIndicator size="large" color={theme.primary} />
             </View>
@@ -490,6 +526,7 @@ function AppInner() {
             user={user}
             hasProfile={hasProfile}
             splashHiddenRef={splashHiddenRef}
+            updateChecked={updateChecked}
           />
         </ActivityProvider>
       </SafeAreaProvider>
@@ -540,13 +577,13 @@ export default function App() {
 }
 
 // Helper mounted inside providers to consume ActivityContext
-const SplashHider: React.FC<{ navReady: boolean; initializing: boolean; user: User | null; hasProfile: boolean | null; splashHiddenRef: React.MutableRefObject<boolean>; }> = ({ navReady, initializing, user, hasProfile, splashHiddenRef }) => {
+const SplashHider: React.FC<{ navReady: boolean; initializing: boolean; user: User | null; hasProfile: boolean | null; splashHiddenRef: React.MutableRefObject<boolean>; updateChecked: boolean; }> = ({ navReady, initializing, user, hasProfile, splashHiddenRef, updateChecked }) => {
   const { initialActivitiesLoaded } = useActivityContext();
 
   useEffect(() => {
     if (splashHiddenRef.current) return;
     const shouldHide = () => {
-      if (!navReady || initializing) return false;
+      if (!navReady || initializing || !updateChecked) return false;
       if (!user) return true; // login screen is ready
       if (hasProfile === false) return true; // create profile flow
       // user has profile -> wait for activities initial load
@@ -557,7 +594,7 @@ const SplashHider: React.FC<{ navReady: boolean; initializing: boolean; user: Us
       SplashScreen.hideAsync().catch(() => {});
       splashHiddenRef.current = true;
     }
-  }, [navReady, initializing, user, hasProfile, initialActivitiesLoaded]);
+  }, [navReady, initializing, user, hasProfile, initialActivitiesLoaded, updateChecked]);
 
   // Fallback: hide after 8s max
   useEffect(() => {

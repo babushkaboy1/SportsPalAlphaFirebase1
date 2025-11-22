@@ -1684,7 +1684,7 @@ const CreateGameScreen = () => {
               {maxParticipants}
             </Text>
           </TouchableOpacity>
-          {/* Max Participants Picker Modal (iOS only) */}
+          {/* Max Participants Picker Modal (iOS uses native spinner, Android uses list) */}
           {Platform.OS === 'ios' && (
             <Modal transparent animationType="slide" visible={showParticipantsPicker} onRequestClose={() => setShowParticipantsPicker(false)}>
               <View style={styles.pickerModal}>
@@ -1700,7 +1700,7 @@ const CreateGameScreen = () => {
                   <Picker
                     selectedValue={maxParticipants}
                     onValueChange={setMaxParticipants}
-                    style={{ width: '100%', color: theme.text }}
+                    style={styles.rollerPicker}
                     itemStyle={{ color: theme.text, fontSize: 22 }}
                   >
                     {[...Array(29)].map((_, i) => (
@@ -1711,23 +1711,46 @@ const CreateGameScreen = () => {
               </View>
             </Modal>
           )}
-          {Platform.OS === 'android' && showParticipantsPicker && (
+          {Platform.OS === 'android' && (
             <Modal transparent animationType="slide" visible={showParticipantsPicker} onRequestClose={() => setShowParticipantsPicker(false)}>
               <View style={styles.pickerModal}>
                 <View style={styles.rollerContainer}>
-                  <Picker
-                    selectedValue={maxParticipants}
-                    onValueChange={(value) => {
-                      setMaxParticipants(value);
-                      setShowParticipantsPicker(false);
-                    }}
-                    style={{ width: '100%' }}
-                    itemStyle={{ fontSize: 22 }}
-                  >
-                    {[...Array(29)].map((_, i) => (
-                      <Picker.Item key={i + 2} label={`${i + 2}`} value={i + 2} />
-                    ))}
-                  </Picker>
+                  <View style={styles.rollerHeader}>
+                    <TouchableOpacity onPress={() => setShowParticipantsPicker(false)}>
+                      <Text style={styles.rollerCancel}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setShowParticipantsPicker(false)}>
+                      <Text style={styles.rollerDone}>Done</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <ScrollView style={{ maxHeight: 260 }}>
+                    {[...Array(29)].map((_, i) => {
+                      const value = i + 2;
+                      const isSelected = maxParticipants === value;
+                      return (
+                        <TouchableOpacity
+                          key={value}
+                          style={{
+                            paddingVertical: 16,
+                            paddingHorizontal: 20,
+                            backgroundColor: isSelected ? theme.primary : 'transparent',
+                            borderBottomWidth: 1,
+                            borderBottomColor: theme.border,
+                          }}
+                          onPress={() => setMaxParticipants(value)}
+                        >
+                          <Text style={{
+                            color: isSelected ? '#fff' : theme.text,
+                            fontSize: 18,
+                            fontWeight: isSelected ? 'bold' : '500',
+                            textAlign: 'center',
+                          }}>
+                            {value}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
                 </View>
               </View>
             </Modal>
@@ -1933,15 +1956,25 @@ const CreateGameScreen = () => {
                 userInterfaceStyle={theme.isDark ? 'dark' : 'light'}
               >
                 {/* Meeting Point Marker */}
-                <Marker
-                  coordinate={selectedCoords}
-                  title="Meeting Point"
-                  pinColor={theme.primary}
-                >
-                  <View style={{ backgroundColor: theme.primary, width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: '#fff' }}>
-                    <Ionicons name="location" size={24} color="#fff" />
-                  </View>
-                </Marker>
+                {Platform.OS === 'android' ? (
+                  <Marker
+                    coordinate={selectedCoords}
+                    title="Meeting Point"
+                    pinColor={theme.primary}
+                  />
+                ) : (
+                  <Marker
+                    coordinate={selectedCoords}
+                    title="Meeting Point"
+                    anchor={{ x: 0.5, y: 0.5 }}
+                  >
+                    <View style={{ width: 46, height: 46, alignItems: 'center', justifyContent: 'center' }}>
+                      <View style={{ backgroundColor: theme.primary, width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: '#fff' }}>
+                        <Ionicons name="location" size={24} color="#fff" />
+                      </View>
+                    </View>
+                  </Marker>
+                )}
 
                 {/* Drawn Route Polyline */}
                 {drawnRoute.length > 1 && (
@@ -1958,7 +1991,7 @@ const CreateGameScreen = () => {
                     coordinate={drawnRoute[0]}
                     anchor={{ x: 0.5, y: 0.5 }}
                   >
-                    <View style={{ backgroundColor: '#4CAF50', width: 24, height: 24, borderRadius: 12, borderWidth: 3, borderColor: '#fff', alignItems: 'center', justifyContent: 'center' }}>
+                    <View style={{ backgroundColor: '#4CAF50', width: 24, height: 24, borderRadius: 12, borderWidth: 3, borderColor: '#fff', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
                       <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>S</Text>
                     </View>
                   </Marker>
@@ -1968,7 +2001,7 @@ const CreateGameScreen = () => {
                     coordinate={drawnRoute[drawnRoute.length - 1]}
                     anchor={{ x: 0.5, y: 0.5 }}
                   >
-                    <View style={{ backgroundColor: '#f44336', width: 24, height: 24, borderRadius: 12, borderWidth: 3, borderColor: '#fff', alignItems: 'center', justifyContent: 'center' }}>
+                    <View style={{ backgroundColor: '#f44336', width: 24, height: 24, borderRadius: 12, borderWidth: 3, borderColor: '#fff', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
                       <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>E</Text>
                     </View>
                   </Marker>
