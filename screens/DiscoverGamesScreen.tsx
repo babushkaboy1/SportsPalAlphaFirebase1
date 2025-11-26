@@ -153,6 +153,8 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
   const [locationSuggestions, setLocationSuggestions] = useState<Array<{ name: string; lat: number; lon: number }>>([]);
   const [isSearchingLocation, setIsSearchingLocation] = useState(false);
   const locationSearchDebounceRef = useRef<number | null>(null);
+  const [displayedActivitiesCount, setDisplayedActivitiesCount] = useState(10);
+  const [isLoadingMoreActivities, setIsLoadingMoreActivities] = useState(false);
 
   // Load discovery range from AsyncStorage on mount and on screen focus
   useEffect(() => {
@@ -191,6 +193,15 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
   const mapRef = useRef<MapView>(null);
   const DEBOUNCE_MS = 300;
   const ITEM_HEIGHT = 120; // estimated fixed height for ActivityCard (used by getItemLayout)
+
+  const handleLoadMoreActivities = () => {
+    if (isLoadingMoreActivities) return;
+    setIsLoadingMoreActivities(true);
+    setTimeout(() => {
+      setDisplayedActivitiesCount(prev => prev + 10);
+      setIsLoadingMoreActivities(false);
+    }, 300);
+  };
 
   // Derive sport filter list: All + (favorite sports A-Z) + (rest A-Z)
   const orderedSportFilters = useMemo(() => {
@@ -763,7 +774,10 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
   });
 
   const toggleSortByDistance = useCallback(
-    () => setIsSortingByDistance(prev => !prev),
+    () => {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      setIsSortingByDistance(prev => !prev);
+    },
     []
   );
 
@@ -873,6 +887,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
               <TouchableOpacity
                 style={styles.clearButton}
                 onPress={async () => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                   setSelectedDate(null);
                   await loadActivities();
                 }}
@@ -887,7 +902,10 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
               <TouchableOpacity
                 key={option}
                 style={[styles.filterChip, selectedFilter === option && styles.filterChipActive]}
-                onPress={() => setSelectedFilter(option)}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setSelectedFilter(option);
+                }}
               >
                 {option !== 'All' && (
                   <View style={{ marginRight: 6 }}>
@@ -1070,6 +1088,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
                 initialRegion={mapRegion}
                 showsUserLocation={true}
                 showsMyLocationButton={false}
+                userInterfaceStyle={theme.isDark ? 'dark' : 'light'}
                 // Disable Android default toolbar (navigation/directions button)
                 toolbarEnabled={false}
                 // Disable Google Maps logo and controls
@@ -1247,110 +1266,144 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
           </View>
         )}
 
-        {!showMap && filteredActivities.length === 0 && (
-          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'flex-start', paddingTop: 100 }}>
-            
-            {/* Background Icons - Scattered more widely and colorfully */}
-            <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-               {/* Top Left */}
-               <View style={{ position: 'absolute', top: '15%', left: '10%', transform: [{ rotate: '-15deg' }], opacity: 0.6 }}>
-                  <Ionicons name="basketball" size={54} color="#FF8C00" />
-               </View>
-               {/* Top Right */}
-               <View style={{ position: 'absolute', top: '18%', right: '12%', transform: [{ rotate: '15deg' }], opacity: 0.6 }}>
-                  <Ionicons name="football" size={50} color="#22C55E" />
-               </View>
-               {/* Middle Left */}
-               <View style={{ position: 'absolute', top: '40%', left: '5%', transform: [{ rotate: '-10deg' }], opacity: 0.5 }}>
-                  <Ionicons name="tennisball" size={44} color="#EAB308" />
-               </View>
-               {/* Middle Right */}
-               <View style={{ position: 'absolute', top: '45%', right: '8%', transform: [{ rotate: '20deg' }], opacity: 0.5 }}>
-                  <Ionicons name="bicycle" size={48} color="#06B6D4" />
-               </View>
-               {/* Bottom Left */}
-               <View style={{ position: 'absolute', bottom: '25%', left: '15%', transform: [{ rotate: '-25deg' }], opacity: 0.5 }}>
-                  <Ionicons name="barbell" size={46} color="#8B5CF6" />
-               </View>
-               {/* Bottom Right */}
-               <View style={{ position: 'absolute', bottom: '20%', right: '15%', transform: [{ rotate: '10deg' }], opacity: 0.5 }}>
-                  <Ionicons name="walk" size={42} color="#EC4899" />
-               </View>
-            </View>
 
-            {/* Central Content */}
-            <View style={{ alignItems: 'center', paddingHorizontal: 32, zIndex: 10 }}>
-              <View style={{ 
-                width: 80, 
-                height: 80, 
-                borderRadius: 40, 
-                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
-                alignItems: 'center', 
-                justifyContent: 'center',
-                marginBottom: 24,
-                shadowColor: theme.primary,
-                shadowOpacity: 0.3,
-                shadowRadius: 15,
-                elevation: 5
-              }}>
-                <Ionicons name="flame" size={40} color={theme.primary} />
-              </View>
-
-              <Text style={{ 
-                fontSize: 26, 
-                fontWeight: '800', 
-                color: theme.text, 
-                textAlign: 'center', 
-                marginBottom: 12,
-                letterSpacing: 0.5
-              }}>
-                Be the Spark
-              </Text>
-              
-              <Text style={{ 
-                fontSize: 16, 
-                color: theme.muted, 
-                textAlign: 'center', 
-                lineHeight: 24, 
-                marginBottom: 32,
-                fontWeight: '500'
-              }}>
-                Others might be hesitating. Be the one to make it happen—create an activity and bring the community together.
-              </Text>
-
-              <TouchableOpacity
-                onPress={() => navigation.navigate('CreateGame')}
-                style={{
-                  backgroundColor: theme.primary,
-                  paddingVertical: 16,
-                  paddingHorizontal: 32,
-                  borderRadius: 30,
-                  shadowColor: theme.primary,
-                  shadowOpacity: 0.4,
-                  shadowRadius: 12,
-                  shadowOffset: { width: 0, height: 6 },
-                  elevation: 8,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: 8
-                }}
-                activeOpacity={0.85}
-              >
-                <Ionicons name="add-circle" size={24} color="#fff" />
-                <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
-                  Create Activity
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
 
         {!showMap && (
         <FlatList
-          data={filteredActivities}
+          data={filteredActivities.slice(0, displayedActivitiesCount)}
           renderItem={({ item }) => <ActivityCard item={item} />}
           keyExtractor={(item) => item.id}
           getItemLayout={(_, index) => ({ length: ITEM_HEIGHT, offset: ITEM_HEIGHT * index, index })}
+          onEndReached={displayedActivitiesCount < filteredActivities.length ? handleLoadMoreActivities : null}
+          onEndReachedThreshold={0.5}
+          ListFooterComponent={
+            isLoadingMoreActivities ? (
+              <View style={{ paddingVertical: 20, alignItems: 'center' }}>
+                <ActivityIndicator size="small" color={theme.primary} />
+              </View>
+            ) : null
+          }
+          ListEmptyComponent={
+            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'flex-start', paddingTop: 100, minHeight: 600 }}>
+              
+              {/* Background Icons - Scattered more widely and colorfully */}
+              <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+                 {/* Top Left - Soccer */}
+                 <View style={{ position: 'absolute', top: '12%', left: '8%', transform: [{ rotate: '-15deg' }], opacity: 0.65 }}>
+                    <ActivityIcon activity="Soccer" size={52} color="#10B981" />
+                 </View>
+                 {/* Top Right - Basketball */}
+                 <View style={{ position: 'absolute', top: '15%', right: '10%', transform: [{ rotate: '18deg' }], opacity: 0.65 }}>
+                    <ActivityIcon activity="Basketball" size={50} color="#F59E0B" />
+                 </View>
+                 {/* Middle Left - Tennis */}
+                 <View style={{ position: 'absolute', top: '35%', left: '3%', transform: [{ rotate: '-12deg' }], opacity: 0.6 }}>
+                    <ActivityIcon activity="Tennis" size={46} color="#EF4444" />
+                 </View>
+                 {/* Middle Center Left - Cycling */}
+                 <View style={{ position: 'absolute', top: '50%', left: '12%', transform: [{ rotate: '8deg' }], opacity: 0.55 }}>
+                    <ActivityIcon activity="Cycling" size={44} color="#06B6D4" />
+                 </View>
+                 {/* Middle Right - Volleyball */}
+                 <View style={{ position: 'absolute', top: '38%', right: '5%', transform: [{ rotate: '22deg' }], opacity: 0.6 }}>
+                    <ActivityIcon activity="Volleyball" size={48} color="#8B5CF6" />
+                 </View>
+                 {/* Middle Center Right - Running */}
+                 <View style={{ position: 'absolute', top: '52%', right: '15%', transform: [{ rotate: '-18deg' }], opacity: 0.55 }}>
+                    <ActivityIcon activity="Running" size={42} color="#EC4899" />
+                 </View>
+                 {/* Bottom Left - Gym */}
+                 <View style={{ position: 'absolute', bottom: '28%', left: '10%', transform: [{ rotate: '-25deg' }], opacity: 0.6 }}>
+                    <ActivityIcon activity="Gym" size={50} color="#6366F1" />
+                 </View>
+                 {/* Bottom Center Left - Swimming */}
+                 <View style={{ position: 'absolute', bottom: '15%', left: '20%', transform: [{ rotate: '15deg' }], opacity: 0.55 }}>
+                    <ActivityIcon activity="Swimming" size={40} color="#14B8A6" />
+                 </View>
+                 {/* Bottom Right - Hiking */}
+                 <View style={{ position: 'absolute', bottom: '22%', right: '12%', transform: [{ rotate: '12deg' }], opacity: 0.6 }}>
+                    <ActivityIcon activity="Hiking" size={46} color="#F97316" />
+                 </View>
+                 {/* Bottom Center Right - Yoga */}
+                 <View style={{ position: 'absolute', bottom: '10%', right: '25%', transform: [{ rotate: '-8deg' }], opacity: 0.55 }}>
+                    <ActivityIcon activity="Yoga" size={38} color="#A855F7" />
+                 </View>
+                 {/* Top Center - Baseball */}
+                 <View style={{ position: 'absolute', top: '8%', left: '45%', transform: [{ rotate: '25deg' }], opacity: 0.5 }}>
+                    <ActivityIcon activity="Baseball" size={36} color="#3B82F6" />
+                 </View>
+                 {/* Middle Far Right - Padel */}
+                 <View style={{ position: 'absolute', top: '60%', right: '3%', transform: [{ rotate: '-20deg' }], opacity: 0.5 }}>
+                    <ActivityIcon activity="Padel" size={38} color="#FBBF24" />
+                 </View>
+              </View>
+
+              {/* Central Content */}
+              <View style={{ alignItems: 'center', paddingHorizontal: 32, zIndex: 10 }}>
+                <View style={{ 
+                  width: 80, 
+                  height: 80, 
+                  borderRadius: 40, 
+                  backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+                  alignItems: 'center', 
+                  justifyContent: 'center',
+                  marginBottom: 24,
+                  shadowColor: theme.primary,
+                  shadowOpacity: 0.3,
+                  shadowRadius: 15,
+                  elevation: 5
+                }}>
+                  <Ionicons name="flame" size={40} color={theme.primary} />
+                </View>
+
+                <Text style={{ 
+                  fontSize: 26, 
+                  fontWeight: '800', 
+                  color: theme.text, 
+                  textAlign: 'center', 
+                  marginBottom: 12,
+                  letterSpacing: 0.5
+                }}>
+                  Be the Spark
+                </Text>
+                
+                <Text style={{ 
+                  fontSize: 16, 
+                  color: theme.muted, 
+                  textAlign: 'center', 
+                  lineHeight: 24, 
+                  marginBottom: 32,
+                  fontWeight: '500'
+                }}>
+                  Others might be hesitating. Be the one to make it happen—create an activity and bring the community together.
+                </Text>
+
+                <TouchableOpacity
+                  onPress={() => navigation.navigate('CreateGame')}
+                  style={{
+                    backgroundColor: theme.primary,
+                    paddingVertical: 16,
+                    paddingHorizontal: 32,
+                    borderRadius: 30,
+                    shadowColor: theme.primary,
+                    shadowOpacity: 0.4,
+                    shadowRadius: 12,
+                    shadowOffset: { width: 0, height: 6 },
+                    elevation: 8,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 8
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="add-circle" size={24} color="#fff" />
+                  <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
+                    Create Activity
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          }
           refreshControl={
             <RefreshControl
               refreshing={refreshing || refreshLocked}
@@ -1360,7 +1413,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
               progressBackgroundColor="transparent"
             />
           }
-          contentContainerStyle={styles.listContainer}
+          contentContainerStyle={filteredActivities.length === 0 ? { flexGrow: 1 } : styles.listContainer}
           style={{ backgroundColor: theme.background }}
           // ✅ Perf-friendly knobs (no UI change)
           initialNumToRender={8}
@@ -1374,7 +1427,11 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
           <DateTimePickerModal
             isVisible={isDatePickerVisible}
             mode="date"
-            onConfirm={(date) => { setSelectedDate(date); setDatePickerVisible(false); }}
+            onConfirm={(date) => { 
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              setSelectedDate(date); 
+              setDatePickerVisible(false); 
+            }}
             onCancel={() => setDatePickerVisible(false)}
           />
         )}
@@ -1393,7 +1450,11 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
                   <TouchableOpacity onPress={() => setIOSDatePickerVisible(false)}>
                     <Text style={styles.rollerCancel}>Cancel</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity onPress={() => { if (tempDate) setSelectedDate(tempDate); setIOSDatePickerVisible(false); }}>
+                  <TouchableOpacity onPress={() => { 
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    if (tempDate) setSelectedDate(tempDate); 
+                    setIOSDatePickerVisible(false); 
+                  }}>
                     <Text style={styles.rollerDone}>Done</Text>
                   </TouchableOpacity>
                 </View>
@@ -1416,6 +1477,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
             isVisible={isMapDatePickerVisible}
             mode="date"
             onConfirm={(date) => { 
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
               setMapSelectedDate(date); 
               setMapDatePickerVisible(false);
               if (mapRegion) {
@@ -1441,6 +1503,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
                     <Text style={styles.rollerCancel}>Cancel</Text>
                   </TouchableOpacity>
                   <TouchableOpacity onPress={() => { 
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                     if (mapTempDate) {
                       setMapSelectedDate(mapTempDate); 
                       if (mapRegion) {

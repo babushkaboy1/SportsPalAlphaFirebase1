@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "797980453879",
+    "project_id": "sportspal-1b468",
+    "storage_bucket": "sportspal-1b468.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:797980453879:android:b110b4127b179f190ddcf2",
+        "android_client_info": {
+          "package_name": "com.sportspal.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "797980453879-2s8joa3gkv6n5a70ekuv1jtgmt916hig.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.sportspal.app",
+            "certificate_hash": "a144bd096cd9386dff00564ccfd5c7f5d33bfb56"
+          }
+        },
+        {
+          "client_id": "797980453879-us77gkeq4najb1bno3ftbounlqjc5vdn.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBdujn71THbK9LR1PPG9qBfnz-MJTc0-G0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "797980453879-us77gkeq4najb1bno3ftbounlqjc5vdn.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "797980453879-nm6nq024jdb77gn5euhlrkmmd1t0tu68.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.sportspal"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

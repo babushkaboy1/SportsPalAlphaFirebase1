@@ -24,13 +24,14 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { CommonActions, useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../types/navigation';
-import { createUserWithEmailAndPassword, reauthenticateWithCredential, EmailAuthProvider, updatePassword, sendEmailVerification, reload, signOut, getIdToken, signInWithEmailAndPassword, getIdTokenResult } from 'firebase/auth';
+import { reauthenticateWithCredential, EmailAuthProvider, updatePassword } from 'firebase/auth';
 import { doc, setDoc, query, where, getDocs, collection, serverTimestamp } from 'firebase/firestore';
 import { auth, db, storage } from '../firebaseConfig';
 import { compressImage, uploadProfileImage, testStorageConnection } from '../utils/imageUtils';
 import { ref, uploadBytes, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { Linking } from 'react-native';
+import { ActivityIcon } from '../components/ActivityIcons';
 
 // Sports Options for the grid (alphabetical order; grid renders 3 per row)
 const sportsOptions = [
@@ -67,27 +68,19 @@ const CreateProfileScreen = ({ route }: any) => {
   const emailLocked = profileData?.emailLocked || false; // Lock email for social sign-ins
 
   const [username, setUsername] = useState(profileData?.username || '');
-  const [email, setEmail] = useState(profileData?.email || '');
-  // Phone removed per request
-  const [password, setPassword] = useState(profileData?.password || '');
   const [bio, setBio] = useState(profileData?.bio || '');
   const [photo, setPhoto] = useState<string | null>(profileData?.photo || null);
   const [instagram, setInstagram] = useState(profileData?.socials?.instagram || '');
   const [facebook, setFacebook] = useState(profileData?.socials?.facebook || '');
-  // Preselect favorites in edit mode (supports either key name from stored profile)
   const [selectedSports, setSelectedSports] = useState<string[]>(profileData?.sportsPreferences || profileData?.selectedSports || []);
+  const [birthDay, setBirthDay] = useState('');
+  const [birthMonth, setBirthMonth] = useState('');
+  const [birthYear, setBirthYear] = useState('');
+  const [acceptedAdulthood, setAcceptedAdulthood] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [confirmPassword, setConfirmPassword] = useState('');
-  // Email verification state (edit mode)
-  const [isEmailVerified, setIsEmailVerified] = useState<boolean>(!!auth.currentUser?.emailVerified);
-  const [isSendingVerify, setIsSendingVerify] = useState(false);
-  const [isCheckingVerify, setIsCheckingVerify] = useState(false);
-  const [sendCooldown, setSendCooldown] = useState<number>(0);
-  const cooldownRef = useRef<NodeJS.Timeout | null>(null);
-  const currentAuthEmail = auth.currentUser?.email || null;
-  // Track whether the user has pressed "Send verification" at least once
-  const [sentVerification, setSentVerification] = useState(false);
+  const [isCheckingUsername, setIsCheckingUsername] = useState(false);
+  const [usernameAvailable, setUsernameAvailable] = useState<boolean | null>(null);
   // Change password flow (edit mode)
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
@@ -97,12 +90,12 @@ const CreateProfileScreen = ({ route }: any) => {
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
   const [changePwError, setChangePwError] = useState<string | null>(null);
   const [usernameError, setUsernameError] = useState<string | null>(null);
-  const [passwordError, setPasswordError] = useState<string | null>(null);
-  const [passwordStrength, setPasswordStrength] = useState<{score: number; color: string; label: string; percent: number}>({ score: 0, color: '#cc3030', label: 'Very weak', percent: 0 });
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scrollRef = useRef<ScrollView>(null);
   const instagramRef = useRef<TextInput>(null);
   const facebookRef = useRef<TextInput>(null);
+  const birthMonthRef = useRef<TextInput>(null);
+  const birthYearRef = useRef<TextInput>(null);
   const insets = useSafeAreaInsets();
 
   // Keyboard state for adjusting ScrollView padding so inputs appear above keyboard
@@ -123,17 +116,20 @@ const CreateProfileScreen = ({ route }: any) => {
     }).start();
   }, []);
 
+  // Initialize birth date from profile data if editing
+  useEffect(() => {
+    if (profileData?.birthDate) {
+      const [day, month, year] = profileData.birthDate.split('-');
+      setBirthDay(day || '');
+      setBirthMonth(month || '');
+      setBirthYear(year || '');
+    }
+  }, [profileData?.birthDate]);
+
   // Simulate a loading period for the profile data (remove in production)
   useEffect(() => {
     const timeout = setTimeout(() => setIsReady(true), 500);
     return () => clearTimeout(timeout);
-  }, []);
-
-  // If navigated without an email (e.g., from App initial route), prefill from auth user for social flows
-  useEffect(() => {
-    if (!email && auth.currentUser?.email) {
-      setEmail(auth.currentUser.email);
-    }
   }, []);
 
   // Listen for keyboard show/hide and set bottom padding accordingly (works for Android and iOS)
@@ -161,7 +157,7 @@ const CreateProfileScreen = ({ route }: any) => {
   // Only show username error after submit attempt in create mode
   const [showUsernameError, setShowUsernameError] = useState(false);
 
-  // Password policy checks and strength
+  // Track strength for new password in edit change flow (for change password in edit mode)
   const getPasswordChecks = (pwd: string) => ({
     len: pwd.length >= 8,
     upper: /[A-Z]/.test(pwd),
@@ -178,21 +174,11 @@ const CreateProfileScreen = ({ route }: any) => {
     return { score, color, label, percent };
   };
 
-  useEffect(() => {
-    setPasswordStrength(computeStrength(password));
-    setPasswordError(null);
-  }, [password]);
-
-  // Keep isEmailVerified in sync when auth state changes
-  useEffect(() => {
-    setIsEmailVerified(!!auth.currentUser?.emailVerified);
-  }, [auth.currentUser]);
-
-  // Track strength for new password in edit change flow
   const [newPasswordStrength, setNewPasswordStrength] = useState<{score: number; color: string; label: string; percent: number}>(computeStrength(''));
   useEffect(() => {
     setNewPasswordStrength(computeStrength(newPassword));
   }, [newPassword]);
+
   const handleVerifyCurrentPassword = async () => {
     try {
       setIsVerifying(true);
@@ -244,122 +230,6 @@ const CreateProfileScreen = ({ route }: any) => {
     } catch (e: any) {
       console.error('Update password failed', e);
       Alert.alert('Error', e?.message || 'Could not update password.');
-    }
-  };
-
-  const handleSendVerificationEmail = async () => {
-    try {
-      // If cooldown active, ignore taps
-      if (sendCooldown > 0 || isSendingVerify) return;
-      setIsSendingVerify(true);
-      let user = auth.currentUser;
-      // If logged in with a different email, seamlessly sign out and proceed with creating the new account
-      if (user && user.email && user.email !== email) {
-        try {
-          await signOut(auth);
-        } catch (e) {
-          console.warn('Auto sign-out failed before creating new account', e);
-          // Even if signOut fails, we can't create a new user while logged in
-          Alert.alert('Please sign out', 'You are currently signed in with a different account. Please sign out and try again.');
-          setIsSendingVerify(false);
-          return;
-        }
-        user = auth.currentUser; // refresh
-      }
-
-      if (user) {
-        // Already authenticated (and either matching email or no email set) — just send verification
-        await sendEmailVerification(user);
-        setAwaitingEmailVerification(true);
-        setSentVerification(true);
-        startSendCooldown(30);
-        Alert.alert(
-          'Verification sent',
-          'We sent a verification link to your email. Open it to verify.\n\nTip: If you don\'t see it, check your Spam/Junk or Deleted/Trash folder.'
-        );
-      } else {
-        // Not authenticated yet: create the account now (requires valid password)
-        const checks = getPasswordChecks(password);
-        if (!(checks.len && checks.upper && checks.number && checks.symbol)) {
-          Alert.alert('Set a password first', 'Please enter a strong password before sending verification.');
-          setIsSendingVerify(false);
-          return;
-        }
-        if (password !== confirmPassword) {
-          Alert.alert('Password mismatch', 'Please confirm your password.');
-          setIsSendingVerify(false);
-          return;
-        }
-        // Try to create user for this email to be able to send verification
-        try {
-          const cred = await createUserWithEmailAndPassword(auth, email, password);
-          await sendEmailVerification(cred.user);
-          setAwaitingEmailVerification(true);
-          setSentVerification(true);
-          startSendCooldown(30);
-          Alert.alert(
-            'Verification sent',
-            'We sent a verification link. Open it to verify, then tap "I verified — Refresh".\n\nTip: If you don\'t see it, check your Spam/Junk or Deleted/Trash folder.'
-          );
-        } catch (e: any) {
-          console.error('create+send verification failed', e);
-          if (e?.code === 'auth/email-already-in-use') {
-            Alert.alert('Email in use', 'An account with this email already exists. Try signing in instead.');
-          } else if (e?.code === 'auth/invalid-email') {
-            Alert.alert('Invalid email', 'Please enter a valid email address.');
-          } else {
-            Alert.alert('Error', e?.message || 'Could not send verification.');
-          }
-        }
-      }
-    } catch (e: any) {
-      console.error('sendEmailVerification failed', e);
-      Alert.alert('Error', e?.message || 'Could not send verification email.');
-    } finally {
-      setIsSendingVerify(false);
-    }
-  };
-
-  const startSendCooldown = (seconds: number) => {
-    setSendCooldown(seconds);
-    if (cooldownRef.current) clearInterval(cooldownRef.current);
-    cooldownRef.current = setInterval(() => {
-      setSendCooldown((prev) => {
-        if (prev <= 1) {
-          if (cooldownRef.current) clearInterval(cooldownRef.current);
-          cooldownRef.current = null;
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-  };
-
-  const handleRefreshVerifyButton = async () => {
-    try {
-      setIsCheckingVerify(true);
-      await handleRefreshEmailVerified();
-    } finally {
-      setIsCheckingVerify(false);
-    }
-  };
-
-  const handleRefreshEmailVerified = async () => {
-    try {
-      const user = auth.currentUser;
-      if (!user) return;
-      await reload(user);
-      // Force refresh the ID token so Firestore rules see updated email_verified claim
-      await getIdToken(user, true);
-      setIsEmailVerified(!!user.emailVerified);
-      if (user.emailVerified) {
-        setAwaitingEmailVerification(false);
-        Alert.alert('Email verified', 'Your email is now verified.');
-      } else {
-        Alert.alert('Not verified yet', 'Please open the verification link we sent to your email.');
-      }
-    } catch (e) {
-      console.warn('reload failed', e);
     }
   };
 
@@ -427,19 +297,109 @@ const CreateProfileScreen = ({ route }: any) => {
     }
   };
 
+  // Calculate age from DD-MM-YYYY birth date string
+  const calculateAge = (dateString: string): number => {
+    if (!dateString || !dateString.includes('-')) return 0;
+    
+    const [day, month, year] = dateString.split('-').map(Number);
+    const birthDate = new Date(year, month - 1, day); // month is 0-indexed
+    const today = new Date();
+    let age = today.getFullYear() - birthDate.getFullYear();
+    const monthDiff = today.getMonth() - birthDate.getMonth();
+    
+    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+      age--;
+    }
+    
+    return age;
+  };
+
+  // Check username availability with debounce
+  const checkUsernameAvailability = async (usernameToCheck: string) => {
+    if (!usernameToCheck || usernameToCheck.length < 3) {
+      setUsernameAvailable(null);
+      return;
+    }
+
+    setIsCheckingUsername(true);
+    try {
+      const profilesCol = collection(db, 'profiles');
+      const q = query(profilesCol, where('username_lower', '==', usernameToCheck.toLowerCase()));
+      const snap = await getDocs(q);
+      const userId = auth.currentUser?.uid;
+      const takenByOther = snap.docs.some(d => d.id !== userId);
+      
+      setUsernameAvailable(!takenByOther);
+    } catch (error) {
+      console.error('Username check error:', error);
+      setUsernameAvailable(null);
+    } finally {
+      setIsCheckingUsername(false);
+    }
+  };
+
+  // Debounced username check
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (username) {
+        checkUsernameAvailability(username);
+      }
+    }, 500); // 500ms delay
+    
+    return () => clearTimeout(timer);
+  }, [username]);
+
+  // Validate birth date from separate fields
+  const validateBirthDate = (): string | null => {
+    if (!birthDay || !birthMonth || !birthYear) return 'Please enter your complete birth date.';
+    
+    const day = parseInt(birthDay, 10);
+    const month = parseInt(birthMonth, 10);
+    const year = parseInt(birthYear, 10);
+
+    if (day < 1 || day > 31) return 'Day must be between 1 and 31.';
+    if (month < 1 || month > 12) return 'Month must be between 1 and 12.';
+    if (year < 1900 || year > new Date().getFullYear()) return 'Please enter a valid year.';
+
+    const date = new Date(year, month - 1, day);
+    if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
+      return 'Invalid date.';
+    }
+
+    const age = calculateAge(`${birthDay.padStart(2, '0')}-${birthMonth.padStart(2, '0')}-${year}`);
+    if (age < 18) return 'You must be at least 18 years old.';
+    if (age > 120) return 'Please enter a valid birth date.';
+
+    return null;
+  };
+
   // Make handleContinue async so we can await saveProfile
   const [awaitingEmailVerification, setAwaitingEmailVerification] = useState(false);
   const handleContinue = async () => {
     console.log("🚦 handleContinue called");
-    if (!email || !username) {
-      Alert.alert('Missing Info', 'Please fill in all required fields.');
+    if (!username) {
+      Alert.alert('Missing Info', 'Please enter a username.');
       return;
     }
 
-    // In create mode, enforce Terms & Community Guidelines acceptance
-    if (!isEdit && (!acceptedTerms || !acceptedCommunity)) {
-      Alert.alert('Accept Policies', 'Please accept the Terms of Service and Community Guidelines to continue.');
-      return;
+    // In create mode, validate birth date and adulthood acceptance
+    if (!isEdit) {
+      const birthDateError = validateBirthDate();
+      if (birthDateError) {
+        Alert.alert('Birth Date Required', birthDateError);
+        return;
+      }
+
+      if (!acceptedAdulthood) {
+        Alert.alert('Age Verification Required', 'Please confirm you are 18 years or older.');
+        return;
+      }
+
+      // Enforce Terms & Community Guidelines acceptance
+      if (!acceptedTerms || !acceptedCommunity) {
+        Alert.alert('Accept Policies', 'Please accept the Terms of Service and Community Guidelines to continue.');
+        return;
+      }
     }
 
     // Validate username format
@@ -450,304 +410,78 @@ const CreateProfileScreen = ({ route }: any) => {
       return;
     }
 
-  // Detect if the current user is a social auth user (Google, Facebook, Apple)
-  const isGoogleUserLocal = !!auth.currentUser?.providerData.find((p) => p.providerId === 'google.com');
-  const isFacebookUserLocal = !!auth.currentUser?.providerData.find((p) => p.providerId === 'facebook.com');
-  const isAppleUserLocal = !!auth.currentUser?.providerData.find((p) => p.providerId === 'apple.com');
-  const isSocialUserLocal = isGoogleUserLocal || isFacebookUserLocal || isAppleUserLocal;
-
-    // In create mode for non-social users, validate password and confirm
-    if (!isEdit && !isSocialUserLocal) {
-      const checks = getPasswordChecks(password);
-      if (!(checks.len && checks.upper && checks.number && checks.symbol)) {
-        setPasswordError('Password must be at least 8 characters and include an uppercase letter, a number, and a symbol.');
-        Alert.alert('Weak Password', 'Please meet all password requirements.');
-        return;
-      }
-      if (password !== confirmPassword) {
-        setPasswordError('Passwords do not match.');
-        Alert.alert('Password Mismatch', 'Passwords do not match.');
-        return;
-      }
-    }
-
     setIsLoading(true);
     try {
-  let userId: string | undefined = auth.currentUser?.uid;
+      let userId: string | undefined = auth.currentUser?.uid;
       let photoURL: string | null = null;
 
-      if (isEdit) {
-        // EDIT MODE
-        userId = auth.currentUser?.uid;
-        if (!userId) {
-          Alert.alert('Error', 'No user is logged in.');
+      if (!userId) {
+        Alert.alert('Error', 'No user is logged in.');
+        setIsLoading(false);
+        return;
+      }
+
+      // Username uniqueness (case-insensitive)
+      if (username) {
+        const profilesCol = collection(db, 'profiles');
+        const q = query(profilesCol, where('username_lower', '==', username.toLowerCase()));
+        const snap = await getDocs(q);
+        const takenByOther = snap.docs.some(d => d.id !== userId);
+        if (takenByOther) {
+          setUsernameError('This username is already taken.');
+          Alert.alert('Username Taken', 'Please choose a different username.');
           setIsLoading(false);
           return;
         }
+      }
 
-        // Username uniqueness (case-insensitive) if changed
-        if (username) {
-          const profilesCol = collection(db, 'profiles');
-          const q = query(profilesCol, where('username_lower', '==', username.toLowerCase()));
-          const snap = await getDocs(q);
-          const takenByOther = snap.docs.some(d => d.id !== userId);
-          if (takenByOther) {
-            setUsernameError('This username is already taken.');
-            Alert.alert('Username Taken', 'Please choose a different username.');
-            setIsLoading(false);
-            return;
-          }
-        }
+      // Upload photo if it's a new local file (not already a URL)
+      if (photo && !photo.startsWith('http')) {
+        console.log("📸 Uploading profile photo...");
+        const compressedUri = await compressImage(photo);
+        photoURL = await uploadProfileImage(compressedUri, userId);
+        console.log("✅ Photo uploaded:", photoURL);
+      } else if (photo && photo.startsWith('http')) {
+        photoURL = photo;
+      } else {
+        // No photo selected - generate placeholder with first letter of username
+        photoURL = null;
+      }
 
-        // Upload photo if it's a new local file (not already a URL)
-        if (photo && !photo.startsWith('http')) {
-          console.log("📸 Uploading new profile photo...");
-          const compressedUri = await compressImage(photo);
-          photoURL = await uploadProfileImage(compressedUri, userId);
-          console.log("✅ Photo uploaded:", photoURL);
-        } else if (photo && photo.startsWith('http')) {
-          // Keep existing photo URL
-          photoURL = photo;
-        }
+      const profileDataToSave: any = {
+        username,
+        email: auth.currentUser?.email || '',
+        bio,
+        birthDate: !isEdit ? `${birthDay.padStart(2, '0')}-${birthMonth.padStart(2, '0')}-${birthYear}` : (profileData?.birthDate || `${birthDay.padStart(2, '0')}-${birthMonth.padStart(2, '0')}-${birthYear}`),
+        socials: {
+          instagram,
+          facebook,
+        },
+        photo: photoURL,
+        sportsPreferences: selectedSports,
+        username_lower: username ? username.toLowerCase() : null,
+        uid: userId,
+        emailVerified: !!auth.currentUser?.emailVerified,
+        updatedAt: serverTimestamp(),
+      };
 
-        const profileData = {
-          username,
-          email,
-          bio,
-          socials: {
-            instagram,
-            facebook,
-          },
-          photo: photoURL,
-          sportsPreferences: selectedSports,
-          username_lower: username ? username.toLowerCase() : null,
-          uid: userId,
-          emailVerified: !!auth.currentUser?.emailVerified,
-          updatedAt: serverTimestamp(),
-        };
-        
-        await setDoc(doc(db, "profiles", userId), profileData, { merge: true });
+      // Only add these fields when creating a new profile
+      if (!isEdit) {
+        profileDataToSave.acceptedTerms = true;
+        profileDataToSave.acceptedCommunityGuidelines = true;
+        profileDataToSave.termsAcceptedAt = serverTimestamp();
+        profileDataToSave.createdAt = serverTimestamp();
+      }
+
+      await setDoc(doc(db, "profiles", userId), profileDataToSave, { merge: true });
+      
+      if (isEdit) {
         Alert.alert('Success', 'Your profile has been updated!');
         navigation.goBack();
       } else {
-        // CREATE MODE
-        // Handle social auth users separately: no password creation or email verification flow
-        if (isSocialUserLocal) {
-          // Must have an authenticated user
-          const current = auth.currentUser;
-          if (!current) {
-            Alert.alert('Error', 'No user is logged in.');
-            setIsLoading(false);
-            return;
-          }
-
-          userId = current.uid;
-
-          // Username uniqueness (case-insensitive)
-          if (username) {
-            const profilesCol = collection(db, 'profiles');
-            const q = query(profilesCol, where('username_lower', '==', username.toLowerCase()));
-            const snap = await getDocs(q);
-            if (!snap.empty) {
-              setUsernameError('This username is already in use.');
-              Alert.alert('Username Taken', 'Please choose a different username.');
-              setIsLoading(false);
-              return;
-            }
-          }
-
-          // Upload photo if provided
-          if (photo) {
-            try {
-              const compressedUri = await compressImage(photo);
-              photoURL = await uploadProfileImage(compressedUri, userId);
-            } catch (e) {
-              console.warn('Photo upload failed (social create)', e);
-            }
-          }
-
-          const profileDataSocial = {
-            username,
-            email: email || current.email || '',
-            bio,
-            socials: {
-              instagram,
-              facebook,
-            },
-            photo: photoURL,
-            sportsPreferences: selectedSports,
-            username_lower: username ? username.toLowerCase() : null,
-            uid: userId,
-            emailVerified: !!current.emailVerified,
-            acceptedTerms: true,
-            acceptedCommunityGuidelines: true,
-            termsAcceptedAt: serverTimestamp(),
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          };
-
-          try {
-            await setDoc(doc(db, 'profiles', userId), profileDataSocial);
-          } catch (err: any) {
-            console.error('Profile write failed (social create)', err);
-            Alert.alert('Error', err?.message || 'Failed to create profile. Please try again.');
-            setIsLoading(false);
-            return;
-          }
-
-          Alert.alert('Success', 'Your profile has been created!');
-          navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
-          setIsLoading(false);
-          return;
-        }
-
-        // Non-social users below: password + email verification path
-        // If logged in to a different email, auto sign out to proceed with creating the new account
-        if (auth.currentUser && auth.currentUser.email && auth.currentUser.email !== email) {
-          try {
-            await signOut(auth);
-          } catch (e) {
-            console.warn('Auto sign-out failed before creating new account', e);
-            Alert.alert('Please sign out', 'You are currently signed in with a different account. Please sign out and try again.');
-            setIsLoading(false);
-            return;
-          }
-        }
-        if (!password) {
-          Alert.alert('Missing Info', 'Please enter a password.');
-          setIsLoading(false);
-          return;
-        }
-
-        // Username uniqueness (case-insensitive)
-        if (username) {
-          const profilesCol = collection(db, 'profiles');
-          const q = query(profilesCol, where('username_lower', '==', username.toLowerCase()));
-          const snap = await getDocs(q);
-          if (!snap.empty) {
-            setUsernameError('This username is already in use.');
-            Alert.alert('Username Taken', 'Please choose a different username.');
-            setIsLoading(false);
-            return;
-          }
-        }
-        
-        // If there's already a user, force reload + token refresh and proceed if verified
-        if (auth.currentUser) {
-          await reload(auth.currentUser);
-          await getIdToken(auth.currentUser, true);
-          // Double-check token claims reflect verified state
-          try {
-            const claims = await getIdTokenResult(auth.currentUser, true);
-            console.log('🔐 Token claims before create write', {
-              email: auth.currentUser.email,
-              uid: auth.currentUser.uid,
-              emailVerifiedLocal: auth.currentUser.emailVerified,
-              email_verified_claim: (claims as any)?.claims?.email_verified,
-              sign_in_provider: (claims as any)?.signInProvider || (claims as any)?.claims?.firebase?.sign_in_provider,
-            });
-          } catch (e) {
-            console.warn('getIdTokenResult failed (pre-write)', e);
-          }
-          if (!auth.currentUser.emailVerified) {
-            // As a fallback, allow the user to tap Refresh button, but don't block the UI state here
-            setAwaitingEmailVerification(true);
-            Alert.alert('Verify your email', 'Please verify your email, then tap "I verified — Refresh" to continue.');
-            setIsLoading(false);
-            return;
-          }
-        }
-
-        // If no current user, create auth user first, send verification, and block until verified
-        if (!auth.currentUser) {
-          const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-          userId = userCredential.user.uid;
-          try {
-            await sendEmailVerification(userCredential.user);
-            setAwaitingEmailVerification(true);
-            Alert.alert('Verify your email', 'We sent a verification link. Please verify, then tap "I verified — Refresh".');
-          } catch (e) {
-            console.warn('Could not send verification email on signup', e);
-          }
-          setIsLoading(false);
-          return; // Do not create profile until verified
-        }
-
-  // Reached here means current user exists and is verified -> ensure we are authenticated as the typed email
-  // If for any reason current user email differs, sign in with provided credentials again
-  if (!auth.currentUser?.email || auth.currentUser.email.toLowerCase() !== email.toLowerCase()) {
-    await signInWithEmailAndPassword(auth, email, password);
-  }
-  // Ensure token reflects email_verified before writing
-  await reload(auth.currentUser!);
-  await getIdToken(auth.currentUser!, true);
-  try {
-    const claims = await getIdTokenResult(auth.currentUser!, true);
-    console.log('🔐 Token claims at write time', {
-      email: auth.currentUser!.email,
-      uid: auth.currentUser!.uid,
-      emailVerifiedLocal: auth.currentUser!.emailVerified,
-      email_verified_claim: (claims as any)?.claims?.email_verified,
-      sign_in_provider: (claims as any)?.signInProvider || (claims as any)?.claims?.firebase?.sign_in_provider,
-    });
-    if (!(claims as any)?.claims?.email_verified) {
-      Alert.alert('Verify your email', 'Your email is not verified yet. Tap "I verified — Refresh" and try again.');
-      setIsLoading(false);
-      return;
-    }
-  } catch (e) {
-    console.warn('getIdTokenResult failed (write-time)', e);
-  }
-  userId = auth.currentUser!.uid;
-        if (photo) {
-          console.log("📸 Uploading profile photo for new user...");
-          const compressedUri = await compressImage(photo);
-          photoURL = await uploadProfileImage(compressedUri, userId);
-          console.log("✅ Photo uploaded:", photoURL);
-        }
-
-        const profileData = {
-          username,
-          email,
-          bio,
-          socials: {
-            instagram,
-            facebook,
-          },
-          photo: photoURL,
-          sportsPreferences: selectedSports,
-          username_lower: username ? username.toLowerCase() : null,
-          uid: userId,
-          emailVerified: true,
-          acceptedTerms: true,
-          acceptedCommunityGuidelines: true,
-          termsAcceptedAt: serverTimestamp(),
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        };
-
-        try {
-          await setDoc(doc(db, "profiles", userId), profileData);
-        } catch (err: any) {
-          // One-time retry after forced token refresh to avoid stale claims
-          if (err?.code === 'permission-denied') {
-            try {
-              await getIdToken(auth.currentUser!, true);
-              await reload(auth.currentUser!);
-              if (auth.currentUser?.emailVerified) {
-                await setDoc(doc(db, "profiles", userId), profileData);
-              } else {
-                throw err;
-              }
-            } catch (retryErr) {
-              throw err;
-            }
-          } else {
-            throw err;
-          }
-        }
-  Alert.alert('Success', 'Your profile has been created!');
-  navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'MainTabs' }] }));
+        Alert.alert('Success', 'Your profile has been created!');
+        // Navigate to EmailVerificationGate instead of MainTabs
+        navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'EmailVerificationGate' }] }));
       }
     } catch (error: any) {
       console.error("❌ Error saving profile:", error);
@@ -805,6 +539,17 @@ const CreateProfileScreen = ({ route }: any) => {
   <Ionicons name="arrow-back" size={28} color={theme.primary} />
       </TouchableOpacity>
 
+      {/* Save button (edit mode only) */}
+      {isEdit && (
+        <TouchableOpacity
+          style={[styles.backButton, { top: insets.top + 10, right: 16, position: 'absolute', zIndex: 10 }]}
+          onPress={handleContinue}
+          accessibilityLabel="Save Profile"
+        >
+          <Ionicons name="checkmark" size={28} color={theme.primary} />
+        </TouchableOpacity>
+      )}
+
       {/* Centered, smaller logo */}
       <View style={styles.logoWrapper}>
         <Logo />
@@ -831,15 +576,34 @@ const CreateProfileScreen = ({ route }: any) => {
 
       {/* Input Fields */}
       <View style={styles.formContainer}>
-        <TextInput
-          style={styles.input}
-          placeholder="Username"
-          placeholderTextColor="#999"
-          value={username}
-          onChangeText={setUsername}
-        />
+        <View style={styles.inputContainer}>
+          <TextInput
+            style={styles.input}
+            placeholder="Username"
+            placeholderTextColor="#999"
+            value={username}
+            onChangeText={setUsername}
+          />
+          {username.length >= 3 && (
+            <View style={styles.usernameStatus}>
+              {isCheckingUsername ? (
+                <ActivityIndicator size="small" color={theme.primary} />
+              ) : usernameAvailable === true ? (
+                <Ionicons name="checkmark-circle" size={20} color="#4ECDC4" />
+              ) : usernameAvailable === false ? (
+                <Ionicons name="close-circle" size={20} color="#FF6B6B" />
+              ) : null}
+            </View>
+          )}
+        </View>
         {!isEdit && showUsernameError && usernameError ? (
           <Text style={styles.errorText}>{usernameError}</Text>
+        ) : null}
+        {username.length >= 3 && usernameAvailable === false ? (
+          <Text style={styles.errorText}>Username is already taken</Text>
+        ) : null}
+        {username.length >= 3 && usernameAvailable === true ? (
+          <Text style={styles.successText}>Username is available!</Text>
         ) : null}
         {/* Bio field replaces location */}
         <TextInput
@@ -854,114 +618,117 @@ const CreateProfileScreen = ({ route }: any) => {
           textAlignVertical="top"
         />
         <Text style={styles.characterCount}>{bio.length}/62</Text>
-        <TextInput
-          style={[styles.input, ((isEdit || emailLocked || isSocialAuthUser) ? styles.inputDisabled : null)]}
-          placeholder="Email"
-          placeholderTextColor="#999"
-          keyboardType="email-address"
-          value={email}
-          onChangeText={setEmail}
-          editable={!isEdit && !isSocialAuthUser && !emailLocked}
-        />
-        {/* Email verification controls (only for non-social flows) */}
-        {!isEdit && !isSocialAuthUser ? (
-          // Create mode: show actions until verified; show green badge after
-          <View style={styles.emailVerifyRow}>
-            {!isEmailVerified ? (
-              <>
-                <TouchableOpacity
-                  style={[
-                    styles.verifyActionButton,
-                    (sendCooldown > 0 || isSendingVerify) 
-                      ? { backgroundColor: theme.isDark ? '#009fa3' : theme.primaryStrong }
-                      : { backgroundColor: theme.isDark ? '#1ae9ef' : theme.primary },
-                    { marginLeft: 0 },
-                  ]}
-                  onPress={handleSendVerificationEmail}
-                  disabled={sendCooldown > 0 || isSendingVerify}
-                >
-                  {isSendingVerify ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <Text style={styles.verifyActionText}>
-                      {sendCooldown > 0 ? `Send again in ${sendCooldown}s` : 'Send verification'}
-                    </Text>
-                  )}
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[
-                    styles.verifyActionButton,
-                    { marginLeft: 8 },
-                    sentVerification
-                      ? { backgroundColor: theme.isDark ? '#1ae9ef' : theme.primary }
-                      : { backgroundColor: theme.isDark ? '#009fa3' : theme.primaryStrong },
-                  ]}
-                  onPress={handleRefreshVerifyButton}
-                  disabled={isCheckingVerify || !sentVerification}
-                >
-                  {isCheckingVerify ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <Text style={styles.verifyActionText}>I verified — Refresh</Text>
-                  )}
-                </TouchableOpacity>
-              </>
-            ) : (
-              <View style={[styles.verifyBadge, styles.badgeVerified]}>
-                <Ionicons name="checkmark-circle" size={16} color="#fff" />
-                <Text style={styles.verifyBadgeText}>Verified</Text>
+
+        {/* Birth Date Field (Create mode only) */}
+        {!isEdit && (
+          <View>
+            <Text style={styles.subtitle}>Date of Birth</Text>
+            <Text style={styles.dobSubtitle}>You must be at least 18 years old to use SportsPal</Text>
+            
+            <View style={styles.dobRowContainer}>
+              <View style={[styles.dobFieldContainer, { flex: 1 }]}>
+                <Text style={styles.dobLabel}>Day</Text>
+                <TextInput
+                  style={styles.dobFieldInput}
+                  placeholder="DD"
+                  placeholderTextColor="#999"
+                  value={birthDay}
+                  onChangeText={(text) => {
+                    const cleaned = text.replace(/\D/g, '');
+                    if (cleaned.length <= 2) {
+                      setBirthDay(cleaned);
+                      if (cleaned.length === 2) {
+                        birthMonthRef.current?.focus();
+                      }
+                    }
+                  }}
+                  keyboardType="numeric"
+                  maxLength={2}
+                  autoCorrect={false}
+                  autoCapitalize="none"
+                  returnKeyType="next"
+                  onSubmitEditing={() => birthMonthRef.current?.focus()}
+                  onFocus={() => {
+                    setTimeout(() => {
+                      scrollRef.current?.scrollTo({ y: 300, animated: true });
+                    }, 100);
+                  }}
+                />
               </View>
-            )}
-          </View>
-        ) : (
-          // Edit mode: keep existing password-user flow; show actions when needed
-          (auth.currentUser && (isPasswordUser || isEdit)) || awaitingEmailVerification ? (
-            <View style={styles.emailVerifyRow}>
-              {!isEmailVerified && (
-                <>
-                  <TouchableOpacity
-                    style={[
-                      styles.verifyActionButton,
-                      (sendCooldown > 0 || isSendingVerify) ? styles.verifyActionButtonDisabled : null,
-                      { marginLeft: 0 },
-                    ]}
-                    onPress={handleSendVerificationEmail}
-                    disabled={sendCooldown > 0 || isSendingVerify}
-                  >
-                    {isSendingVerify ? (
-                      <ActivityIndicator color="#fff" />
-                    ) : (
-                      <Text style={styles.verifyActionText}>
-                        {sendCooldown > 0 ? `Send again in ${sendCooldown}s` : 'Send verification'}
-                      </Text>
-                    )}
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[
-                      styles.verifyActionButton,
-                      { marginLeft: 8 },
-                      (isCheckingVerify || !sentVerification) ? styles.verifyActionButtonDisabled : null,
-                    ]}
-                    onPress={handleRefreshVerifyButton}
-                    disabled={isCheckingVerify || !sentVerification}
-                  >
-                    {isCheckingVerify ? (
-                      <ActivityIndicator color="#fff" />
-                    ) : (
-                      <Text style={styles.verifyActionText}>I verified — Refresh</Text>
-                    )}
-                  </TouchableOpacity>
-                </>
-              )}
+              
+              <View style={[styles.dobFieldContainer, { flex: 1, marginHorizontal: 10 }]}>
+                <Text style={styles.dobLabel}>Month</Text>
+                <TextInput
+                  ref={birthMonthRef}
+                  style={styles.dobFieldInput}
+                  placeholder="MM"
+                  placeholderTextColor="#999"
+                  value={birthMonth}
+                  onChangeText={(text) => {
+                    const cleaned = text.replace(/\D/g, '');
+                    if (cleaned.length <= 2) {
+                      setBirthMonth(cleaned);
+                      if (cleaned.length === 2) {
+                        birthYearRef.current?.focus();
+                      }
+                    }
+                  }}
+                  keyboardType="numeric"
+                  maxLength={2}
+                  autoCorrect={false}
+                  autoCapitalize="none"
+                  returnKeyType="next"
+                  onSubmitEditing={() => birthYearRef.current?.focus()}
+                  onFocus={() => {
+                    setTimeout(() => {
+                      scrollRef.current?.scrollTo({ y: 300, animated: true });
+                    }, 100);
+                  }}
+                />
+              </View>
+              
+              <View style={[styles.dobFieldContainer, { flex: 1.5 }]}>
+                <Text style={styles.dobLabel}>Year</Text>
+                <TextInput
+                  ref={birthYearRef}
+                  style={styles.dobFieldInput}
+                  placeholder="YYYY"
+                  placeholderTextColor="#999"
+                  value={birthYear}
+                  onChangeText={(text) => {
+                    const cleaned = text.replace(/\D/g, '');
+                    if (cleaned.length <= 4) setBirthYear(cleaned);
+                  }}
+                  keyboardType="numeric"
+                  maxLength={4}
+                  autoCorrect={false}
+                  autoCapitalize="none"
+                  returnKeyType="done"
+                  onFocus={() => {
+                    setTimeout(() => {
+                      scrollRef.current?.scrollTo({ y: 300, animated: true });
+                    }, 100);
+                  }}
+                />
+              </View>
             </View>
-          ) : null
-        )}
-        {!isEdit && !isSocialAuthUser && awaitingEmailVerification ? (
-          <View style={[styles.requirementsBox, { marginTop: 6 }]}> 
-            <Text style={styles.requirementsTitle}>Verify your email to continue</Text>
-            <Text style={styles.requirementItem}>We sent a verification link to {email}. Open it, then tap "I verified — Refresh" above.</Text>
+                
+            {birthDay && birthMonth && birthYear ? (() => {
+              const error = validateBirthDate();
+              if (error) {
+                return <Text style={styles.dobError}>{error}</Text>;
+              }
+              const age = calculateAge(`${birthDay.padStart(2, '0')}-${birthMonth.padStart(2, '0')}-${birthYear}`);
+              return (
+                <View style={styles.dobSuccess}>
+                  <Ionicons name="checkmark-circle" size={16} color="#4ECDC4" />
+                  <Text style={styles.dobSuccessText}>Verified age: {age} years old</Text>
+                </View>
+              );
+            })() : null}
           </View>
-        ) : null}
+        )}
+
         {/* Phone field removed */}
         {/* Password / Change Password Section */}
         {!isSocialAuthUser ? (
@@ -1036,51 +803,8 @@ const CreateProfileScreen = ({ route }: any) => {
                 </View>
               )}
             </>
-          ) : (
-            // Create mode password fields
-            <>
-              <TextInput
-                style={styles.input}
-                placeholder="Password"
-                placeholderTextColor="#999"
-                secureTextEntry
-                value={password}
-                onChangeText={setPassword}
-              />
-              <TextInput
-                style={styles.input}
-                placeholder="Confirm Password"
-                placeholderTextColor="#999"
-                secureTextEntry
-                value={confirmPassword}
-                onChangeText={setConfirmPassword}
-              />
-              {usernameError ? <Text style={styles.errorText}>{usernameError}</Text> : null}
-              {passwordError ? <Text style={styles.errorText}>{passwordError}</Text> : null}
-              <View style={styles.strengthBarContainer}>
-                <View style={styles.strengthBarBg}>
-                  <View style={[styles.strengthBarFill, { width: `${passwordStrength.percent}%`, backgroundColor: passwordStrength.color }]} />
-                </View>
-                <Text style={[styles.strengthLabel, { color: passwordStrength.color }]}>{passwordStrength.label}</Text>
-              </View>
-              <View style={styles.requirementsBox}>
-                <Text style={styles.requirementsTitle}>Your password must include:</Text>
-                {(() => { const c = getPasswordChecks(password); return (
-                  <>
-                    <Text style={[styles.requirementItem, { color: c.len ? '#2ecc71' : '#bbb' }]}>• At least 8 characters</Text>
-                    <Text style={[styles.requirementItem, { color: c.upper ? '#2ecc71' : '#bbb' }]}>• One uppercase letter</Text>
-                    <Text style={[styles.requirementItem, { color: c.number ? '#2ecc71' : '#bbb' }]}>• One number</Text>
-                    <Text style={[styles.requirementItem, { color: c.symbol ? '#2ecc71' : '#bbb' }]}>• One symbol</Text>
-                  </>
-                ); })()}
-              </View>
-            </>
-          )
-        ) : (
-          <Text style={{ color: '#aaa', marginBottom: 10 }}>
-            {isGoogleUser ? 'You signed up with Google.' : isFacebookUser ? 'You signed up with Facebook.' : 'You signed up with Apple.'} No password needed.
-          </Text>
-        )}
+          ) : null
+        ) : null}
       </View>
 
       <Text style={styles.subtitle}>Select Your Favorite Sports</Text>
@@ -1096,14 +820,21 @@ const CreateProfileScreen = ({ route }: any) => {
             ]}
             onPress={() => toggleSport(sport)}
           >
-            <Text
-              style={[
-                styles.sportButtonText,
-                selectedSports.includes(sport) && styles.sportButtonTextSelected,
-              ]}
-            >
-              {sport}
-            </Text>
+            <View style={styles.sportButtonContent}>
+              <ActivityIcon
+                activity={sport}
+                size={16}
+                color={selectedSports.includes(sport) ? '#fff' : theme.primary}
+              />
+              <Text
+                style={[
+                  styles.sportButtonText,
+                  selectedSports.includes(sport) && styles.sportButtonTextSelected,
+                ]}
+              >
+                {sport}
+              </Text>
+            </View>
           </TouchableOpacity>
         ))}
       </View>
@@ -1179,6 +910,28 @@ const CreateProfileScreen = ({ route }: any) => {
           {/* Acceptance Checkboxes */}
           <TouchableOpacity
             style={styles.checkboxRow}
+            onPress={() => setAcceptedAdulthood(!acceptedAdulthood)}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.checkbox, acceptedAdulthood && styles.checkboxChecked]}>
+              {acceptedAdulthood && <Ionicons name="checkmark" size={18} color="#fff" />}
+            </View>
+            <Text style={styles.checkboxLabel}>
+              I confirm that I am at least 18 years old and legally permitted to use SportsPal in my jurisdiction.
+            </Text>
+          </TouchableOpacity>
+          {!acceptedAdulthood && birthDay && birthMonth && birthYear ? (() => {
+            const err = validateBirthDate();
+            if (!err) return (
+              <Text style={styles.ageConfirmText}>
+                ✓ Birth date indicates you are 18+
+              </Text>
+            );
+            return null;
+          })() : null}
+
+          <TouchableOpacity
+            style={styles.checkboxRow}
             onPress={() => setAcceptedTerms(!acceptedTerms)}
             activeOpacity={0.7}
           >
@@ -1230,11 +983,10 @@ const CreateProfileScreen = ({ route }: any) => {
       <TouchableOpacity
         style={[
           styles.continueButton,
-          (!isEdit && !isSocialAuthUser && auth.currentUser && !isEmailVerified) ? { opacity: 0.6 } : null,
-          (!isEdit && (!acceptedTerms || !acceptedCommunity)) ? { opacity: 0.6 } : null,
+          (!isEdit && (!acceptedTerms || !acceptedCommunity || !acceptedAdulthood)) ? { opacity: 0.6 } : null,
         ]}
         onPress={handleContinue}
-        disabled={(!isEdit && !isSocialAuthUser && auth.currentUser != null && !isEmailVerified) || (!isEdit && (!acceptedTerms || !acceptedCommunity))}
+        disabled={(!isEdit && (!acceptedTerms || !acceptedCommunity || !acceptedAdulthood))}
       >
         <Text style={styles.continueButtonText}>{mainCtaLabel}</Text>
       </TouchableOpacity>
@@ -1346,14 +1098,14 @@ const CreateProfileScreen = ({ route }: any) => {
               <Text style={{ fontWeight: 'bold' }}>19) Dispute Resolution — Binding Arbitration; Class Action Waiver{'\n\n'}</Text>
               PLEASE READ — THIS SECTION LIMITS HOW DISPUTES ARE RESOLVED.{'\n\n'}
               <Text style={{ fontWeight: '600' }}>Informal resolution.</Text> Before filing a claim, you agree to email sportspalapplication@gmail.com with "Dispute Notice," your name, account email, a brief description, and relief sought. We'll try to resolve within 30 days.{'\n\n'}
-              <Text style={{ fontWeight: '600' }}>Arbitration.</Text> If not resolved, any dispute, claim, or controversy arising out of or relating to these Terms or the Service ("Dispute") will be resolved by binding individual arbitration under the U.S. Federal Arbitration Act and JAMS or AAA rules (we'll agree on one). The arbitrator may award individual relief. No class arbitration. Seat of arbitration: [choose one: New York, NY / Delaware / California]; language: English. We'll pay filing/administrative fees for non-frivolous claims up to a reasonable cap set by rules.{'\n\n'}
+              <Text style={{ fontWeight: '600' }}>Arbitration.</Text> If not resolved, any dispute, claim, or controversy arising out of or relating to these Terms or the Service ("Dispute") will be resolved by binding individual arbitration under the U.S. Federal Arbitration Act and JAMS or AAA rules (we'll agree on one). The arbitrator may award individual relief. No class arbitration. Seat of arbitration: Athens, Greece; language: English. We'll pay filing/administrative fees for non-frivolous claims up to a reasonable cap set by rules.{'\n\n'}
               <Text style={{ fontWeight: '600' }}>Class-action waiver.</Text> You and SportsPal waive any right to a jury trial or to participate in a class, consolidated, or representative action.{'\n\n'}
               <Text style={{ fontWeight: '600' }}>Opt-out.</Text> You may opt out of this arbitration clause within 30 days of first accepting these Terms by emailing sportspalapplication@gmail.com with subject "Arbitration Opt-Out," your full name, and account email.{'\n\n'}
               <Text style={{ fontWeight: '600' }}>Small claims & IP relief.</Text> Either party may seek individual relief in small-claims court within its jurisdiction or seek injunctive relief in court for IP or unauthorized use of the Service.{'\n\n'}
               <Text style={{ fontWeight: '600' }}>EEA/UK/India/Other.</Text> If mandatory local law prohibits binding arbitration or class waivers for consumers, this Section does not deprive you of those non-waivable rights. You may bring claims in the courts of your habitual residence as required by law.{'\n\n'}
               
               <Text style={{ fontWeight: 'bold' }}>20) Governing Law; Venue{'\n\n'}</Text>
-              Except where prohibited by mandatory local law, these Terms are governed by the laws of [choose one: Greece / England & Wales / State of Delaware, USA], without regard to its conflicts of laws rules. Subject to the arbitration clause, the exclusive venue for litigation (if any) shall be the courts located in [Athens, Greece / London, UK / Delaware, USA]. Consumers in the EEA/UK may bring claims in their local courts where required by law.{'\n\n'}
+              Except where prohibited by mandatory local law, these Terms are governed by the laws of Greece, without regard to its conflicts of laws rules. Subject to the arbitration clause, the exclusive venue for litigation (if any) shall be the courts located in Athens, Greece. Consumers in the EEA/UK may bring claims in their local courts where required by law.{'\n\n'}
               
               <Text style={{ fontWeight: 'bold' }}>21) App Store Terms (Apple/Google) — Third-Party Beneficiary{'\n\n'}</Text>
               <Text style={{ fontWeight: '600' }}>Apple.</Text> You acknowledge these Terms are between you and SportsPal, not Apple Inc. Apple is not responsible for the Service or its content, has no obligation to furnish support, and is not liable for claims relating to the app (product liability, legal compliance, or IP). Apple is a third-party beneficiary of these Terms and may enforce them against you regarding your use of the iOS app. In the event of any failure to conform to any applicable warranty, you may notify Apple and Apple will refund the purchase price (if any).{'\n\n'}
@@ -1599,28 +1351,40 @@ const createStyles = (t: any) => StyleSheet.create({
     width: '100%',
     flexDirection: 'row',
     flexWrap: 'wrap',
-    justifyContent: 'center',
+    justifyContent: 'space-between',
     marginBottom: 30,
+    paddingHorizontal: 4,
   },
   sportButton: {
-    width: '28%',
-    margin: '2%',
-    paddingVertical: 10,
-    paddingHorizontal: 5,
-    borderRadius: 20,
-    borderWidth: 1,
+    width: '31%',
+    marginBottom: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 6,
+    borderRadius: 24,
+    borderWidth: 1.5,
     borderColor: t.primary,
     backgroundColor: t.card,
     alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 52,
   },
   sportButtonSelected: {
     backgroundColor: t.primary,
   },
+  sportButtonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    flexWrap: 'nowrap',
+  },
   sportButtonText: {
-    fontSize: 12,
-    fontWeight: '600',
+    fontSize: 10.5,
+    fontWeight: '700',
     color: t.primary,
     textAlign: 'center',
+    flexShrink: 1,
+    lineHeight: 13,
   },
   sportButtonTextSelected: {
     color: '#fff',
@@ -1829,6 +1593,33 @@ const createStyles = (t: any) => StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
   },
+  fieldLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: t.text,
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  ageConfirmText: {
+    color: '#2ecc71',
+    fontSize: 14,
+    fontWeight: '600',
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  dobHelper: {
+    fontSize: 12,
+    color: t.muted,
+    marginTop: 4,
+    marginBottom: 4,
+  },
+  disclaimerText: {
+    fontSize: 11,
+    color: t.muted,
+    marginTop: 6,
+    fontStyle: 'italic',
+    lineHeight: 16,
+  },
   // Modal styles
   modalBackdrop: {
     flex: 1,
@@ -1863,6 +1654,101 @@ const createStyles = (t: any) => StyleSheet.create({
     fontSize: 13,
     lineHeight: 20,
     paddingHorizontal: 8,
+  },
+  dobSubtitle: {
+    fontSize: 14,
+    color: t.text,
+    textAlign: 'center',
+    marginBottom: 15,
+    opacity: 0.7,
+  },
+  dobRowContainer: {
+    flexDirection: 'row',
+    width: '100%',
+    marginBottom: 10,
+  },
+  dobFieldContainer: {
+    alignItems: 'center',
+  },
+  dobLabel: {
+    fontSize: 13,
+    color: t.muted,
+    marginBottom: 6,
+    fontWeight: '600',
+  },
+  dobFieldInput: {
+    backgroundColor: t.card,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: t.border,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    fontSize: 16,
+    color: t.text,
+    textAlign: 'center',
+    width: '100%',
+  },
+  formatIndicator: {
+    fontSize: 12,
+    color: t.primary,
+    textAlign: 'center',
+    marginTop: 5,
+    fontWeight: '500',
+  },
+  dobInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: t.cardBackground,
+    borderRadius: 12,
+    paddingHorizontal: 15,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: t.border,
+    marginBottom: 10,
+  },
+  dobIcon: {
+    marginRight: 10,
+  },
+  dobInput: {
+    flex: 1,
+    fontSize: 16,
+    color: t.text,
+    fontFamily: 'System',
+  },
+  dobError: {
+    color: '#FF6B6B',
+    fontSize: 14,
+    textAlign: 'center',
+    marginTop: 5,
+  },
+  dobSuccess: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 5,
+  },
+  dobSuccessText: {
+    color: '#4ECDC4',
+    fontSize: 14,
+    marginLeft: 5,
+    fontWeight: '500',
+  },
+  inputContainer: {
+    position: 'relative',
+    width: '100%',
+  },
+  usernameStatus: {
+    position: 'absolute',
+    right: 15,
+    top: '50%',
+    transform: [{ translateY: -10 }],
+    zIndex: 1,
+  },
+  successText: {
+    color: '#4ECDC4',
+    fontSize: 14,
+    textAlign: 'center',
+    marginTop: 5,
   },
 });
 

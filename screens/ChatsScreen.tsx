@@ -27,6 +27,7 @@ import { Swipeable, RectButton } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import UserAvatar from '../components/UserAvatar';
 import * as ImagePicker from 'expo-image-picker';
 import { uploadChatImage } from '../utils/imageUtils';
 import { muteChat, unmuteChat, getMutedChats } from '../utils/firestoreMutes';
@@ -50,6 +51,7 @@ import {
   orderBy,
   deleteDoc,
   getDocs,
+  updateDoc,
 } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 import { db, auth } from '../firebaseConfig';
@@ -201,6 +203,8 @@ const ChatsScreen = ({ navigation }: any) => {
   const [chatMenuVisible, setChatMenuVisible] = useState(false);
   const [selectedChat, setSelectedChat] = useState<any>(null);
   const [mutedChats, setMutedChats] = useState<string[]>([]);
+  const [displayedChatsCount, setDisplayedChatsCount] = useState(10);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
 
   // Profile cache to minimize reads
   const profileCacheRef = useRef<{ [uid: string]: { username: string; photo?: string; timestamp: number } }>({});
@@ -327,9 +331,22 @@ const ChatsScreen = ({ navigation }: any) => {
         async (snapshot) => {
           const baseChats: Chat[] = snapshot.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
 
+          // Filter out chats hidden by current user (unless there's a new message after hide)
+          const visibleChats = baseChats.filter((chat) => {
+            const hiddenBy = chat.hiddenBy || [];
+            if (!hiddenBy.includes(uid)) return true;
+            
+            // Check if there's a new message after user hid the chat
+            const hiddenAt = chat.hiddenAt?.[uid] || 0;
+            const lastMessageTs = tsMs(chat.lastMessageTimestamp);
+            
+            // If new message arrived after hiding, show the chat again
+            return lastMessageTs > hiddenAt;
+          });
+
           // INSTAGRAM-STYLE: Shape chats with MINIMAL reads
           const shaped = await Promise.all(
-            baseChats.map(async (chat) => {
+            visibleChats.map(async (chat) => {
               const me = auth.currentUser?.uid || '';
               const isDm = chat.type === 'dm' || String(chat.id || '').startsWith('dm_');
 
@@ -462,9 +479,9 @@ const ChatsScreen = ({ navigation }: any) => {
           const sorted = shaped.sort((a: any, b: any) => (b.lastTsMillis || 0) - (a.lastTsMillis || 0));
           setChats(sorted);
 
-          // ========== SAVE TO CACHE (first 5 chats only) ==========
+          // ========== SAVE TO CACHE (all chats for offline access) ==========
           (async () => {
-            await saveChatListToCache(sorted.slice(0, 5) as any);
+            await saveChatListToCache(sorted as any);
             
             // Save all profiles we've encountered to cache
             const allProfiles: Record<string, any> = {};
@@ -704,6 +721,56 @@ const ChatsScreen = ({ navigation }: any) => {
     }
   };
 
+  const handleDeleteChat = async () => {
+    if (!selectedChat?.id) return;
+    
+    setChatMenuVisible(false);
+    
+    Alert.alert(
+      'Delete Chat',
+      'Are you sure you want to delete this conversation? This will only hide it from your view.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const uid = auth.currentUser?.uid;
+              if (!uid) return;
+              
+              // Remove chat from local state immediately
+              setChats(prev => prev.filter(c => c.id !== selectedChat.id));
+              
+              // Mark chat as hidden in Firestore (stays in participants, just hidden)
+              const chatRef = doc(db, 'chats', selectedChat.id);
+              const chatSnap = await getDoc(chatRef);
+              
+              if (chatSnap.exists()) {
+                const chatData = chatSnap.data();
+                const hiddenBy = chatData.hiddenBy || [];
+                
+                // Add user to hiddenBy array if not already there
+                if (!hiddenBy.includes(uid)) {
+                  await updateDoc(chatRef, { 
+                    hiddenBy: [...hiddenBy, uid],
+                    // Store the timestamp when hidden so we can unhide on new messages
+                    [`hiddenAt.${uid}`]: Date.now()
+                  });
+                }
+              }
+              
+              await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            } catch (error) {
+              console.error('Error hiding chat:', error);
+              Alert.alert('Error', 'Failed to hide chat. Please try again.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
   /** ========= Animations ========= */
   useEffect(() => {
     if (isReady) {
@@ -727,6 +794,25 @@ const ChatsScreen = ({ navigation }: any) => {
     ),
     [chats, searchQuery]
   );
+
+  // Display only first N chats for lazy loading
+  const displayedChats = useMemo(() => 
+    searchQuery ? filteredChats : filteredChats.slice(0, displayedChatsCount),
+    [filteredChats, displayedChatsCount, searchQuery]
+  );
+
+  const handleLoadMore = () => {
+    if (isLoadingMore || displayedChatsCount >= filteredChats.length) return;
+    
+    setIsLoadingMore(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    
+    // Load 10 more chats
+    setTimeout(() => {
+      setDisplayedChatsCount(prev => prev + 10);
+      setIsLoadingMore(false);
+    }, 300);
+  };
 
   /** ========= Row render ========= */
   const renderChatItem = ({ item }: any) => {
@@ -759,8 +845,10 @@ const ChatsScreen = ({ navigation }: any) => {
 
     const avatarEl =
       isDm ? (
-        <Image
-          source={{ uri: item.image || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(item.name || 'User') }}
+        <UserAvatar
+          photoUrl={item.image}
+          username={item.name || 'User'}
+          size={50}
           style={styles.dmAvatar}
         />
       ) : item.activityId ? (
@@ -857,7 +945,7 @@ const ChatsScreen = ({ navigation }: any) => {
         {!showActivity && (
           <TouchableOpacity
             onPress={() => setCreateModalVisible(true)}
-            style={[styles.squareIconBtn, { position: 'absolute', top: 10, right: 0, zIndex: 10 }]}
+            style={[styles.squareIconBtn, { position: 'absolute', top: 10, right: 0, zIndex: 20 }]}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
             <Ionicons name="add" size={20} color={theme.isDark ? '#111' : '#fff'} />
@@ -866,8 +954,11 @@ const ChatsScreen = ({ navigation }: any) => {
         {showActivity && (
           <>
             <TouchableOpacity
-              onPress={() => setShowActivity(false)}
-              style={[styles.headerBackBtn, { position: 'absolute', top: 10, left: 0, zIndex: 10 }]}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                setShowActivity(false);
+              }}
+              style={[styles.headerBackBtn, { position: 'absolute', top: 10, left: 0, zIndex: 20 }]}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
               <Ionicons name="arrow-back" size={26} color={theme.primary} />
@@ -885,7 +976,7 @@ const ChatsScreen = ({ navigation }: any) => {
                     console.warn('clear all notifications failed', e);
                   }
                 }}
-                style={[styles.headerBackBtn, { position: 'absolute', top: 10, right: 0, zIndex: 10 }]}
+                style={[styles.headerBackBtn, { position: 'absolute', top: 10, right: 0, zIndex: 20 }]}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
                 <Ionicons name="trash-outline" size={26} color={theme.primary} />
@@ -904,6 +995,7 @@ const ChatsScreen = ({ navigation }: any) => {
           style={styles.activityCard}
           activeOpacity={0.85}
           onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
             if (showActivity) {
               setShowActivity(false);
             } else {
@@ -913,7 +1005,7 @@ const ChatsScreen = ({ navigation }: any) => {
             }
           }}
         >
-          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }} pointerEvents="none">
             <View style={styles.activityIconWrap}>
               <Ionicons name="notifications-outline" size={22} color={theme.primary} />
               {notificationCount > 0 && (
@@ -935,6 +1027,7 @@ const ChatsScreen = ({ navigation }: any) => {
             name={showActivity ? 'chevron-down' : 'chevron-forward'} 
             size={18} 
             color={theme.primary}
+            pointerEvents="none"
           />
         </TouchableOpacity>
 
@@ -1134,11 +1227,21 @@ const ChatsScreen = ({ navigation }: any) => {
           </Animated.View>
         ) : (
           <FlatList
-            data={filteredChats}
+            data={displayedChats}
             keyExtractor={(item) => item.id}
-            contentContainerStyle={[styles.chatList, filteredChats.length === 0 && { flexGrow: 1 }]}
+            contentContainerStyle={[styles.chatList, displayedChats.length === 0 && { flexGrow: 1 }]}
             renderItem={renderChatItem}
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.primary} />}
+            onEndReached={handleLoadMore}
+            onEndReachedThreshold={0.5}
+            ListFooterComponent={
+              isLoadingMore && displayedChatsCount < filteredChats.length ? (
+                <View style={{ paddingVertical: 20, alignItems: 'center' }}>
+                  <ActivityIndicator size="small" color={theme.primary} />
+                  <Text style={{ color: theme.muted, fontSize: 12, marginTop: 8 }}>Loading more chats...</Text>
+                </View>
+              ) : null
+            }
             ListEmptyComponent={
               <View style={styles.emptyChatContainer}>
                 <Ionicons name="chatbubbles-outline" size={46} color={theme.primary} />
@@ -1299,6 +1402,14 @@ const ChatsScreen = ({ navigation }: any) => {
               <Text style={{ color: theme.text, fontSize: 16, fontWeight: '600' }}>
                 {selectedChat && mutedChats.includes(selectedChat.id) ? 'Unmute' : 'Mute'}
               </Text>
+            </TouchableOpacity>
+            <View style={{ height: 1, backgroundColor: theme.border }} />
+            <TouchableOpacity
+              style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
+              onPress={handleDeleteChat}
+            >
+              <Ionicons name="trash-outline" size={22} color={theme.danger} />
+              <Text style={{ color: theme.danger, fontSize: 16, fontWeight: '600' }}>Delete Chat</Text>
             </TouchableOpacity>
             <View style={{ height: 1, backgroundColor: theme.border }} />
             <TouchableOpacity

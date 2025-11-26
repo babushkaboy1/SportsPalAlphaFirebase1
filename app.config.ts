@@ -6,7 +6,7 @@ export default ({ config }: { config: any }) => ({
   slug: "SportsPal4",
   owner: "sportspal",
   scheme: "sportspal", // 👈 Add this line
-  version: "1.0.4",
+  version: "1.0.5",
   orientation: "portrait",
   // Updated app icon to new turquoise orb asset
   icon: "./assets/app-icon.png",
@@ -26,16 +26,16 @@ export default ({ config }: { config: any }) => ({
     associatedDomains: ["applinks:sportspal-1b468.web.app"],
     // iOS splash configuration - ensures splash shows immediately, not app icon
     splash: {
-      image: "./assets/splash-logo.png",
+      image: "./assets/splash-icon.png",
       resizeMode: "contain",
       backgroundColor: "#000000",
-      tabletImage: "./assets/splash-logo.png",
+      tabletImage: "./assets/splash-icon.png",
       // Prevent white/colored background flash
       dark: {
-        image: "./assets/splash-logo.png",
+        image: "./assets/splash-icon.png",
         resizeMode: "contain",
         backgroundColor: "#000000",
-        tabletImage: "./assets/splash-logo.png"
+        tabletImage: "./assets/splash-icon.png"
       }
     },
     infoPlist: {

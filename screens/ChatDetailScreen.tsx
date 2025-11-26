@@ -13,6 +13,7 @@
 // - Three chat types: DMs, Activity Groups, Custom Groups
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import UserAvatar from '../components/UserAvatar';
 import {
   View,
   Text,
@@ -354,7 +355,12 @@ const MessageBubble = React.memo<{
               onPress={() => onUserPress(message.senderId)}
               activeOpacity={0.7}
             >
-              <Image source={{ uri: avatarUrl }} style={styles.avatar} />
+              <UserAvatar
+                photoUrl={avatarUrl}
+                username={sender.username || 'User'}
+                size={28}
+                style={styles.avatar}
+              />
             </TouchableOpacity>
           ) : (
             <View style={{ width: 28 }} />
@@ -3059,8 +3065,7 @@ const ChatDetailScreen = () => {
                 renderItem={({ item }) => {
                   const user = profiles[item.userId];
                   const username = user?.username || 'User';
-                  const photo = user?.photo || user?.photoURL || 
-                    `https://ui-avatars.com/api/?name=${encodeURIComponent(username)}`;
+                  const photo = user?.photo || user?.photoURL;
                   
                   return (
                     <TouchableOpacity
@@ -3079,7 +3084,12 @@ const ChatDetailScreen = () => {
                       }}
                       activeOpacity={0.7}
                     >
-                      <Image source={{ uri: photo }} style={styles.avatar} />
+                      <UserAvatar
+                        photoUrl={photo}
+                        username={username}
+                        size={36}
+                        style={styles.avatar}
+                      />
                       <Text style={{ color: theme.text, fontSize: 15, fontWeight: '500', flex: 1, marginLeft: 10 }}>
                         {username}
                       </Text>

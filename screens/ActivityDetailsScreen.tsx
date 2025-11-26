@@ -24,6 +24,7 @@ import * as Location from 'expo-location';
 import * as Calendar from 'expo-calendar';
 import MapView, { Marker, PROVIDER_DEFAULT, Polyline, UrlTile, Callout } from 'react-native-maps';
 import { useActivityContext } from '../context/ActivityContext';
+import UserAvatar from '../components/UserAvatar';
 import { fetchUsersByIds } from '../utils/firestoreActivities';
 import { getOrCreateChatForActivity } from '../utils/firestoreChats';
 import { auth, db, storage } from '../firebaseConfig';
@@ -77,6 +78,9 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshLocked, setRefreshLocked] = useState(false);
   const [isAddedToCalendar, setIsAddedToCalendar] = useState(false);
+  const progressAnim = useRef(new Animated.Value(0)).current;
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const sparkleAnims = useRef([...Array(6)].map(() => new Animated.Value(0))).current;
   
   // Load calendar status from AsyncStorage on mount and when screen comes into focus
   const loadCalendarStatus = async () => {
@@ -118,6 +122,15 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
   const [selectedFriendIds, setSelectedFriendIds] = useState<Record<string, boolean>>({});
   const [noSelectionHintVisible, setNoSelectionHintVisible] = useState(false);
   const noSelectionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
+  // Success modal state (for newly created activities)
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [invitedFriendIds, setInvitedFriendIds] = useState<string[]>([]);
+  const overlayOpacity = useRef(new Animated.Value(0)).current;
+  const scaleAnim = useRef(new Animated.Value(0.7)).current;
+  const slideAnim = useRef(new Animated.Value(50)).current;
+  const iconScale = useRef(new Animated.Value(0)).current;
+  const iconRotate = useRef(new Animated.Value(0)).current;
 
   // Menu modal state
   const [menuVisible, setMenuVisible] = useState(false);
@@ -136,6 +149,60 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
       useNativeDriver: true,
     }).start();
   }, []);
+
+  // Animate progress bar
+  useEffect(() => {
+    if (!activity) return;
+    const progress = joinedUsers.length / activity.maxParticipants;
+    const isFull = joinedUsers.length >= activity.maxParticipants;
+    
+    Animated.spring(progressAnim, {
+      toValue: progress,
+      tension: 50,
+      friction: 7,
+      useNativeDriver: false,
+    }).start();
+
+    if (isFull) {
+      // Pulse animation when full
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, {
+            toValue: 1.05,
+            duration: 800,
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseAnim, {
+            toValue: 1,
+            duration: 800,
+            useNativeDriver: true,
+          }),
+        ])
+      ).start();
+
+      // Sparkle animations
+      sparkleAnims.forEach((anim, i) => {
+        Animated.loop(
+          Animated.sequence([
+            Animated.delay(i * 200),
+            Animated.timing(anim, {
+              toValue: 1,
+              duration: 600,
+              useNativeDriver: true,
+            }),
+            Animated.timing(anim, {
+              toValue: 0,
+              duration: 600,
+              useNativeDriver: true,
+            }),
+          ])
+        ).start();
+      });
+    } else {
+      pulseAnim.setValue(1);
+      sparkleAnims.forEach(anim => anim.setValue(0));
+    }
+  }, [joinedUsers.length, activity]);
 
   // Location (last known -> current fallback)
   useEffect(() => {
@@ -210,6 +277,83 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
     setup();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activityId, activity]);
+  
+  // Handle success modal for newly created activities
+  useEffect(() => {
+    if (route.params?.showSuccessModal) {
+      const loadFriends = async () => {
+        const uid = auth.currentUser?.uid;
+        if (!uid) return;
+        
+        const myFriendIds: string[] = Array.isArray(profile?.friends) ? profile.friends : [];
+        if (myFriendIds.length) {
+          try {
+            const users = await fetchUsersByIds(myFriendIds);
+            const filteredUsers = users.filter((u: any) => u.uid !== uid);
+            setFriendProfiles(filteredUsers);
+          } catch {
+            setFriendProfiles([]);
+          }
+        } else {
+          setFriendProfiles([]);
+        }
+      };
+      
+      loadFriends();
+      
+      // Show modal with slight delay for smooth entrance
+      setTimeout(() => {
+        setShowSuccessModal(true);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      }, 400);
+    }
+  }, [route.params?.showSuccessModal, profile]);
+  
+  // Success modal animations
+  useEffect(() => {
+    if (showSuccessModal) {
+      Animated.parallel([
+        Animated.timing(overlayOpacity, {
+          toValue: 1,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+        Animated.spring(scaleAnim, {
+          toValue: 1,
+          tension: 50,
+          friction: 7,
+          useNativeDriver: true,
+        }),
+        Animated.timing(slideAnim, {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+      ]).start();
+
+      setTimeout(() => {
+        Animated.parallel([
+          Animated.spring(iconScale, {
+            toValue: 1,
+            tension: 100,
+            friction: 5,
+            useNativeDriver: true,
+          }),
+          Animated.timing(iconRotate, {
+            toValue: 1,
+            duration: 600,
+            useNativeDriver: true,
+          }),
+        ]).start();
+      }, 200);
+    } else {
+      overlayOpacity.setValue(0);
+      scaleAnim.setValue(0.7);
+      slideAnim.setValue(50);
+      iconScale.setValue(0);
+      iconRotate.setValue(0);
+    }
+  }, [showSuccessModal]);
 
   // Early return with loading state if activity is null to prevent rendering errors
   if (!activity) {
@@ -730,12 +874,11 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
             />
           }
         >
-          {/* Map */}
           <View style={styles.mapContainer}>
             <MapView
               ref={mapRef}
               style={{ flex: 1, borderRadius: 10 }}
-              provider={Platform.OS === 'android' ? PROVIDER_DEFAULT : undefined}
+              provider={PROVIDER_DEFAULT}
               initialRegion={{
                 latitude: activity.latitude,
                 longitude: activity.longitude,
@@ -1080,9 +1223,12 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
 
             {/* Participants */}
             <View style={{ marginVertical: 10 }}>
-              <Text style={{ color: theme.primary, fontWeight: 'bold', fontSize: 16, marginBottom: 8 }}>
-                Participants
-              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                <Ionicons name="people" size={20} color={theme.primary} style={{ marginRight: 6 }} />
+                <Text style={{ color: theme.primary, fontWeight: 'bold', fontSize: 16 }}>
+                  Participants:
+                </Text>
+              </View>
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 {joinedUsers.map(user => (
                   <TouchableOpacity
@@ -1093,9 +1239,12 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                       else navigation.navigate('UserProfile', { userId: user.uid });
                     }}
                   >
-                    <Image
-                      source={{ uri: user.photo || user.photoURL || 'https://ui-avatars.com/api/?name=' + (user.username || 'User') }}
-                      style={{ width: 54, height: 54, borderRadius: 27, borderWidth: 2, borderColor: theme.primary }}
+                    <UserAvatar
+                      photoUrl={user.photo || user.photoURL}
+                      username={user.username}
+                      size={54}
+                      borderColor={theme.primary}
+                      borderWidth={2}
                     />
                     <Text style={{ color: theme.text, marginTop: 6, fontWeight: 'bold' }}>{user.username}</Text>
                   </TouchableOpacity>
@@ -1103,11 +1252,81 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
               </ScrollView>
             </View>
 
-            <View style={styles.joinContainer}>
-              <Text style={styles.joinText}>
-                {joinedUsers.length}/{activity.maxParticipants} joined
-              </Text>
-            </View>
+            {/* Animated Progress Bar */}
+            <Animated.View style={[styles.joinContainer, { transform: [{ scale: pulseAnim }] }]}>
+              <View style={styles.progressHeader}>
+                <View style={styles.progressTextRow}>
+                  <Text style={styles.joinText}>
+                    {joinedUsers.length}/{activity.maxParticipants} joined
+                  </Text>
+                </View>
+                {joinedUsers.length >= activity.maxParticipants && (
+                  <View style={styles.fullBadge}>
+                    <Ionicons name="checkmark-circle" size={16} color="#fff" />
+                    <Text style={styles.fullBadgeText}>FULL</Text>
+                  </View>
+                )}
+              </View>
+              
+              <View style={styles.progressBarContainer}>
+                <View style={styles.progressBarBackground}>
+                  <Animated.View
+                    style={[
+                      styles.progressBarFill,
+                      {
+                        width: progressAnim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: ['0%', '100%'],
+                        }),
+                        backgroundColor: joinedUsers.length >= activity.maxParticipants ? '#10b981' : theme.primary,
+                      },
+                    ]}
+                  >
+                    {joinedUsers.length >= activity.maxParticipants && (
+                      <View style={styles.sparkleContainer}>
+                        {sparkleAnims.map((anim, i) => (
+                          <Animated.View
+                            key={i}
+                            style={[
+                              styles.sparkle,
+                              {
+                                left: `${(i + 1) * 15}%`,
+                                opacity: anim,
+                                transform: [
+                                  {
+                                    translateY: anim.interpolate({
+                                      inputRange: [0, 1],
+                                      outputRange: [0, -8],
+                                    }),
+                                  },
+                                  {
+                                    scale: anim.interpolate({
+                                      inputRange: [0, 0.5, 1],
+                                      outputRange: [0, 1.2, 0],
+                                    }),
+                                  },
+                                ],
+                              },
+                            ]}
+                          >
+                            <Text style={styles.sparkleText}>✨</Text>
+                          </Animated.View>
+                        ))}
+                      </View>
+                    )}
+                  </Animated.View>
+                </View>
+                
+                {/* Progress percentage text */}
+                <Text style={styles.progressPercentage}>
+                  {Math.round((joinedUsers.length / activity.maxParticipants) * 100)}%
+                </Text>
+              </View>
+              
+              {joinedUsers.length >= activity.maxParticipants && (
+                <Text style={styles.fullMessage}>🎉 This activity is full!</Text>
+              )}
+            </Animated.View>
 
             {/* Actions */}
             <View style={styles.actionsContainer}>
@@ -1195,7 +1414,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                 <MapView
                   ref={(r) => { gpxMapRef.current = r; }}
                   style={{ flex: 1 }}
-                  provider={Platform.OS === 'android' ? PROVIDER_DEFAULT : undefined}
+                  provider={PROVIDER_DEFAULT}
                   initialRegion={{
                     latitude: (gpxCoords[0] || gpxWaypoints[0]).latitude,
                     longitude: (gpxCoords[0] || gpxWaypoints[0]).longitude,
@@ -1291,8 +1510,10 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                     activeOpacity={0.7}
                   >
                     <View style={styles.friendLeft}>
-                      <Image
-                        source={{ uri: f.photo || f.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(f.username || 'User')}` }}
+                      <UserAvatar
+                        photoUrl={f.photo || f.photoURL}
+                        username={f.username || 'User'}
+                        size={44}
                         style={styles.friendAvatar}
                       />
                       <View>
@@ -1325,6 +1546,255 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
             </View>
           )}
         </Pressable>
+      </Modal>
+
+      {/* Success Modal (for newly created activities) */}
+      <Modal visible={showSuccessModal} transparent animationType="none" onRequestClose={() => setShowSuccessModal(false)}>
+        <Animated.View style={[styles.modalOverlay, { opacity: overlayOpacity }]}>
+          <Animated.View
+            style={[
+              styles.modalCard,
+              {
+                maxWidth: 500,
+                padding: 24,
+                transform: [
+                  { scale: scaleAnim },
+                  { translateY: slideAnim },
+                ],
+              },
+            ]}
+          >
+            {/* Animated Activity Icon */}
+            <Animated.View
+              style={[
+                {
+                  width: 90,
+                  height: 90,
+                  borderRadius: 45,
+                  backgroundColor: theme.background,
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  alignSelf: 'center',
+                  marginBottom: 20,
+                  borderWidth: 3,
+                  borderColor: theme.primary,
+                  transform: [
+                    { scale: iconScale },
+                    { rotate: iconRotate.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: ['0deg', '360deg'],
+                    }) },
+                  ],
+                },
+              ]}
+            >
+              <Animated.View
+                style={{
+                  transform: [
+                    { rotate: iconRotate.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: ['0deg', '-360deg'],
+                    }) },
+                  ],
+                }}
+              >
+                <ActivityIcon 
+                  activity={route.params?.activitySport || activity.activity} 
+                  size={56} 
+                  color={theme.primary} 
+                />
+              </Animated.View>
+            </Animated.View>
+
+            {/* Title & Subtitle */}
+            <Text style={[styles.modalTitle, { fontSize: 26, textAlign: 'center', marginBottom: 8 }]}>
+              🎉 Activity Created!
+            </Text>
+            <Text style={{ fontSize: 14, color: theme.muted, textAlign: 'center', marginBottom: 20, lineHeight: 20 }}>
+              Your {route.params?.activitySport || activity.activity} activity is live! Friends can now discover and join from their feed.
+            </Text>
+
+            {/* Friends List */}
+            {friendProfiles.length > 0 ? (
+              <>
+                <Text style={{ fontSize: 15, fontWeight: '700', color: theme.text, marginBottom: 12, marginTop: 8 }}>
+                  Invite friends to join this activity:
+                </Text>
+                <ScrollView style={{ maxHeight: 260, marginBottom: 16 }} showsVerticalScrollIndicator={false}>
+                  {friendProfiles.map((friend: any) => {
+                    const isInvited = invitedFriendIds.includes(friend.uid);
+                    const isSelected = selectedFriendIds[friend.uid];
+                    return (
+                      <TouchableOpacity
+                        key={friend.uid}
+                        style={[
+                          {
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            paddingVertical: 12,
+                            paddingHorizontal: 8,
+                            borderRadius: 12,
+                            marginBottom: 8,
+                            backgroundColor: theme.background,
+                          },
+                          isInvited && { opacity: 0.5 },
+                        ]}
+                        onPress={() => {
+                          if (!isInvited) {
+                            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                            setSelectedFriendIds(prev => ({ ...prev, [friend.uid]: !prev[friend.uid] }));
+                          }
+                        }}
+                        disabled={isInvited}
+                      >
+                        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                          <UserAvatar
+                            photoUrl={friend.photo}
+                            username={friend.username}
+                            size={44}
+                            borderColor={theme.primary}
+                            borderWidth={2}
+                            style={{ marginRight: 12 }}
+                          />
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ color: theme.text, fontWeight: '600', fontSize: 15 }}>
+                              {friend.username}
+                            </Text>
+                            {friend.bio && (
+                              <Text style={{ color: theme.muted, fontSize: 12, marginTop: 2 }} numberOfLines={1}>
+                                {friend.bio}
+                              </Text>
+                            )}
+                          </View>
+                        </View>
+                        {isInvited ? (
+                          <Text style={{ color: theme.muted, fontSize: 12, fontWeight: '600' }}>Invited</Text>
+                        ) : (
+                          <View
+                            style={[
+                              {
+                                width: 24,
+                                height: 24,
+                                borderRadius: 8,
+                                borderWidth: 2,
+                                borderColor: theme.primary,
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                              },
+                              isSelected && { backgroundColor: theme.primary },
+                            ]}
+                          >
+                            {isSelected && <Ionicons name="checkmark" size={16} color={'#fff'} />}
+                          </View>
+                        )}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+
+                {/* Invite Button */}
+                <TouchableOpacity
+                  style={[
+                    {
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      paddingVertical: 16,
+                      paddingHorizontal: 20,
+                      borderRadius: 12,
+                      gap: 10,
+                      backgroundColor: theme.primary,
+                    },
+                    !Object.values(selectedFriendIds).some(v => v) && { opacity: 0.45 },
+                  ]}
+                  onPress={async () => {
+                    const selected = Object.keys(selectedFriendIds).filter(id => selectedFriendIds[id] && !invitedFriendIds.includes(id));
+                    if (selected.length === 0) {
+                      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                      setNoSelectionHintVisible(true);
+                      if (noSelectionTimerRef.current) clearTimeout(noSelectionTimerRef.current);
+                      noSelectionTimerRef.current = setTimeout(() => setNoSelectionHintVisible(false), 1800);
+                      return;
+                    }
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                    let sent = 0;
+                    let skipped = 0;
+                    const newlyInvited: string[] = [];
+                    for (const friendId of selected) {
+                      try {
+                        const res = await sendActivityInvites(friendId, [activityId]);
+                        if ((res?.sentIds || []).length > 0) {
+                          sent += 1;
+                          newlyInvited.push(friendId);
+                        } else {
+                          skipped += 1;
+                        }
+                      } catch {
+                        skipped += 1;
+                      }
+                    }
+                    setInvitedFriendIds(prev => Array.from(new Set([...prev, ...newlyInvited])));
+                    setSelectedFriendIds({});
+                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                    Alert.alert('Invites',
+                      sent > 0
+                        ? `Sent invites to ${sent} friend${sent === 1 ? '' : 's'}${skipped ? ` (skipped ${skipped} already joined)` : ''}.`
+                        : `No invites sent. ${skipped} skipped (already joined).`
+                    );
+                  }}
+                  disabled={!Object.values(selectedFriendIds).some(v => v)}
+                >
+                  <Ionicons name="send" size={20} color="#fff" />
+                  <Text style={{ fontSize: 16, fontWeight: '700', color: '#fff' }}>
+                    {Object.values(selectedFriendIds).filter(v => v).length > 0
+                      ? `Invite ${Object.values(selectedFriendIds).filter(v => v).length} Friend${Object.values(selectedFriendIds).filter(v => v).length === 1 ? '' : 's'}`
+                      : 'Select Friends to Invite'}
+                  </Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <Text style={{ fontSize: 14, color: theme.muted, textAlign: 'center', marginVertical: 20 }}>
+                No friends to invite yet. Add friends to invite them to your activities!
+              </Text>
+            )}
+
+            {/* Done Button */}
+            <TouchableOpacity
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                paddingVertical: 16,
+                paddingHorizontal: 20,
+                borderRadius: 12,
+                gap: 10,
+                backgroundColor: theme.primary,
+                marginTop: 12,
+              }}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setShowSuccessModal(false);
+                setSelectedFriendIds({});
+                setInvitedFriendIds([]);
+              }}
+            >
+              <Ionicons name="checkmark-circle" size={20} color="#fff" />
+              <Text style={{ fontSize: 16, fontWeight: '700', color: '#fff' }}>
+                Done
+              </Text>
+            </TouchableOpacity>
+
+            {/* Toast */}
+            {noSelectionHintVisible && (
+              <View style={{ position: 'absolute', left: 0, right: 0, bottom: 20, alignItems: 'center' }} pointerEvents="none">
+                <Text style={{ backgroundColor: 'rgba(26, 233, 239, 0.2)', color: theme.text, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 16, fontWeight: '600', overflow: 'hidden' }}>
+                  Please select friends to invite
+                </Text>
+              </View>
+            )}
+          </Animated.View>
+        </Animated.View>
       </Modal>
 
       {/* Menu Modal */}
@@ -1389,8 +1859,20 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
   infoIcon: { marginRight: 8 },
   infoLabel: { fontSize: 14, color: t.primary, fontWeight: '600', marginRight: 6 },
   infoValue: { fontSize: 14, color: t.text, fontWeight: '500' },
-  joinContainer: { marginVertical: 10, padding: 10, borderRadius: 8, backgroundColor: t.card, alignItems: 'center' },
-  joinText: { color: t.primary, fontSize: 16, fontWeight: 'bold' },
+  joinContainer: { marginVertical: 10, padding: 12, borderRadius: 12, backgroundColor: t.card, borderWidth: 1, borderColor: t.border },
+  joinText: { color: t.primary, fontSize: 15, fontWeight: '700' },
+  progressHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  progressTextRow: { flexDirection: 'row', alignItems: 'center' },
+  fullBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#10b981', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, gap: 3 },
+  fullBadgeText: { color: '#fff', fontSize: 10, fontWeight: 'bold', letterSpacing: 0.5 },
+  progressBarContainer: { position: 'relative', marginBottom: 6 },
+  progressBarBackground: { height: 8, backgroundColor: t.isDark ? '#1a1a1a' : '#e5e7eb', borderRadius: 4, overflow: 'hidden', borderWidth: 1, borderColor: t.border },
+  progressBarFill: { height: '100%', borderRadius: 4, position: 'relative', overflow: 'visible' },
+  sparkleContainer: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, flexDirection: 'row', alignItems: 'center' },
+  sparkle: { position: 'absolute', top: -6 },
+  sparkleText: { fontSize: 10 },
+  progressPercentage: { position: 'absolute', right: 0, top: -22, color: t.primary, fontSize: 12, fontWeight: '700' },
+  fullMessage: { color: '#10b981', fontSize: 12, fontWeight: '600', textAlign: 'center', marginTop: 2 },
   descriptionSection: { marginTop: 15, marginBottom: 10 },
   descriptionTitle: { color: t.primary, fontSize: 16, fontWeight: 'bold', marginBottom: 8 },
   description: { color: t.text, fontSize: 14, lineHeight: 20 },

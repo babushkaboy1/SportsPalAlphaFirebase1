@@ -12,7 +12,9 @@ import {
   saveActivitiesToCache, 
   loadActivitiesFromCache, 
   updateActivityInCache,
-  clearActivityCache 
+  clearActivityCache,
+  saveHistoricalActivitiesToCache,
+  loadHistoricalActivitiesFromCache
 } from '../utils/activityCache';
 import { ActivityJoinLeaveModal } from '../components/ActivityJoinLeaveModal';
 
@@ -120,8 +122,19 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
       // Try loading from cache first (instant UI)
       if (!forceRefresh) {
-        const cached = await loadActivitiesFromCache();
-        if (cached) {
+        const [cached, historicalCached] = await Promise.all([
+          loadActivitiesFromCache(),
+          loadHistoricalActivitiesFromCache()
+        ]);
+        
+        if (cached && historicalCached) {
+          console.log('📦 Loaded activities and historical from cache');
+          // Merge cached data - filter out duplicates
+          const allIds = new Set(cached.map((a: any) => a.id));
+          const uniqueHistorical = historicalCached.filter((a: any) => !allIds.has(a.id));
+          setAllActivities([...cached, ...uniqueHistorical] as Activity[]);
+          // Don't return - continue to fetch fresh data in background
+        } else if (cached) {
           console.log('📦 Loaded activities from cache');
           setAllActivities(cached as Activity[]);
           // Don't return - continue to fetch fresh data in background
@@ -155,6 +168,36 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         creatorUsername: a.creatorId && idToUsername[a.creatorId] ? idToUsername[a.creatorId] : a.creator,
       }));
       
+      // Split into historical vs upcoming activities
+      // Historical = start + 2 hours < now (same logic as ProfileScreen)
+      const toStartDate = (a: any) => {
+        const d = a?.date;
+        if (!d || typeof d !== 'string') return null;
+        let ymd = d.trim();
+        const m1 = ymd.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+        if (m1) {
+          const [, dd, mm, yyyy] = m1;
+          ymd = `${yyyy}-${mm}-${dd}`;
+        }
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+          const t = new Date(d).getTime();
+          if (isNaN(t)) return null;
+          const dt = new Date(t);
+          ymd = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+        }
+        const time = (a?.time && typeof a.time === 'string' ? a.time.trim() : '00:00') || '00:00';
+        const dt = new Date(`${ymd}T${time}`);
+        return isNaN(dt.getTime()) ? null : dt;
+      };
+      
+      const now = Date.now();
+      const historicalActivities = activitiesWithUsernames.filter(a => {
+        const start = toStartDate(a);
+        if (!start) return false;
+        const end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
+        return now > end.getTime();
+      });
+      
       setAllActivities(activitiesWithUsernames);
   // Mark initial load complete after first successful Firestore fetch
   if (!initialActivitiesLoaded) setInitialActivitiesLoaded(true);
@@ -162,6 +205,12 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       // Save to cache for next time
       await saveActivitiesToCache(activitiesWithUsernames as any);
       console.log('💾 Activities saved to cache');
+      
+      // Save historical activities to separate long-term cache (7 days)
+      if (historicalActivities.length > 0) {
+        await saveHistoricalActivitiesToCache(historicalActivities as any);
+        console.log(`💾 ${historicalActivities.length} historical activities saved to long-term cache`);
+      }
     } catch (e) {
       console.error('Error loading activities:', e);
       setAllActivities([]);

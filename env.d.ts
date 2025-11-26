@@ -1,5 +1,8 @@
 declare module '@env' {
   export const FIREBASE_API_KEY: string;
+  export const FIREBASE_API_KEY_WEB: string;
+  export const FIREBASE_API_KEY_IOS: string;
+  export const FIREBASE_API_KEY_ANDROID: string;
   export const FIREBASE_AUTH_DOMAIN: string;
   export const FIREBASE_PROJECT_ID: string;
   export const FIREBASE_STORAGE_BUCKET: string;

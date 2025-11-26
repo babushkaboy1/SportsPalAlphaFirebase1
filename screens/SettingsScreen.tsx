@@ -68,6 +68,7 @@ const SettingsScreen: React.FC = () => {
   const [privacyModalVisible, setPrivacyModalVisible] = useState(false);
   const [communityModalVisible, setCommunityModalVisible] = useState(false);
   const [linkedAccountsVisible, setLinkedAccountsVisible] = useState(false);
+  const [legalPoliciesExpanded, setLegalPoliciesExpanded] = useState(false);
   
   // Account deletion state
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
@@ -610,96 +611,109 @@ const SettingsScreen: React.FC = () => {
         {/* LEGAL & POLICIES */}
         <Section title="Legal & Policies">
           <Row 
-            label="Community Guidelines" 
-            icon="people-outline" 
-            sub="Rules and moderation"
-            onPress={() => navigation.navigate('LegalDocument', { documentId: 'community-guidelines' })} 
+            label="Legal & Policies" 
+            icon="document-text-outline" 
+            sub="View all legal documents"
+            rightIcon={legalPoliciesExpanded ? "chevron-up" : "chevron-down"}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              setLegalPoliciesExpanded(!legalPoliciesExpanded);
+            }}
           />
-          <Row 
-            label="Safety Guidelines" 
-            icon="shield-checkmark-outline" 
-            sub="Meetup and sports safety"
-            onPress={() => navigation.navigate('LegalDocument', { documentId: 'safety-guidelines' })} 
-          />
-          <Row 
-            label="Intellectual Property" 
-            icon="document-lock-outline" 
-            sub="Copyright & DMCA"
-            onPress={() => navigation.navigate('LegalDocument', { documentId: 'ip-policy' })} 
-          />
-          <Row 
-            label="Tracking & SDKs" 
-            icon="analytics-outline" 
-            sub="Data collection notice"
-            onPress={() => navigation.navigate('LegalDocument', { documentId: 'tracking-notice' })} 
-          />
-          <Row 
-            label="Reports & Appeals" 
-            icon="flag-outline" 
-            sub="How to report and appeal"
-            onPress={() => navigation.navigate('LegalDocument', { documentId: 'reports-appeals' })} 
-          />
-          <Row 
-            label="Open-Source Licenses" 
-            icon="code-slash-outline" 
-            sub="Third-party software"
-            onPress={() => navigation.navigate('LegalDocument', { documentId: 'open-source' })} 
-          />
-          <Row 
-            label="Law Enforcement Guidelines" 
-            icon="shield-outline" 
-            sub="Data request policy"
-            onPress={() => navigation.navigate('LegalDocument', { documentId: 'law-enforcement' })} 
-          />
-          <Row 
-            label="Accessibility" 
-            icon="accessibility-outline" 
-            sub="WCAG 2.1 AA commitment"
-            onPress={() => navigation.navigate('LegalDocument', { documentId: 'accessibility' })} 
-          />
-          <Row 
-            label="Security & Vulnerabilities" 
-            icon="lock-closed-outline" 
-            sub="Responsible disclosure"
-            onPress={() => navigation.navigate('LegalDocument', { documentId: 'security' })} 
-          />
-          <Row 
-            label="Event Host Rules" 
-            icon="calendar-outline" 
-            sub="Guidelines for organizers"
-            onPress={() => navigation.navigate('LegalDocument', { documentId: 'event-host-rules' })} 
-          />
-          <Row 
-            label="No-Show & Cancellation" 
-            icon="close-circle-outline" 
-            sub="Attendance policy"
-            onPress={() => navigation.navigate('LegalDocument', { documentId: 'no-show-policy' })} 
-          />
-          <Row 
-            label="Age & Minor Safety" 
-            icon="warning-outline" 
-            sub="Child protection policy"
-            onPress={() => navigation.navigate('LegalDocument', { documentId: 'age-safety' })} 
-          />
-          <Row 
-            label="AI & Moderation" 
-            icon="hardware-chip-outline" 
-            sub="Automated systems"
-            onPress={() => navigation.navigate('LegalDocument', { documentId: 'ai-moderation' })} 
-          />
-          <Row 
-            label="Subscriptions & Refunds" 
-            icon="card-outline" 
-            sub="Billing and payments"
-            onPress={() => navigation.navigate('LegalDocument', { documentId: 'subscriptions' })} 
-          />
-          <Row 
-            label="Advertising Policy" 
-            icon="megaphone-outline" 
-            sub="Branded content rules"
-            onPress={() => navigation.navigate('LegalDocument', { documentId: 'advertising' })} 
-          />
-          <View style={{ height: 24 }} />
+          {legalPoliciesExpanded && (
+            <>
+              <Row 
+                label="Community Guidelines" 
+                icon="people-outline" 
+                sub="Rules and moderation"
+                onPress={() => navigation.navigate('LegalDocument', { documentId: 'community-guidelines' })} 
+              />
+              <Row 
+                label="Safety Guidelines" 
+                icon="shield-checkmark-outline" 
+                sub="Meetup and sports safety"
+                onPress={() => navigation.navigate('LegalDocument', { documentId: 'safety-guidelines' })} 
+              />
+              <Row 
+                label="Intellectual Property" 
+                icon="document-lock-outline" 
+                sub="Copyright & DMCA"
+                onPress={() => navigation.navigate('LegalDocument', { documentId: 'ip-policy' })} 
+              />
+              <Row 
+                label="Tracking & SDKs" 
+                icon="analytics-outline" 
+                sub="Data collection notice"
+                onPress={() => navigation.navigate('LegalDocument', { documentId: 'tracking-notice' })} 
+              />
+              <Row 
+                label="Reports & Appeals" 
+                icon="flag-outline" 
+                sub="How to report and appeal"
+                onPress={() => navigation.navigate('LegalDocument', { documentId: 'reports-appeals' })} 
+              />
+              <Row 
+                label="Open-Source Licenses" 
+                icon="code-slash-outline" 
+                sub="Third-party software"
+                onPress={() => navigation.navigate('LegalDocument', { documentId: 'open-source' })} 
+              />
+              <Row 
+                label="Law Enforcement Guidelines" 
+                icon="shield-outline" 
+                sub="Data request policy"
+                onPress={() => navigation.navigate('LegalDocument', { documentId: 'law-enforcement' })} 
+              />
+              <Row 
+                label="Accessibility" 
+                icon="accessibility-outline" 
+                sub="WCAG 2.1 AA commitment"
+                onPress={() => navigation.navigate('LegalDocument', { documentId: 'accessibility' })} 
+              />
+              <Row 
+                label="Security & Vulnerabilities" 
+                icon="lock-closed-outline" 
+                sub="Responsible disclosure"
+                onPress={() => navigation.navigate('LegalDocument', { documentId: 'security' })} 
+              />
+              <Row 
+                label="Event Host Rules" 
+                icon="calendar-outline" 
+                sub="Guidelines for organizers"
+                onPress={() => navigation.navigate('LegalDocument', { documentId: 'event-host-rules' })} 
+              />
+              <Row 
+                label="No-Show & Cancellation" 
+                icon="close-circle-outline" 
+                sub="Attendance policy"
+                onPress={() => navigation.navigate('LegalDocument', { documentId: 'no-show-policy' })} 
+              />
+              <Row 
+                label="Age & Minor Safety" 
+                icon="warning-outline" 
+                sub="Child protection policy"
+                onPress={() => navigation.navigate('LegalDocument', { documentId: 'age-safety' })} 
+              />
+              <Row 
+                label="AI & Moderation" 
+                icon="hardware-chip-outline" 
+                sub="Automated systems"
+                onPress={() => navigation.navigate('LegalDocument', { documentId: 'ai-moderation' })} 
+              />
+              <Row 
+                label="Subscriptions & Refunds" 
+                icon="card-outline" 
+                sub="Billing and payments"
+                onPress={() => navigation.navigate('LegalDocument', { documentId: 'subscriptions' })} 
+              />
+              <Row 
+                label="Advertising Policy" 
+                icon="megaphone-outline" 
+                sub="Branded content rules"
+                onPress={() => navigation.navigate('LegalDocument', { documentId: 'advertising' })} 
+              />
+            </>
+          )}
         </Section>
       </ScrollView>
 
@@ -1018,14 +1032,14 @@ const SettingsScreen: React.FC = () => {
                 <Text style={{ fontWeight: 'bold' }}>19) Dispute Resolution — Binding Arbitration; Class Action Waiver{'\n\n'}</Text>
                 PLEASE READ — THIS SECTION LIMITS HOW DISPUTES ARE RESOLVED.{'\n\n'}
                 <Text style={{ fontWeight: '600' }}>Informal resolution.</Text> Before filing a claim, you agree to email sportspalapplication@gmail.com with "Dispute Notice," your name, account email, a brief description, and relief sought. We'll try to resolve within 30 days.{'\n\n'}
-                <Text style={{ fontWeight: '600' }}>Arbitration.</Text> If not resolved, any dispute, claim, or controversy arising out of or relating to these Terms or the Service ("Dispute") will be resolved by binding individual arbitration under the U.S. Federal Arbitration Act and JAMS or AAA rules (we'll agree on one). The arbitrator may award individual relief. No class arbitration. Seat of arbitration: [choose one: New York, NY / Delaware / California]; language: English. We'll pay filing/administrative fees for non-frivolous claims up to a reasonable cap set by rules.{'\n\n'}
+                <Text style={{ fontWeight: '600' }}>Arbitration.</Text> If not resolved, any dispute, claim, or controversy arising out of or relating to these Terms or the Service ("Dispute") will be resolved by binding individual arbitration under the U.S. Federal Arbitration Act and JAMS or AAA rules (we'll agree on one). The arbitrator may award individual relief. No class arbitration. Seat of arbitration: Athens, Greece; language: English. We'll pay filing/administrative fees for non-frivolous claims up to a reasonable cap set by rules.{'\n\n'}
                 <Text style={{ fontWeight: '600' }}>Class-action waiver.</Text> You and SportsPal waive any right to a jury trial or to participate in a class, consolidated, or representative action.{'\n\n'}
                 <Text style={{ fontWeight: '600' }}>Opt-out.</Text> You may opt out of this arbitration clause within 30 days of first accepting these Terms by emailing sportspalapplication@gmail.com with subject "Arbitration Opt-Out," your full name, and account email.{'\n\n'}
                 <Text style={{ fontWeight: '600' }}>Small claims & IP relief.</Text> Either party may seek individual relief in small-claims court within its jurisdiction or seek injunctive relief in court for IP or unauthorized use of the Service.{'\n\n'}
                 <Text style={{ fontWeight: '600' }}>EEA/UK/India/Other.</Text> If mandatory local law prohibits binding arbitration or class waivers for consumers, this Section does not deprive you of those non-waivable rights. You may bring claims in the courts of your habitual residence as required by law.{'\n\n'}
                 
                 <Text style={{ fontWeight: 'bold' }}>20) Governing Law; Venue{'\n\n'}</Text>
-                Except where prohibited by mandatory local law, these Terms are governed by the laws of [choose one: Greece / England & Wales / State of Delaware, USA], without regard to its conflicts of laws rules. Subject to the arbitration clause, the exclusive venue for litigation (if any) shall be the courts located in [Athens, Greece / London, UK / Delaware, USA]. Consumers in the EEA/UK may bring claims in their local courts where required by law.{'\n\n'}
+                Except where prohibited by mandatory local law, these Terms are governed by the laws of Greece, without regard to its conflicts of laws rules. Subject to the arbitration clause, the exclusive venue for litigation (if any) shall be the courts located in Athens, Greece. Consumers in the EEA/UK may bring claims in their local courts where required by law.{'\n\n'}
                 
                 <Text style={{ fontWeight: 'bold' }}>21) App Store Terms (Apple/Google) — Third-Party Beneficiary{'\n\n'}</Text>
                 <Text style={{ fontWeight: '600' }}>Apple.</Text> You acknowledge these Terms are between you and SportsPal, not Apple Inc. Apple is not responsible for the Service or its content, has no obligation to furnish support, and is not liable for claims relating to the app (product liability, legal compliance, or IP). Apple is a third-party beneficiary of these Terms and may enforce them against you regarding your use of the iOS app. In the event of any failure to conform to any applicable warranty, you may notify Apple and Apple will refund the purchase price (if any).{'\n\n'}

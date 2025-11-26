@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   Animated,
   Alert,
+  Platform,
 } from 'react-native';
 import Logo from '../components/Logo';
 import { useTheme } from '../context/ThemeContext';
@@ -331,6 +332,15 @@ const LoginScreen = ({ navigation }: any) => {
 
   const handleSocialLogin = (provider: string) => {
     if (provider === 'Apple') {
+      // Apple Sign In is only available on iOS
+      if (Platform.OS !== 'ios') {
+        Alert.alert(
+          'Apple Sign In Unavailable',
+          'Sign in with Apple is only available on iOS devices. Please use Google, Facebook, or email to sign in on Android.',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
       flowRef.current = { mode: 'apple', forLink: false };
       handleAppleSignIn(false);
     } else if (provider === 'Facebook') {
@@ -362,13 +372,7 @@ const LoginScreen = ({ navigation }: any) => {
   };
 
   const handleSignUp = () => {
-    navigation.navigate('CreateProfile', {
-      mode: 'create',
-      profileData: {
-        email: email || '',
-        emailLocked: false,
-      },
-    });
+    navigation.navigate('RegisterEmail');
   };
 
   return (

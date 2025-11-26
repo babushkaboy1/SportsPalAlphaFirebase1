@@ -28,6 +28,8 @@ import CreateGameScreen from './screens/CreateGameScreen';
 import CalendarScreen from './screens/CalendarScreen';
 import ProfileScreen from './screens/ProfileScreen';
 import LoginScreen from './screens/LoginScreen';
+import RegisterEmailScreen from './screens/RegisterEmailScreen';
+import EmailVerificationGateScreen from './screens/EmailVerificationGateScreen';
 import CreateProfileScreen from './screens/CreateProfileScreen';
 import ActivityDetailsScreen from './screens/ActivityDetailsScreen';
 import ChatDetailScreen from './screens/ChatDetailScreen';
@@ -205,6 +207,8 @@ function AppInner() {
   const [initializing, setInitializing] = useState(true);
   // Track whether the signed-in user has a profile document
   const [hasProfile, setHasProfile] = useState<boolean | null>(null);
+  // Track email verification status
+  const [isEmailVerified, setIsEmailVerified] = useState<boolean | null>(null);
   const [navReady, setNavReady] = useState(false);
   const splashHiddenRef = React.useRef(false);
   // Store a deep link encountered before navigation is ready / auth resolved
@@ -269,6 +273,7 @@ function AppInner() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
+      setIsEmailVerified(u ? u.emailVerified : null);
       // Mark initialization complete after first auth state resolution
       setInitializing(false);
     });
@@ -289,11 +294,21 @@ function AppInner() {
       
       try {
         const snap = await getDoc(doc(db, 'profiles', user.uid));
-        if (!cancelled) setHasProfile(snap.exists());
+        if (!cancelled) {
+          if (!snap.exists()) {
+            setHasProfile(false); // no profile doc at all
+          } else {
+            const data = snap.data() || {};
+            // Treat profile as complete ONLY if required fields present
+            const complete = !!data.username && !!data.birthDate;
+            setHasProfile(complete);
+          }
+        }
       } catch (e) {
         // If we can't determine, default to allowing app but log
         console.warn('Profile check failed', e);
-        if (!cancelled) setHasProfile(true);
+        // Fail safe: force profile creation again rather than skipping straight in
+        if (!cancelled) setHasProfile(false);
       }
     };
     checkProfile();
@@ -371,7 +386,7 @@ function AppInner() {
     Linking.getInitialURL().then((url) => {
       if (url) {
         console.log('📱 Initial deep link URL:', url);
-        if (user && navRef.isReady() && hasProfile !== null && hasProfile !== false) {
+        if (user && navRef.isReady() && hasProfile !== null && isEmailVerified !== null && hasProfile && isEmailVerified) {
           handleDeepLinkNavigation(url);
         } else {
           pendingDeepLinkRef.current = url;
@@ -382,7 +397,7 @@ function AppInner() {
     // Listener for subsequent URLs while app is alive
     const subscription = Linking.addEventListener('url', ({ url }) => {
       console.log('📱 Deep link received:', url);
-      if (user && navRef.isReady() && hasProfile !== null && hasProfile !== false) {
+      if (user && navRef.isReady() && hasProfile !== null && isEmailVerified !== null && hasProfile && isEmailVerified) {
         // Small delay to ensure navigation state is settled
         setTimeout(() => handleDeepLinkNavigation(url), 100);
       } else {
@@ -390,22 +405,22 @@ function AppInner() {
       }
     });
     return () => subscription.remove();
-  }, [user, hasProfile]);
+  }, [user, hasProfile, isEmailVerified]);
 
-  // When auth + nav are ready AND user has/creates profile, consume pending deep link
+  // When auth + nav are ready AND user has profile AND is verified, consume pending deep link
   useEffect(() => {
     if (!pendingDeepLinkRef.current) return;
     if (!user) return;
     if (!navRef.isReady()) return;
-    if (hasProfile === null) return; // still checking profile
-    if (hasProfile === false) return; // user needs to create profile first
+    if (hasProfile === null || isEmailVerified === null) return; // still checking
+    if (!hasProfile || !isEmailVerified) return; // user needs to create profile or verify email first
     
     // Navigate now with a small delay to ensure navigation is fully ready
     const url = pendingDeepLinkRef.current;
     pendingDeepLinkRef.current = null;
     console.log('📱 Processing pending deep link:', url);
     setTimeout(() => handleDeepLinkNavigation(url), 300);
-  }, [user, navReady, hasProfile]);
+  }, [user, navReady, hasProfile, isEmailVerified]);
 
   const handleDeepLinkNavigation = (url: string) => {
     const { type, id } = parseDeepLink(url);
@@ -464,15 +479,14 @@ function AppInner() {
           <InboxBadgeProvider>
           <NavigationContainer ref={navRef} theme={navTheme} onReady={() => setNavReady(true)}>
           <StatusBar style={theme.isDark ? 'light' : 'dark'} backgroundColor={theme.background} />
-          {initializing || (user && hasProfile === null) || !updateChecked ? (
-            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#121212' }}>
-              <ActivityIndicator size="large" color={theme.primary} />
-            </View>
+          {initializing || (user && (hasProfile === null || isEmailVerified === null)) || !updateChecked ? (
+            // Keep splash screen visible, no spinner shown
+            null
           ) : (
           <Stack.Navigator
-          // Key forces navigator to remount when auth/profile state changes, ensuring correct initial route
-          key={user ? `app-${hasProfile === false ? 'noprof' : 'hasprof'}` : 'auth'}
-          initialRouteName={!user ? 'Login' : (hasProfile === false ? 'CreateProfile' : 'MainTabs')}
+          // Key forces navigator to remount when auth/profile/verification state changes, ensuring correct initial route
+          key={user ? `app-${hasProfile === false ? 'noprof' : (isEmailVerified === false ? 'unverified' : 'verified')}` : 'auth'}
+          initialRouteName={!user ? 'Login' : (hasProfile === false ? 'CreateProfile' : (isEmailVerified === false ? 'EmailVerificationGate' : 'MainTabs'))}
           screenOptions={{
             headerShown: false,
             animation: 'fade',
@@ -499,6 +513,8 @@ function AppInner() {
           }}
         >
           <Stack.Screen name="Login" component={LoginScreen} />
+          <Stack.Screen name="RegisterEmail" component={RegisterEmailScreen} />
+          <Stack.Screen name="EmailVerificationGate" component={EmailVerificationGateScreen} />
           <Stack.Screen name="CreateProfile" component={CreateProfileScreen} />
           <Stack.Screen name="MainTabs" component={MainTabs} />
           <Stack.Screen name="ActivityDetails" component={ActivityDetailsScreen} />

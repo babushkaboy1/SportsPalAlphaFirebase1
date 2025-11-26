@@ -16,7 +16,7 @@ function HostUsername({ activity }: { activity: any }) {
   return <Text style={{ fontSize: 14, color: theme.muted, fontWeight: '500' }}>{username}</Text>;
 }
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, FlatList, Animated, RefreshControl, Alert, Modal, Pressable, TextInput, Clipboard, Keyboard, Linking } from 'react-native';
+import { View, Text, StyleSheet, Image, TouchableOpacity, FlatList, Animated, RefreshControl, Alert, Modal, Pressable, TextInput, Clipboard, Keyboard, Linking, ActivityIndicator } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
 import { useRoute, useNavigation } from '@react-navigation/native';
@@ -26,6 +26,7 @@ import { db, auth } from '../firebaseConfig';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useActivityContext } from '../context/ActivityContext';
 import { ActivityIcon } from '../components/ActivityIcons';
+import UserAvatar from '../components/UserAvatar';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../types/navigation';
 import { sendFriendRequest, cancelFriendRequest, removeFriend, acceptIncomingRequestFromProfile, declineIncomingRequestFromProfile } from '../utils/firestoreFriends';
@@ -76,6 +77,12 @@ const UserProfileScreen = () => {
   const [isReady, setIsReady] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshLocked, setRefreshLocked] = useState(false);
+  const [displayedActivitiesCount, setDisplayedActivitiesCount] = useState(5);
+  const [displayedHistoryCount, setDisplayedHistoryCount] = useState(5);
+  const [displayedConnectionsCount, setDisplayedConnectionsCount] = useState(8);
+  const [isLoadingMoreActivities, setIsLoadingMoreActivities] = useState(false);
+  const [isLoadingMoreHistory, setIsLoadingMoreHistory] = useState(false);
+  const [isLoadingMoreConnections, setIsLoadingMoreConnections] = useState(false);
   const [userLocation, setUserLocation] = useState<{ latitude: number, longitude: number } | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [requestSent, setRequestSent] = useState(false);
@@ -383,6 +390,33 @@ const UserProfileScreen = () => {
     }
   };
 
+  const handleLoadMoreActivities = () => {
+    if (isLoadingMoreActivities) return;
+    setIsLoadingMoreActivities(true);
+    setTimeout(() => {
+      setDisplayedActivitiesCount(prev => prev + 5);
+      setIsLoadingMoreActivities(false);
+    }, 300);
+  };
+
+  const handleLoadMoreHistory = () => {
+    if (isLoadingMoreHistory) return;
+    setIsLoadingMoreHistory(true);
+    setTimeout(() => {
+      setDisplayedHistoryCount(prev => prev + 5);
+      setIsLoadingMoreHistory(false);
+    }, 300);
+  };
+
+  const handleLoadMoreConnections = () => {
+    if (isLoadingMoreConnections) return;
+    setIsLoadingMoreConnections(true);
+    setTimeout(() => {
+      setDisplayedConnectionsCount(prev => prev + 8);
+      setIsLoadingMoreConnections(false);
+    }, 300);
+  };
+
   const renderActivity = ({ item }: { item: any }) => {
     // Calculate distance if userLocation is available
     const distance = userLocation && item.latitude && item.longitude
@@ -596,7 +630,12 @@ const UserProfileScreen = () => {
                 setImageViewerVisible(true);
               }}
             >
-              <Image source={{ uri: profile?.photo || 'https://via.placeholder.com/100' }} style={styles.profileImage} />
+              <UserAvatar
+                photoUrl={profile?.photo}
+                username={profile?.username}
+                size={100}
+                style={styles.profileImage}
+              />
             </TouchableOpacity>
           </View>
           {/* Stats next to avatar */}
@@ -825,10 +864,19 @@ const UserProfileScreen = () => {
                 </View>
               ) : (
                 <FlatList
-                  data={filteredUpcoming}
+                  data={filteredUpcoming.slice(0, displayedActivitiesCount)}
                   renderItem={renderActivity}
                   keyExtractor={(item) => item.id}
                   contentContainerStyle={styles.listContainer}
+                  onEndReached={displayedActivitiesCount < filteredUpcoming.length ? handleLoadMoreActivities : null}
+                  onEndReachedThreshold={0.5}
+                  ListFooterComponent={
+                    isLoadingMoreActivities ? (
+                      <View style={{ paddingVertical: 20, alignItems: 'center' }}>
+                        <ActivityIndicator size="small" color={theme.primary} />
+                      </View>
+                    ) : null
+                  }
                   refreshControl={
                     <RefreshControl
                       refreshing={refreshing || refreshLocked}
@@ -872,10 +920,19 @@ const UserProfileScreen = () => {
                 </View>
               ) : (
                 <FlatList
-                  data={filteredHistory}
+                  data={filteredHistory.slice(0, displayedHistoryCount)}
                   renderItem={renderHistoryActivity}
                   keyExtractor={(item) => item.id}
                   contentContainerStyle={styles.listContainer}
+                  onEndReached={displayedHistoryCount < filteredHistory.length ? handleLoadMoreHistory : null}
+                  onEndReachedThreshold={0.5}
+                  ListFooterComponent={
+                    isLoadingMoreHistory ? (
+                      <View style={{ paddingVertical: 20, alignItems: 'center' }}>
+                        <ActivityIndicator size="small" color={theme.primary} />
+                      </View>
+                    ) : null
+                  }
                 />
               )}
             </View>
@@ -935,9 +992,18 @@ const UserProfileScreen = () => {
             <View style={{ height: 10 }} />
             {userFriendProfiles.length > 0 ? (
               <FlatList
-                data={userFriendProfiles}
+                data={userFriendProfiles.slice(0, displayedConnectionsCount)}
                 keyExtractor={(u) => u.uid}
                 ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
+                onEndReached={displayedConnectionsCount < userFriendProfiles.length ? handleLoadMoreConnections : null}
+                onEndReachedThreshold={0.5}
+                ListFooterComponent={
+                  isLoadingMoreConnections ? (
+                    <View style={{ paddingVertical: 20, alignItems: 'center' }}>
+                      <ActivityIndicator size="small" color={theme.primary} />
+                    </View>
+                  ) : null
+                }
                 renderItem={({ item }) => (
                   <TouchableOpacity
                     style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }}
@@ -947,7 +1013,13 @@ const UserProfileScreen = () => {
                       navigation.navigate('UserProfile' as any, { userId: item.uid });
                     }}
                   >
-                    <Image source={{ uri: item.photo || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(item.username) }} style={{ width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: theme.primary }} />
+                    <UserAvatar
+                      photoUrl={item.photo}
+                      username={item.username}
+                      size={36}
+                      borderColor={theme.primary}
+                      borderWidth={1}
+                    />
                     <Text style={{ color: theme.text, marginLeft: 10, fontWeight: '600' }}>{item.username}</Text>
                   </TouchableOpacity>
                 )}

@@ -27,6 +27,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useFocusEffect } from '@react-navigation/native';
 // useActivityContext is already imported above in this file; avoid duplicate
 import { ActivityIcon } from '../components/ActivityIcons';
+import UserAvatar from '../components/UserAvatar';
 import * as Location from 'expo-location';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -122,6 +123,12 @@ const ProfileScreen = () => {
   const [isReady, setIsReady] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshLocked, setRefreshLocked] = useState(false);
+  const [displayedActivitiesCount, setDisplayedActivitiesCount] = useState(5);
+  const [displayedHistoryCount, setDisplayedHistoryCount] = useState(5);
+  const [displayedConnectionsCount, setDisplayedConnectionsCount] = useState(8);
+  const [isLoadingMoreActivities, setIsLoadingMoreActivities] = useState(false);
+  const [isLoadingMoreHistory, setIsLoadingMoreHistory] = useState(false);
+  const [isLoadingMoreConnections, setIsLoadingMoreConnections] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [inviteModalVisible, setInviteModalVisible] = useState(false);
   const [inviteTargetUser, setInviteTargetUser] = useState<{uid: string; username: string; photo?: string} | null>(null);
@@ -426,6 +433,33 @@ const ProfileScreen = () => {
     // navigation.navigate('Chats');
   };
 
+  const handleLoadMoreActivities = () => {
+    if (isLoadingMoreActivities) return;
+    setIsLoadingMoreActivities(true);
+    setTimeout(() => {
+      setDisplayedActivitiesCount(prev => prev + 5);
+      setIsLoadingMoreActivities(false);
+    }, 300);
+  };
+
+  const handleLoadMoreHistory = () => {
+    if (isLoadingMoreHistory) return;
+    setIsLoadingMoreHistory(true);
+    setTimeout(() => {
+      setDisplayedHistoryCount(prev => prev + 5);
+      setIsLoadingMoreHistory(false);
+    }, 300);
+  };
+
+  const handleLoadMoreConnections = () => {
+    if (isLoadingMoreConnections) return;
+    setIsLoadingMoreConnections(true);
+    setTimeout(() => {
+      setDisplayedConnectionsCount(prev => prev + 8);
+      setIsLoadingMoreConnections(false);
+    }, 300);
+  };
+
   // History tab search
   const [historySearchQuery, setHistorySearchQuery] = useState('');
   // Scheduled (upcoming) tab search
@@ -672,10 +706,19 @@ const ProfileScreen = () => {
               </View>
             ) : (
               <FlatList
-                data={filteredUpcoming}
+                data={filteredUpcoming.slice(0, displayedActivitiesCount)}
                 renderItem={renderActivity}
                 keyExtractor={(item) => item.id}
                 contentContainerStyle={styles.listContainer}
+                onEndReached={displayedActivitiesCount < filteredUpcoming.length ? handleLoadMoreActivities : null}
+                onEndReachedThreshold={0.5}
+                ListFooterComponent={
+                  isLoadingMoreActivities ? (
+                    <View style={{ paddingVertical: 20, alignItems: 'center' }}>
+                      <ActivityIndicator size="small" color={theme.primary} />
+                    </View>
+                  ) : null
+                }
                 refreshControl={
                   <RefreshControl
                     refreshing={refreshing || refreshLocked}
@@ -726,10 +769,19 @@ const ProfileScreen = () => {
               </View>
             ) : (
               <FlatList
-                data={filteredHistory}
+                data={filteredHistory.slice(0, displayedHistoryCount)}
                 renderItem={renderHistoryActivity}
                 keyExtractor={(item) => item.id}
                 contentContainerStyle={styles.listContainer}
+                onEndReached={displayedHistoryCount < filteredHistory.length ? handleLoadMoreHistory : null}
+                onEndReachedThreshold={0.5}
+                ListFooterComponent={
+                  isLoadingMoreHistory ? (
+                    <View style={{ paddingVertical: 20, alignItems: 'center' }}>
+                      <ActivityIndicator size="small" color={theme.primary} />
+                    </View>
+                  ) : null
+                }
               />
             )}
           </View>
@@ -822,9 +874,18 @@ const ProfileScreen = () => {
                 <Text style={styles.mutedText}>No connections yet.</Text>
               ) : (
                 <FlatList
-                  data={friends}
+                  data={friends.slice(0, displayedConnectionsCount)}
                   keyExtractor={(item) => item.uid}
                   contentContainerStyle={{ paddingVertical: 6, paddingBottom: Math.max(insets.bottom, 16) }}
+                  onEndReached={displayedConnectionsCount < friends.length ? handleLoadMoreConnections : null}
+                  onEndReachedThreshold={0.5}
+                  ListFooterComponent={
+                    isLoadingMoreConnections ? (
+                      <View style={{ paddingVertical: 20, alignItems: 'center' }}>
+                        <ActivityIndicator size="small" color={theme.primary} />
+                      </View>
+                    ) : null
+                  }
                   renderItem={({ item }) => (
                     <View style={styles.friendRow}>
                       <TouchableOpacity
@@ -832,8 +893,10 @@ const ProfileScreen = () => {
                         activeOpacity={0.8}
                         onPress={() => navigation.navigate('UserProfile', { userId: item.uid })}
                       >
-                        <Image
-                          source={{ uri: item.photo || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(item.username) }}
+                        <UserAvatar
+                          photoUrl={item.photo}
+                          username={item.username}
+                          size={44}
                           style={styles.userAvatar}
                         />
                         <View style={{ flex: 1, minWidth: 0 }}>
@@ -865,7 +928,7 @@ const ProfileScreen = () => {
                 />
               )
             )}
-            {userSearchQuery.trim().length === 0 ? (
+            {userSearchQuery.trim().length === 0 && friends.length === 0 ? (
               <TouchableOpacity activeOpacity={1} onPress={() => Keyboard.dismiss()} style={styles.emptyState}>
                 <Ionicons name="people-outline" size={48} color={theme.primary} />
                 <Text style={styles.emptyStateTitle}>Create connections</Text>
@@ -873,18 +936,18 @@ const ProfileScreen = () => {
                   Search by username to discover people. Start typing a name.
                 </Text>
               </TouchableOpacity>
-            ) : userSearching ? (
+            ) : userSearchQuery.trim().length > 0 && userSearching ? (
               <View style={styles.emptyState}> 
                 <ActivityIndicator size="large" color={theme.primary} />
                 <Text style={styles.emptyStateText}>Searching…</Text>
               </View>
-            ) : userResults.length === 0 ? (
+            ) : userSearchQuery.trim().length > 0 && userResults.length === 0 ? (
               <TouchableOpacity activeOpacity={1} onPress={() => Keyboard.dismiss()} style={styles.emptyState}>
                 <Ionicons name="person-circle-outline" size={48} color={theme.primary} />
                 <Text style={styles.emptyStateTitle}>No matches yet</Text>
                 <Text style={styles.emptyStateText}>Try a different spelling.</Text>
               </TouchableOpacity>
-            ) : (
+            ) : userSearchQuery.trim().length > 0 ? (
               <FlatList
                 data={userResults}
                 keyExtractor={(item) => item.uid}
@@ -906,8 +969,10 @@ const ProfileScreen = () => {
                           navigation.navigate('UserProfile', { userId: item.uid });
                         }}
                       >
-                        <Image
-                          source={{ uri: item.photo || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(item.username) }}
+                        <UserAvatar
+                          photoUrl={item.photo}
+                          username={item.username}
+                          size={44}
                           style={styles.userAvatar}
                         />
                         <View style={{ flex: 1 }}>
@@ -974,7 +1039,7 @@ const ProfileScreen = () => {
                   );
                 }}
               />
-            )}
+            ) : null}
             {/* Invite modal */}
             <Modal
               visible={inviteModalVisible}
@@ -1087,7 +1152,12 @@ const ProfileScreen = () => {
               setImageViewerVisible(true);
             }}
           >
-            <Image source={{ uri: profile?.photo || 'https://via.placeholder.com/100' }} style={styles.profileImage} />
+            <UserAvatar
+              photoUrl={profile?.photo}
+              username={profile?.username}
+              size={100}
+              style={styles.profileImage}
+            />
           </TouchableOpacity>
         </View>
         {/* Stats next to avatar */}
@@ -1307,7 +1377,13 @@ const ProfileScreen = () => {
                       navigation.navigate('UserProfile' as any, { userId: item.uid });
                     }}
                   >
-                    <Image source={{ uri: item.photo || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(item.username) }} style={{ width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: theme.primary }} />
+                    <UserAvatar
+                      photoUrl={item.photo}
+                      username={item.username}
+                      size={36}
+                      borderColor={theme.primary}
+                      borderWidth={1}
+                    />
                     <Text style={{ color: theme.text, marginLeft: 10, fontWeight: '600' }}>{item.username}</Text>
                   </TouchableOpacity>
                 )}

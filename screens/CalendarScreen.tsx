@@ -276,7 +276,10 @@ const CalendarScreen = ({ navigation, route }: any) => {
   }, [allActivities, joinedActivities, currentDate, theme.primary]);
 
   // Date press handler (Calendar sends yyyy-mm-dd)
-  const handleDayPress = (day: any) => setCurrentDate(normalizeDateFormat(day.dateString));
+  const handleDayPress = (day: any) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setCurrentDate(normalizeDateFormat(day.dateString));
+  };
 
   /* ---------- Add to Calendar flow ---------- */
 

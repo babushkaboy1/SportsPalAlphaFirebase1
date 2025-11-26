@@ -468,7 +468,7 @@ export default function PickLocationScreen({ navigation, route }: Props) {
       <MapView
         ref={mapRef}
         style={{ flex: 1 }}
-        provider={Platform.OS === 'android' ? PROVIDER_DEFAULT : undefined}
+        provider={PROVIDER_DEFAULT}
         initialRegion={{
           latitude: selectedCoords?.latitude || userLocation?.latitude || 37.9838,
           longitude: selectedCoords?.longitude || userLocation?.longitude || 23.7275,

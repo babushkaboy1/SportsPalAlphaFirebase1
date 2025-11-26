@@ -172,7 +172,6 @@ interface SuccessModalProps {
   invitedState: boolean;
   onSelectFriend: (friendId: string) => void;
   onInviteFriends: () => void;
-  onGoToDetails: () => void;
   onClose: () => void;
 }
 
@@ -187,7 +186,6 @@ const SuccessModal: React.FC<SuccessModalProps> = ({
   invitedState,
   onSelectFriend,
   onInviteFriends,
-  onGoToDetails,
   onClose,
 }) => {
   const { theme } = useTheme();
@@ -554,24 +552,14 @@ const SuccessModal: React.FC<SuccessModalProps> = ({
           </Text>
         )}
 
-        {/* Action Buttons */}
+        {/* Action Button */}
         <View style={styles.buttonContainer}>
           <TouchableOpacity
             style={[styles.button, styles.primaryButton]}
-            onPress={onGoToDetails}
-          >
-            <Ionicons name="information-circle" size={20} color="#fff" />
-            <Text style={styles.buttonText}>
-              View Activity Details
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.button, styles.secondaryButton]}
             onPress={onClose}
           >
-            <Ionicons name="checkmark-circle" size={20} color={theme.primary} />
-            <Text style={[styles.buttonText, styles.secondaryButtonText]}>
+            <Ionicons name="checkmark-circle" size={20} color="#fff" />
+            <Text style={styles.buttonText}>
               Done
             </Text>
           </TouchableOpacity>
@@ -918,23 +906,13 @@ const CreateGameScreen = () => {
       const createdSport = sport;
       resetForm();
       setCreatedActivityId(newId);
-      // Restore sport temporarily for the success modal
-      setSport(createdSport);
-      setShowSuccessModal(true);
-      // Load friends for modal (exclude self)
-      const myFriendIds: string[] = Array.isArray(profile?.friends) ? profile.friends : [];
-      if (myFriendIds.length) {
-        try {
-          const users = await import('../utils/firestoreFriends').then(mod => mod.fetchUsersByIds(myFriendIds));
-          // Filter out current user from friends list
-          const filteredUsers = users.filter((u: any) => u.uid !== uid);
-          setFriendProfiles(filteredUsers);
-        } catch {
-          setFriendProfiles([]);
-        }
-      } else {
-        setFriendProfiles([]);
-      }
+      
+      // Navigate to activity details immediately with showSuccessModal flag
+      navigation.navigate('ActivityDetails', { 
+        activityId: newId,
+        showSuccessModal: true,
+        activitySport: createdSport,
+      });
     } catch (e) {
       Alert.alert('Error', 'Could not create game. Please try again.');
     } finally {
@@ -1212,20 +1190,15 @@ const CreateGameScreen = () => {
                   : `No invites sent. ${skipped} skipped (already joined).`
               );
             }}
-            onGoToDetails={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-              if (createdActivityId) {
-                setShowSuccessModal(false);
-                // Clear sport after navigating since form was already reset
-                setSport('');
-                navigation.navigate('ActivityDetails', { activityId: createdActivityId });
-              }
-            }}
             onClose={() => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
               setShowSuccessModal(false);
               // Clear sport after modal closes since form was already reset
               setSport('');
+              // Reset selection states for next time
+              setSelectedFriendIds({});
+              setInvitedFriendIds([]);
+              setInvitedState(false);
             }}
           />
         </Modal>
@@ -1258,7 +1231,10 @@ const CreateGameScreen = () => {
               <TouchableOpacity
                 key={option}
                 style={[styles.sportButton, sport === option && styles.activeButton]}
-                onPress={() => setSport(option)}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setSport(option);
+                }}
               >
                 <ActivityIcon
                   activity={option}
@@ -1579,7 +1555,10 @@ const CreateGameScreen = () => {
                     <TouchableOpacity onPress={() => setShowDatePicker(false)}>
                       <Text style={styles.rollerCancel}>Cancel</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity onPress={() => setShowDatePicker(false)}>
+                    <TouchableOpacity onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      setShowDatePicker(false);
+                    }}>
                       <Text style={styles.rollerDone}>Done</Text>
                     </TouchableOpacity>
                   </View>
@@ -1607,7 +1586,10 @@ const CreateGameScreen = () => {
               display="default"
               onChange={(event, selectedDate) => {
                 setShowDatePicker(false);
-                if (selectedDate) setDate(normalizeDateFormat(selectedDate.toISOString().split('T')[0]));
+                if (selectedDate) {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setDate(normalizeDateFormat(selectedDate.toISOString().split('T')[0]));
+                }
               }}
               minimumDate={new Date()}
             />
@@ -1636,7 +1618,10 @@ const CreateGameScreen = () => {
                     <TouchableOpacity onPress={() => setShowTimePicker(false)}>
                       <Text style={styles.rollerCancel}>Cancel</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity onPress={() => setShowTimePicker(false)}>
+                    <TouchableOpacity onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      setShowTimePicker(false);
+                    }}>
                       <Text style={styles.rollerDone}>Done</Text>
                     </TouchableOpacity>
                   </View>
@@ -1666,6 +1651,7 @@ const CreateGameScreen = () => {
               onChange={(event, selectedTime) => {
                 setShowTimePicker(false);
                 if (selectedTime) {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                   const hours = selectedTime.getHours().toString().padStart(2, '0');
                   const minutes = selectedTime.getMinutes().toString().padStart(2, '0');
                   setTime(`${hours}:${minutes}`);
@@ -1693,7 +1679,10 @@ const CreateGameScreen = () => {
                     <TouchableOpacity onPress={() => setShowParticipantsPicker(false)}>
                       <Text style={styles.rollerCancel}>Cancel</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity onPress={() => setShowParticipantsPicker(false)}>
+                    <TouchableOpacity onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      setShowParticipantsPicker(false);
+                    }}>
                       <Text style={styles.rollerDone}>Done</Text>
                     </TouchableOpacity>
                   </View>
@@ -1719,7 +1708,10 @@ const CreateGameScreen = () => {
                     <TouchableOpacity onPress={() => setShowParticipantsPicker(false)}>
                       <Text style={styles.rollerCancel}>Cancel</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity onPress={() => setShowParticipantsPicker(false)}>
+                    <TouchableOpacity onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      setShowParticipantsPicker(false);
+                    }}>
                       <Text style={styles.rollerDone}>Done</Text>
                     </TouchableOpacity>
                   </View>

@@ -3,7 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, Animated, Platform } from 're
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../context/ThemeContext';
-import { Image } from 'react-native';
+import UserAvatar from './UserAvatar';
 
 interface InAppNotificationProps {
   visible: boolean;
@@ -97,7 +97,12 @@ export const InAppNotification: React.FC<InAppNotificationProps> = ({
       >
         <View style={styles.content}>
           {image ? (
-            <Image source={{ uri: image }} style={styles.avatar} />
+            <UserAvatar
+              photoUrl={image}
+              username="User"
+              size={40}
+              style={styles.avatar}
+            />
           ) : (
             <View style={[styles.iconContainer, { backgroundColor: theme.primary + '20' }]}>
               <Ionicons name="notifications" size={24} color={theme.primary} />

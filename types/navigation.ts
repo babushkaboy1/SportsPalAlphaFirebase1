@@ -1,5 +1,7 @@
 export type RootStackParamList = {
   Login: undefined; // Ensure this is defined
+  RegisterEmail: undefined;
+  EmailVerificationGate: undefined;
   CreateProfile: {
     mode?: 'edit' | 'create';
     profileData?: any;
@@ -19,7 +21,11 @@ export type RootStackParamList = {
       };
     }; 
   };
-  ActivityDetails: { activityId: string };
+  ActivityDetails: { 
+    activityId: string;
+    showSuccessModal?: boolean;
+    activitySport?: string;
+  };
   ChatDetail: { chatId: string };
   CreateGame: {
     formState?: {

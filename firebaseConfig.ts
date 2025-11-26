@@ -9,6 +9,9 @@ import { getFunctions, Functions } from 'firebase/functions';
 import { Platform } from 'react-native';
 import {
   FIREBASE_API_KEY,
+  FIREBASE_API_KEY_WEB,
+  FIREBASE_API_KEY_IOS,
+  FIREBASE_API_KEY_ANDROID,
   FIREBASE_AUTH_DOMAIN,
   FIREBASE_PROJECT_ID,
   FIREBASE_STORAGE_BUCKET,
@@ -19,13 +22,18 @@ import {
   FIREBASE_MEASUREMENT_ID
 } from '@env';
 
-// Dynamically select the correct APP_ID based on the platform
+// Dynamically select the correct API Key and APP_ID based on the platform
+let currentApiKey: string;
 let currentAppId: string;
+
 if (Platform.OS === 'ios') {
+  currentApiKey = FIREBASE_API_KEY_IOS || FIREBASE_API_KEY;
   currentAppId = FIREBASE_APP_ID_IOS;
 } else if (Platform.OS === 'android') {
+  currentApiKey = FIREBASE_API_KEY_ANDROID || FIREBASE_API_KEY;
   currentAppId = FIREBASE_APP_ID_ANDROID;
 } else {
+  currentApiKey = FIREBASE_API_KEY_WEB || FIREBASE_API_KEY;
   currentAppId = FIREBASE_APP_ID_WEB;
 }
 
@@ -35,7 +43,7 @@ function toGsUrl(bucket: string) {
 }
 
 const firebaseConfig = {
-  apiKey: FIREBASE_API_KEY,
+  apiKey: currentApiKey,
   authDomain: FIREBASE_AUTH_DOMAIN,
   projectId: FIREBASE_PROJECT_ID,
   storageBucket: FIREBASE_STORAGE_BUCKET, // no gs:// here
