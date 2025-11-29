@@ -23,7 +23,7 @@ import {
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 // useActivityContext is already imported above in this file; avoid duplicate
 import { ActivityIcon } from '../components/ActivityIcons';
@@ -44,6 +44,7 @@ import { getDisplayCreatorUsername } from '../utils/getDisplayCreatorUsername';
 import { useTheme } from '../context/ThemeContext';
 import { getProfileFromCache, updateProfileInCache } from '../utils/chatCache';
 import { shareActivity, shareProfile } from '../utils/deepLinking';
+import PagerView, { PagerViewOnPageSelectedEvent } from 'react-native-pager-view';
 
 // Slight darken helper for hex colors (fallback to original on parse failure)
 function darkenHex(color: string, amount = 0.12): string {
@@ -118,6 +119,7 @@ const ProfileScreen = () => {
     return null;
   });
   const [activeTab, setActiveTab] = useState<'activities' | 'history' | 'friends'>('activities');
+  const pagerRef = useRef<PagerView | null>(null);
   const [userLocation, setUserLocation] = useState<{ latitude: number, longitude: number } | null>(null);
   const [userJoinedActivities, setUserJoinedActivities] = useState<any[]>([]);
   const [isReady, setIsReady] = useState(false);
@@ -667,8 +669,8 @@ const ProfileScreen = () => {
     );
   };
 
-  const renderContent = () => {
-    switch (activeTab) {
+  const renderContent = (tab: 'activities' | 'history' | 'friends') => {
+    switch (tab) {
       case 'activities':
         return (
           <View style={{ flex: 1 }}>
@@ -1110,6 +1112,27 @@ const ProfileScreen = () => {
 
   const tabs: Array<"activities" | "history" | "friends"> = ["activities", "history", "friends"];
 
+  const handleTabPress = (tab: 'activities' | 'history' | 'friends', index: number) => {
+    Keyboard.dismiss();
+    setActiveTab(tab);
+    const pager = pagerRef.current as PagerView | (PagerView & { setPageWithoutAnimation?: (i: number) => void }) | null;
+    if (pager) {
+      if (typeof (pager as any).setPageWithoutAnimation === 'function') {
+        (pager as any).setPageWithoutAnimation(index);
+      } else {
+        pager.setPage(index);
+      }
+    }
+  };
+
+  const handlePageSelected = (event: PagerViewOnPageSelectedEvent) => {
+    const index = event.nativeEvent.position;
+    const nextTab = tabs[index];
+    if (nextTab) {
+      setActiveTab(nextTab);
+    }
+  };
+
   const getIconName = (tab: "activities" | "history" | "friends"): keyof typeof Ionicons.glyphMap => {
     switch (tab) {
       case "activities":
@@ -1126,12 +1149,12 @@ const ProfileScreen = () => {
   // Show loading indicator until profile is loaded
   if (!isReady) {
     return (
-      <SafeAreaView style={styles.container} edges={['top']} />
+      <View style={[styles.container, { paddingTop: insets.top }]} />
     );
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <View style={[styles.container, { paddingTop: insets.top }]}> 
       <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
         <View style={styles.headerRow}>
         <Text style={styles.profileNameHeader}>{profile?.username || 'Username'}</Text>
@@ -1291,14 +1314,11 @@ const ProfileScreen = () => {
       )}
 
       <View style={styles.tabBar}>
-        {tabs.map((tab) => (
+        {tabs.map((tab, index) => (
           <TouchableOpacity
             key={tab}
             style={[styles.tab, activeTab === tab && styles.activeTab, { flex: 1 }]}
-            onPress={() => {
-              Keyboard.dismiss();
-              setActiveTab(tab);
-            }}
+            onPress={() => handleTabPress(tab, index)}
           >
             <Ionicons
               name={getIconName(tab)}
@@ -1309,7 +1329,21 @@ const ProfileScreen = () => {
         ))}
       </View>
 
-      <View style={styles.contentContainer}>{renderContent()}</View>
+      <View style={styles.pagerContainer}>
+        <PagerView
+          ref={pagerRef}
+          style={styles.pager}
+          initialPage={tabs.indexOf(activeTab)}
+          onPageSelected={handlePageSelected}
+          overScrollMode="never"
+        >
+          {tabs.map((tab) => (
+            <View key={tab} style={styles.pagerPage}>
+              {renderContent(tab)}
+            </View>
+          ))}
+        </PagerView>
+      </View>
       {/* Favourite sports modal */}
       <Modal
         visible={favModalVisible}
@@ -1442,7 +1476,7 @@ const ProfileScreen = () => {
       </Modal>
 
       </Animated.View>
-    </SafeAreaView>
+    </View>
   );
 };
 
@@ -1614,6 +1648,16 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
   },
   contentContainer: {
     paddingHorizontal: 20,
+    flex: 1,
+  },
+  pagerContainer: {
+    flex: 1,
+    paddingHorizontal: 20,
+  },
+  pager: {
+    flex: 1,
+  },
+  pagerPage: {
     flex: 1,
   },
   tabContent: {

@@ -1,4 +1,5 @@
 import React from 'react';
+import { Dimensions } from 'react-native';
 import { createStackNavigator, CardStyleInterpolators } from '@react-navigation/stack';
 import CalendarScreen from '../screens/CalendarScreen';
 import ActivityDetailsScreen from '../screens/ActivityDetailsScreen';
@@ -12,7 +13,11 @@ export default function CalendarStack() {
       screenOptions={{
         headerShown: false,
         cardStyleInterpolator: CardStyleInterpolators.forHorizontalIOS,
+        gestureEnabled: true,
+        gestureDirection: 'horizontal',
+        gestureResponseDistance: Dimensions.get('window').width,
       }}
+      detachInactiveScreens={false}
     >
       <Stack.Screen name="CalendarMain" component={CalendarScreen} />
       <Stack.Screen name="ActivityDetails" component={ActivityDetailsScreen} />

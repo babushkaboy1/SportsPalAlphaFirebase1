@@ -1,10 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
-import { createStackNavigator } from '@react-navigation/stack';
-import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { StyleSheet, TouchableOpacity, Alert, Platform, ActivityIndicator, View } from 'react-native';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { NavigationContainer, createNavigationContainerRef, StackActions, NavigationState } from '@react-navigation/native';
+import { createStackNavigator, CardStyleInterpolators } from '@react-navigation/stack';
+import { Platform, Dimensions } from 'react-native';
+import { createMaterialTopTabNavigator, MaterialTopTabBarProps } from '@react-navigation/material-top-tabs';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { Ionicons } from '@expo/vector-icons';
 import { enableScreens } from 'react-native-screens';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
@@ -22,11 +21,6 @@ import { parseDeepLink } from './utils/deepLinking';
 import * as Updates from 'expo-updates';
 
 // Import your screens
-import DiscoverGamesScreen from './screens/DiscoverGamesScreen';
-import ChatsScreen from './screens/ChatsScreen';
-import CreateGameScreen from './screens/CreateGameScreen';
-import CalendarScreen from './screens/CalendarScreen';
-import ProfileScreen from './screens/ProfileScreen';
 import LoginScreen from './screens/LoginScreen';
 import RegisterEmailScreen from './screens/RegisterEmailScreen';
 import EmailVerificationGateScreen from './screens/EmailVerificationGateScreen';
@@ -36,6 +30,8 @@ import ChatDetailScreen from './screens/ChatDetailScreen';
 import PickLocationScreen from './screens/PickLocationScreen';
 import UserProfileScreen from './screens/UserProfileScreen';
 import BlockedUsersScreen from './screens/BlockedUsersScreen';
+import CreateGameScreen from './screens/CreateGameScreen';
+import ChatsScreen from './screens/ChatsScreen';
 
 // Import the ActivityProvider
 import { ActivityProvider } from './context/ActivityContext';
@@ -50,157 +46,178 @@ import { decode as atob } from 'base-64';
 
 enableScreens(true);
 import { ThemeProvider, useTheme } from './context/ThemeContext';
+import { BottomTabs } from './components/BottomTabs';
 
 // Keep the native splash screen visible while we initialize
 try { SplashScreen.preventAutoHideAsync(); } catch {}
 
 const Stack = createStackNavigator<RootStackParamList>();
-const Tab = createBottomTabNavigator<TabParamList>();
 const navRef = createNavigationContainerRef();
 
-const styles = StyleSheet.create({
-  tabBarStyle: {
-    borderTopWidth: 0,
-  }
-});
+type MainTabsParamList = {
+  Discover: undefined;
+  Calendar: undefined;
+  CreateGame: RootStackParamList['CreateGame'] | undefined;
+  Inbox: undefined;
+  Profile: undefined;
+};
 
-const MainTabs = () => {
-  const { theme, navTheme } = useTheme();
+type TabKey = keyof MainTabsParamList;
+
+type TabDescriptor = {
+  key: TabKey;
+  label: string;
+  icon: string;
+  iconActive?: string;
+  resettable?: boolean;
+};
+
+type ExternalNavigationTarget =
+  | { kind: 'activity'; id: string }
+  | { kind: 'profile'; id: string }
+  | { kind: 'chat'; id: string }
+  | { kind: 'notifications'; reason?: 'activity_invite' | 'friend' | 'generic' };
+
+const TAB_DESCRIPTORS: ReadonlyArray<TabDescriptor> = [
+  { key: 'Discover', label: 'Discover', icon: 'search-outline', iconActive: 'search', resettable: true },
+  { key: 'Calendar', label: 'Calendar', icon: 'calendar-outline', iconActive: 'calendar', resettable: true },
+  { key: 'CreateGame', label: 'Create', icon: 'add-circle-outline', iconActive: 'add-circle' },
+  { key: 'Inbox', label: 'Inbox', icon: 'mail-outline', iconActive: 'mail-open-outline' },
+  { key: 'Profile', label: 'Profile', icon: 'person-outline', iconActive: 'person', resettable: true },
+];
+
+const Tab = createMaterialTopTabNavigator<MainTabsParamList>();
+
+const MainTabs: React.FC = () => {
+  const { theme } = useTheme();
   const { totalUnread } = useInboxBadge();
+  const jumpRafRef = React.useRef<number | null>(null);
+  const restoreAnimTimeout = React.useRef<NodeJS.Timeout | null>(null);
+  const [animationEnabled, setAnimationEnabled] = React.useState(true);
+
+  React.useEffect(() => {
+    return () => {
+      if (jumpRafRef.current !== null) {
+        cancelAnimationFrame(jumpRafRef.current);
+        jumpRafRef.current = null;
+      }
+      if (restoreAnimTimeout.current) {
+        clearTimeout(restoreAnimTimeout.current);
+        restoreAnimTimeout.current = null;
+      }
+    };
+  }, []);
+
+  const renderTabBar = (props: MaterialTopTabBarProps) => {
+    const { state, navigation } = props;
+
+    const items = state.routes.map((route: typeof state.routes[number]) => {
+      const descriptor = TAB_DESCRIPTORS.find((tab) => tab.key === (route.name as TabKey));
+      const badge =
+        route.name === 'Inbox' && totalUnread > 0
+          ? totalUnread > 99
+            ? '99+'
+            : String(totalUnread)
+          : undefined;
+
+      return {
+        key: route.key,
+        label: descriptor?.label ?? route.name,
+        icon: descriptor?.icon ?? 'ellipse-outline',
+        iconActive: descriptor?.iconActive,
+        badge,
+      };
+    });
+
+    const handlePress = (index: number) => {
+      const route = state.routes[index];
+      if (!route) return;
+      const isFocused = state.index === index;
+
+      const event = navigation.emit({
+        type: 'tabPress',
+        target: route.key,
+        canPreventDefault: true,
+      });
+
+      if (event.defaultPrevented) {
+        return;
+      }
+
+      if (isFocused) {
+        const descriptor = TAB_DESCRIPTORS.find((tab) => tab.key === (route.name as TabKey));
+        if (descriptor?.resettable) {
+          const childState = route.state as NavigationState | undefined;
+          if (childState && childState.index > 0) {
+            navigation.dispatch({
+              ...StackActions.popToTop(),
+              target: childState.key,
+            });
+          }
+        }
+      } else {
+        if (jumpRafRef.current !== null) {
+          cancelAnimationFrame(jumpRafRef.current);
+          jumpRafRef.current = null;
+        }
+
+        if (restoreAnimTimeout.current) {
+          clearTimeout(restoreAnimTimeout.current);
+          restoreAnimTimeout.current = null;
+        }
+
+        setAnimationEnabled(false);
+
+        jumpRafRef.current = requestAnimationFrame(() => {
+          (navigation as any).jumpTo(route.name, route.params);
+          restoreAnimTimeout.current = setTimeout(() => {
+            setAnimationEnabled(true);
+            restoreAnimTimeout.current = null;
+          }, 180);
+          jumpRafRef.current = null;
+        });
+      }
+    };
+
+    return (
+      <BottomTabs
+        items={items}
+        activeIndex={state.index}
+        onTabPress={handlePress}
+        activeColor={theme.tabIconActive}
+        inactiveColor={theme.tabIconInactive}
+        backgroundColor={theme.tabBarBg}
+        borderColor={theme.border}
+      />
+    );
+  };
+
   return (
-  <Tab.Navigator
-    detachInactiveScreens={false}
-    screenOptions={({ route }: { route: any }) => ({
-      headerShown: false,
-      tabBarActiveTintColor: theme.tabIconActive,
-      tabBarInactiveTintColor: theme.tabIconInactive,
-      tabBarStyle: [styles.tabBarStyle, { backgroundColor: theme.tabBarBg }],
-      tabBarPressColor: 'transparent',
-      tabBarButton: (props: any) => {
-        const cleanedProps = Object.fromEntries(
-          Object.entries(props).filter(([_, v]) => v !== null)
-        );
-        return (
-          <TouchableOpacity
-            activeOpacity={0.7}
-            {...cleanedProps}
-          />
-        );
-      },
-      tabBarIcon: ({ color, size, focused }: { color: string; size: number; focused: boolean }) => {
-        let iconName = 'alert-circle-outline';
-        switch (route.name) {
-          case 'Discover':
-            iconName = 'search-outline';
-            break;
-          case 'Calendar':
-            iconName = 'calendar-outline';
-            break;
-          case 'CreateGame':
-            iconName = 'add-circle-outline';
-            break;
-          case 'Profile':
-            iconName = 'person-outline';
-            break;
-          case 'Inbox':
-            iconName = focused ? 'mail-open-outline' : 'mail-outline';
-            break;
-        }
-        return <Ionicons name={iconName as any} size={size} color={color} />;
-      },
-    })}
-  >
-    <Tab.Screen
-      name="Discover"
-      component={DiscoverStack}
-      listeners={({ navigation, route }: { navigation: any; route: any }) => ({
-        tabPress: (e: any) => {
-          const state = navigation.getState();
-          // Find the currently focused tab
-          const focusedTab = state.index !== undefined ? state.routes[state.index] : null;
-          // Only reset if Discover is already focused
-          if (
-            focusedTab &&
-            focusedTab.name === 'Discover'
-          ) {
-            const tab = state.routes.find((r: any) => r.name === 'Discover');
-            const stackState = tab?.state;
-            if (stackState && typeof stackState.index === 'number' && stackState.index > 0) {
-              e.preventDefault();
-              navigation.reset({
-                index: 0,
-                routes: [{ name: 'Discover' }],
-              });
-            }
-          }
-          // If Discover is not focused, do nothing (default behavior: return to last screen in stack)
-        }
-      })}
-    />
-    <Tab.Screen
-      name="Calendar"
-      component={CalendarStack}
-      listeners={({ navigation, route }: { navigation: any; route: any }) => ({
-        tabPress: (e: any) => {
-          const state = navigation.getState();
-          // Find the currently focused tab
-          const focusedTab = state.index !== undefined ? state.routes[state.index] : null;
-          // Only reset if Calendar is already focused
-          if (
-            focusedTab &&
-            focusedTab.name === 'Calendar'
-          ) {
-            const tab = state.routes.find((r: any) => r.name === 'Calendar');
-            const stackState = tab?.state;
-            if (stackState && typeof stackState.index === 'number' && stackState.index > 0) {
-              e.preventDefault();
-              navigation.reset({
-                index: 0,
-                routes: [{ name: 'Calendar' }],
-              });
-            }
-          }
-          // If Calendar is not focused, do nothing (default behavior: return to last screen in stack)
-        }
-      })}
-    />
-    <Tab.Screen
-      name="CreateGame"
-      component={CreateGameScreen}
-      options={{ tabBarLabel: 'Create Event' }} // or 'Create'
-    />
-  <Tab.Screen name="Inbox" component={ChatsScreen} options={{
-    tabBarBadge: totalUnread > 0 ? (totalUnread > 99 ? '99+' : totalUnread) : undefined,
-    tabBarBadgeStyle: { backgroundColor: '#e74c3c', color: '#fff' },
-  }} />
-    <Tab.Screen
-      name="Profile"
-      component={ProfileStack} // Ensure ProfileStack is passed correctly
-      options={{ headerShown: false }}
-      listeners={({ navigation, route }: { navigation: any; route: any }) => ({
-        tabPress: (e: any) => {
-          const state = navigation.getState();
-          const focusedTab = state.index !== undefined ? state.routes[state.index] : null;
-          if (
-            focusedTab &&
-            focusedTab.name === 'Profile'
-          ) {
-            const tab = state.routes.find((r: any) => r.name === 'Profile');
-            const stackState = tab?.state;
-            if (stackState && typeof stackState.index === 'number' && stackState.index > 0) {
-              e.preventDefault();
-              navigation.reset({
-                index: 0,
-                routes: [{ name: 'Profile' }],
-              });
-            }
-          }
-        }
-      })}
-    />
-  </Tab.Navigator>
-);
-}
+    <Tab.Navigator
+      id="MainTabsPager"
+      initialRouteName="Discover"
+      tabBarPosition="bottom"
+      backBehavior="none"
+      screenOptions={{
+        swipeEnabled: true,
+        animationEnabled,
+        lazy: false,
+        lazyPreloadDistance: TAB_DESCRIPTORS.length,
+        tabBarStyle: { height: 0 },
+        tabBarIndicatorStyle: { backgroundColor: 'transparent' },
+        tabBarShowLabel: false,
+        sceneStyle: { backgroundColor: theme.background },
+      }}
+      tabBar={renderTabBar}
+    >
+      <Tab.Screen name="Discover" component={DiscoverStack} />
+      <Tab.Screen name="Calendar" component={CalendarStack} />
+      <Tab.Screen name="CreateGame" component={CreateGameScreen} />
+      <Tab.Screen name="Inbox" component={ChatsScreen} />
+      <Tab.Screen name="Profile" component={ProfileStack} />
+    </Tab.Navigator>
+  );
+};
 
 function AppInner() {
   const [user, setUser] = useState<User | null>(null);
@@ -210,12 +227,161 @@ function AppInner() {
   // Track email verification status
   const [isEmailVerified, setIsEmailVerified] = useState<boolean | null>(null);
   const [navReady, setNavReady] = useState(false);
-  const splashHiddenRef = React.useRef(false);
-  // Store a deep link encountered before navigation is ready / auth resolved
-  const pendingDeepLinkRef = React.useRef<string | null>(null);
+  const splashHiddenRef = useRef(false);
+  const pendingNavigationTargetRef = useRef<ExternalNavigationTarget | null>(null);
+  const navigationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { theme, navTheme } = useTheme();
   const { currentNotification, dismissNotification, showNotification } = useInAppNotification();
   const [updateChecked, setUpdateChecked] = useState(false);
+
+  const clearNavigationTimeout = useCallback(() => {
+    if (navigationTimeoutRef.current) {
+      clearTimeout(navigationTimeoutRef.current);
+      navigationTimeoutRef.current = null;
+    }
+  }, []);
+
+  const executeNavigationTarget = useCallback(
+    (target: ExternalNavigationTarget) => {
+      if (!navRef.isReady()) return false;
+
+      const nav = navRef as any;
+
+      const navigateToMainTabs = (screen: keyof MainTabsParamList, params?: Record<string, any>) => {
+        try {
+          nav.navigate('MainTabs', params ? { screen, params: { ...params } } : { screen });
+        } catch (error) {
+          console.warn('MainTabs navigation failed', error);
+        }
+      };
+
+      const schedule = (fn: () => void, delay = 120) => {
+        clearNavigationTimeout();
+        navigationTimeoutRef.current = setTimeout(() => {
+          try {
+            fn();
+          } catch (error) {
+            console.error('Deferred navigation failed', error);
+          } finally {
+            navigationTimeoutRef.current = null;
+          }
+        }, delay);
+      };
+
+      try {
+        switch (target.kind) {
+          case 'activity':
+            navigateToMainTabs('Discover', { _deeplinkTs: Date.now() });
+            schedule(() => {
+              nav.navigate('ActivityDetails', { activityId: target.id });
+            });
+            return true;
+          case 'profile':
+            navigateToMainTabs('Profile', { _deeplinkTs: Date.now() });
+            schedule(() => {
+              nav.navigate('UserProfile', { userId: target.id });
+            });
+            return true;
+          case 'chat':
+            navigateToMainTabs('Inbox', { inboxView: 'chats', _deeplinkTs: Date.now() });
+            schedule(() => {
+              nav.navigate('ChatDetail', { chatId: target.id });
+            }, 80);
+            return true;
+          case 'notifications':
+            navigateToMainTabs('Inbox', {
+              inboxView: 'notifications',
+              notificationReason: target.reason,
+              _deeplinkTs: Date.now(),
+            });
+            return true;
+          default:
+            return false;
+        }
+      } catch (error) {
+        console.error('❌ Error executing external navigation:', error);
+        return false;
+      }
+    },
+    [clearNavigationTimeout]
+  );
+
+  const canNavigateNow = useCallback(() => {
+    if (!navReady || !navRef.isReady()) return false;
+    if (!user) return false;
+    if (hasProfile === null || isEmailVerified === null) return false;
+    if (!hasProfile || !isEmailVerified) return false;
+    return true;
+  }, [navReady, user, hasProfile, isEmailVerified]);
+
+  const requestNavigationTarget = useCallback(
+    (target: ExternalNavigationTarget | null) => {
+      if (!target) return;
+      if (!canNavigateNow()) {
+        pendingNavigationTargetRef.current = target;
+        return;
+      }
+      const handled = executeNavigationTarget(target);
+      if (!handled) {
+        pendingNavigationTargetRef.current = target;
+      }
+    },
+    [canNavigateNow, executeNavigationTarget]
+  );
+
+  const parseUrlToTarget = useCallback((url: string): ExternalNavigationTarget | null => {
+    const { type, id } = parseDeepLink(url);
+    if (!id) return null;
+    switch (type) {
+      case 'activity':
+        return { kind: 'activity', id };
+      case 'profile':
+        return { kind: 'profile', id };
+      case 'chat':
+        return { kind: 'chat', id };
+      default:
+        return null;
+    }
+  }, []);
+
+  const mapNotificationPayloadToTarget = useCallback((payload: any): ExternalNavigationTarget | null => {
+    if (!payload) return null;
+    const type = payload.type;
+    if (type === 'chat' && payload.chatId) {
+      return { kind: 'chat', id: String(payload.chatId) };
+    }
+    if (type === 'activity_invite') {
+      return { kind: 'notifications', reason: 'activity_invite' };
+    }
+    if (type === 'friend_request' || type === 'friend_accept') {
+      return { kind: 'notifications', reason: 'friend' };
+    }
+    if (payload.activityId) {
+      return { kind: 'activity', id: String(payload.activityId) };
+    }
+    if (payload.userId) {
+      return { kind: 'profile', id: String(payload.userId) };
+    }
+    if (payload.profileId) {
+      return { kind: 'profile', id: String(payload.profileId) };
+    }
+    return null;
+  }, []);
+
+  useEffect(() => {
+    if (!pendingNavigationTargetRef.current) return;
+    if (!canNavigateNow()) return;
+    const target = pendingNavigationTargetRef.current;
+    pendingNavigationTargetRef.current = null;
+    const handled = target ? executeNavigationTarget(target) : true;
+    if (!handled && target) {
+      pendingNavigationTargetRef.current = target;
+    }
+  }, [canNavigateNow, executeNavigationTarget, navReady, user, hasProfile, isEmailVerified]);
+
+  useEffect(() => () => {
+    clearNavigationTimeout();
+  }, [clearNavigationTimeout]);
 
   // Check for OTA updates on app launch (only in production)
   useEffect(() => {
@@ -235,7 +401,9 @@ function AppInner() {
           console.log('[Updates] Update available! Downloading...');
           await Updates.fetchUpdateAsync();
           console.log('[Updates] Update downloaded! Reloading app...');
-          // Reload immediately to apply the update
+          // Keep splash visible and reload immediately to apply the update
+          // The splash will remain visible during reload, preventing white flash
+          await SplashScreen.preventAutoHideAsync().catch(() => {});
           await Updates.reloadAsync();
         } else {
           console.log('[Updates] App is up to date');
@@ -259,15 +427,12 @@ function AppInner() {
   }, [showNotification]);
 
   const handleNotificationPress = () => {
-    if (!currentNotification || !navRef.isReady()) return;
-
-    if (currentNotification.type === 'chat' && currentNotification.chatId) {
-      try { (navRef as any).navigate('ChatDetail', { chatId: currentNotification.chatId }); } catch {}
-    } else if (currentNotification.type === 'activity_invite' && currentNotification.activityId) {
-      try { (navRef as any).navigate('ActivityDetails', { activityId: currentNotification.activityId }); } catch {}
-    } else if (currentNotification.type === 'friend_request' || currentNotification.type === 'friend_accept') {
-      try { (navRef as any).navigate('MainTabs', { screen: 'Inbox' }); } catch {}
+    if (!currentNotification) return;
+    const target = mapNotificationPayloadToTarget(currentNotification);
+    if (target) {
+      requestNavigationTarget(target);
     }
+    dismissNotification();
   };
 
   useEffect(() => {
@@ -333,42 +498,26 @@ function AppInner() {
   useEffect(() => {
     let unsubscribeResponses: (() => void) | undefined;
     if (user) {
-      // Best-effort registration (no blocking)
       registerPushNotificationsForCurrentUser().catch(() => {});
-      // Handle cold-start from a tapped notification
       getLastNotificationResponseData()
         .then((data) => {
-          if (!data || !navRef.isReady()) return;
-          if (data.type === 'chat' && data.chatId) {
-            try { (navRef as any).navigate('ChatDetail', { chatId: data.chatId }); } catch {}
-            return;
+          const target = mapNotificationPayloadToTarget(data);
+          if (target) {
+            requestNavigationTarget(target);
           }
-          if (data.type === 'activity_invite' && data.activityId) {
-            try { (navRef as any).navigate('ActivityDetails', { activityId: data.activityId }); } catch {}
-            return;
-          }
-          try { (navRef as any).navigate('MainTabs', { screen: 'Inbox' }); } catch {}
         })
         .catch(() => {});
       unsubscribeResponses = subscribeNotificationResponses((data) => {
-        if (!navRef.isReady() || !data) return;
-        if (data.type === 'chat' && data.chatId) {
-          // Open specific chat thread
-          try { (navRef as any).navigate('ChatDetail', { chatId: data.chatId }); } catch {}
-          return;
+        const target = mapNotificationPayloadToTarget(data);
+        if (target) {
+          requestNavigationTarget(target);
         }
-        if (data.type === 'activity_invite' && data.activityId) {
-          try { (navRef as any).navigate('ActivityDetails', { activityId: data.activityId }); } catch {}
-          return;
-        }
-        // For friend requests/accepts or anything else, bring user to Inbox
-        try { (navRef as any).navigate('MainTabs', { screen: 'Inbox' }); } catch {}
       });
     }
     return () => {
       if (unsubscribeResponses) unsubscribeResponses();
     };
-  }, [user]);
+  }, [user, mapNotificationPayloadToTarget, requestNavigationTarget]);
 
   useEffect(() => {
     if (user) {
@@ -382,95 +531,27 @@ function AppInner() {
 
   // Deep linking handler
   useEffect(() => {
-    // Always fetch the initial URL once; store if we cannot navigate yet
-    Linking.getInitialURL().then((url) => {
-      if (url) {
-        console.log('📱 Initial deep link URL:', url);
-        if (user && navRef.isReady() && hasProfile !== null && isEmailVerified !== null && hasProfile && isEmailVerified) {
-          handleDeepLinkNavigation(url);
-        } else {
-          pendingDeepLinkRef.current = url;
-        }
+    const processUrl = (url: string | null, source: 'initial' | 'event') => {
+      if (!url) return;
+      console.log(source === 'initial' ? '📱 Initial deep link URL:' : '📱 Deep link received:', url);
+      const target = parseUrlToTarget(url);
+      if (!target) {
+        console.log('❌ Deep link navigation blocked: unsupported target', url);
+        return;
       }
-    }).catch(() => {});
+      requestNavigationTarget(target);
+    };
 
-    // Listener for subsequent URLs while app is alive
+    Linking.getInitialURL()
+      .then((url) => processUrl(url, 'initial'))
+      .catch(() => {});
+
     const subscription = Linking.addEventListener('url', ({ url }) => {
-      console.log('📱 Deep link received:', url);
-      if (user && navRef.isReady() && hasProfile !== null && isEmailVerified !== null && hasProfile && isEmailVerified) {
-        // Small delay to ensure navigation state is settled
-        setTimeout(() => handleDeepLinkNavigation(url), 100);
-      } else {
-        pendingDeepLinkRef.current = url; // overwrite with most recent
-      }
+      processUrl(url, 'event');
     });
+
     return () => subscription.remove();
-  }, [user, hasProfile, isEmailVerified]);
-
-  // When auth + nav are ready AND user has profile AND is verified, consume pending deep link
-  useEffect(() => {
-    if (!pendingDeepLinkRef.current) return;
-    if (!user) return;
-    if (!navRef.isReady()) return;
-    if (hasProfile === null || isEmailVerified === null) return; // still checking
-    if (!hasProfile || !isEmailVerified) return; // user needs to create profile or verify email first
-    
-    // Navigate now with a small delay to ensure navigation is fully ready
-    const url = pendingDeepLinkRef.current;
-    pendingDeepLinkRef.current = null;
-    console.log('📱 Processing pending deep link:', url);
-    setTimeout(() => handleDeepLinkNavigation(url), 300);
-  }, [user, navReady, hasProfile, isEmailVerified]);
-
-  const handleDeepLinkNavigation = (url: string) => {
-    const { type, id } = parseDeepLink(url);
-    
-    console.log('🔗 Deep link parsed:', { type, id, url });
-    
-    if (!id || !navRef.isReady()) {
-      console.log('❌ Deep link navigation blocked: missing id or nav not ready');
-      return;
-    }
-
-    try {
-      switch (type) {
-        case 'activity':
-          console.log('✅ Navigating to ActivityDetails:', id);
-          // Navigate to MainTabs first to ensure proper stack, then to activity
-          if ((navRef as any).getCurrentRoute()?.name !== 'MainTabs') {
-            (navRef as any).navigate('MainTabs', { screen: 'Discover' });
-          }
-          setTimeout(() => {
-            (navRef as any).navigate('ActivityDetails', { activityId: id });
-          }, 100);
-          break;
-        case 'profile':
-          console.log('✅ Navigating to UserProfile:', id);
-          // Navigate to MainTabs first to ensure proper stack
-          if ((navRef as any).getCurrentRoute()?.name !== 'MainTabs') {
-            (navRef as any).navigate('MainTabs', { screen: 'Profile' });
-          }
-          setTimeout(() => {
-            (navRef as any).navigate('UserProfile', { userId: id });
-          }, 100);
-          break;
-        case 'chat':
-          console.log('✅ Navigating to ChatDetail:', id);
-          // Navigate to MainTabs first to ensure proper stack
-          if ((navRef as any).getCurrentRoute()?.name !== 'MainTabs') {
-            (navRef as any).navigate('MainTabs', { screen: 'Inbox' });
-          }
-          setTimeout(() => {
-            (navRef as any).navigate('ChatDetail', { chatId: id });
-          }, 100);
-          break;
-        default:
-          console.log('❌ Unknown deep link type:', type);
-      }
-    } catch (error) {
-      console.error('❌ Error navigating to deep link:', error);
-    }
-  };
+  }, [parseUrlToTarget, requestNavigationTarget]);
 
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#121212' }}>
@@ -491,6 +572,10 @@ function AppInner() {
             headerShown: false,
             animation: 'fade',
             cardStyle: { backgroundColor: theme.background },
+            gestureEnabled: Platform.OS === 'ios',
+            gestureDirection: 'horizontal',
+            gestureResponseDistance:
+              Platform.OS === 'ios' ? Dimensions.get('window').width : undefined,
             transitionSpec: {
               open: {
                 animation: 'timing',
@@ -518,7 +603,13 @@ function AppInner() {
           <Stack.Screen name="CreateProfile" component={CreateProfileScreen} />
           <Stack.Screen name="MainTabs" component={MainTabs} />
           <Stack.Screen name="ActivityDetails" component={ActivityDetailsScreen} />
-          <Stack.Screen name="ChatDetail" component={ChatDetailScreen} />
+          <Stack.Screen
+            name="ChatDetail"
+            component={ChatDetailScreen}
+            options={{
+              cardStyleInterpolator: CardStyleInterpolators.forHorizontalIOS,
+            }}
+          />
           <Stack.Screen name="PickLocation" component={PickLocationScreen} />
           <Stack.Screen name="UserProfile" component={UserProfileScreen} options={{ headerShown: false }} />
           <Stack.Screen name="BlockedUsers" component={BlockedUsersScreen} options={{ headerShown: false }} />
@@ -530,6 +621,7 @@ function AppInner() {
             title={currentNotification?.title || ''}
             body={currentNotification?.body || ''}
             image={currentNotification?.image}
+            type={currentNotification?.type}
             onPress={handleNotificationPress}
             onDismiss={dismissNotification}
           />
@@ -549,15 +641,6 @@ function AppInner() {
     </GestureHandlerRootView>
   );
 }
-
-// Define your tab param list
-type TabParamList = {
-  Discover: undefined;
-  Calendar: undefined;
-  CreateGame: undefined;
-  Inbox: undefined;
-  Profile: undefined;
-};
 
 if (typeof global.atob === 'undefined') {
   global.atob = atob;

@@ -25,7 +25,7 @@ import {
 } from 'react-native';
 import { Swipeable, RectButton } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import UserAvatar from '../components/UserAvatar';
 import * as ImagePicker from 'expo-image-picker';
@@ -183,6 +183,7 @@ const TypingDots = ({ color }: { color?: string }) => {
 const ChatsScreen = ({ navigation }: any) => {
   const { theme } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
+  const insets = useSafeAreaInsets();
   const [searchQuery, setSearchQuery] = useState('');
   const [chats, setChats] = useState<Chat[]>([]);
   const [isReady, setIsReady] = useState(false);
@@ -928,15 +929,23 @@ const ChatsScreen = ({ navigation }: any) => {
 
   if (!isReady) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: theme.background, justifyContent: 'center', alignItems: 'center' }} edges={['top']}>
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: theme.background,
+          justifyContent: 'center',
+          alignItems: 'center',
+          paddingTop: insets.top,
+        }}
+      >
         <ActivityIndicator size="large" color={theme.primary} />
-      </SafeAreaView>
+      </View>
     );
   }
 
   /** ================= Render ================= */
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <View style={[styles.container, { paddingTop: insets.top }]}> 
       <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
         {/* Render headerTitle above header row to match CreateGameScreen */}
         <Text style={styles.headerTitle}>
@@ -1422,7 +1431,7 @@ const ChatsScreen = ({ navigation }: any) => {
           </View>
         </Pressable>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 };
 

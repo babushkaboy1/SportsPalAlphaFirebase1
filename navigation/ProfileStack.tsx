@@ -1,4 +1,5 @@
 import React from 'react';
+import { Dimensions } from 'react-native';
 import { createStackNavigator, CardStyleInterpolators } from '@react-navigation/stack';
 import ProfileScreen from '../screens/ProfileScreen';
 import ActivityDetailsScreen from '../screens/ActivityDetailsScreen';
@@ -14,7 +15,11 @@ export default function ProfileStack() {
       screenOptions={{
         headerShown: false,
         cardStyleInterpolator: CardStyleInterpolators.forHorizontalIOS,
+        gestureEnabled: true,
+        gestureDirection: 'horizontal',
+        gestureResponseDistance: Dimensions.get('window').width,
       }}
+      detachInactiveScreens={false}
     >
       <Stack.Screen name="ProfileMain" component={ProfileScreen} />
       <Stack.Screen name="ActivityDetails" component={ActivityDetailsScreen} />

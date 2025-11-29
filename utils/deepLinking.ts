@@ -5,6 +5,13 @@
 import * as Linking from 'expo-linking';
 import { Platform, Share, Clipboard } from 'react-native';
 
+export type DeepLinkType = 'activity' | 'profile' | 'chat' | 'unknown';
+
+export type DeepLinkParseResult = {
+  type: DeepLinkType;
+  id: string | null;
+};
+
 // Your app's domain (will be yourapp.web.app or custom domain)
 const APP_DOMAIN = 'sportspal-1b468.web.app'; // Your Firebase Hosting domain
 
@@ -32,30 +39,45 @@ export function generateChatLink(chatId: string): string {
 /**
  * Parse incoming deep link and extract route info
  */
-export function parseDeepLink(url: string): {
-  type: 'activity' | 'profile' | 'chat' | 'unknown';
-  id: string | null;
-} {
+export function parseDeepLink(url: string): DeepLinkParseResult {
   try {
-    const parsed = new URL(url);
-    const pathParts = parsed.pathname.split('/').filter(Boolean);
+    // Support both universal links and custom schemes (sportspal:/activity/123)
+    const parsed = Linking.parse(url);
 
-    if (pathParts.length < 2) {
-      return { type: 'unknown', id: null };
+    // Firebase links may embed the real link in the `link` query param
+    const deepLinkParam = parsed.queryParams?.link;
+    if (typeof deepLinkParam === 'string' && deepLinkParam.length > 0) {
+      return parseDeepLink(decodeURIComponent(deepLinkParam));
     }
 
-    const [type, id] = pathParts;
+    const pathSegments = (parsed.path || '').split('/').filter(Boolean);
 
-    if (type === 'activity' && id) {
-      return { type: 'activity', id };
+    if (pathSegments.length >= 2) {
+      const [typeSegment, idSegment] = pathSegments;
+      if (typeSegment === 'activity' && idSegment) {
+        return { type: 'activity', id: idSegment };
+      }
+      if (typeSegment === 'profile' && idSegment) {
+        return { type: 'profile', id: idSegment };
+      }
+      if (typeSegment === 'chat' && idSegment) {
+        return { type: 'chat', id: idSegment };
+      }
     }
 
-    if (type === 'profile' && id) {
-      return { type: 'profile', id };
+    // Some clients may send ?activityId=... style links
+    const qp = parsed.queryParams || {};
+    if (typeof qp.activityId === 'string') {
+      return { type: 'activity', id: qp.activityId };
     }
-
-    if (type === 'chat' && id) {
-      return { type: 'chat', id };
+    if (typeof qp.profileId === 'string') {
+      return { type: 'profile', id: qp.profileId };
+    }
+    if (typeof qp.userId === 'string') {
+      return { type: 'profile', id: qp.userId };
+    }
+    if (typeof qp.chatId === 'string') {
+      return { type: 'chat', id: qp.chatId };
     }
 
     return { type: 'unknown', id: null };

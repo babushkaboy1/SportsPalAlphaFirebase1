@@ -6,7 +6,7 @@ interface NotificationData {
   title: string;
   body: string;
   image?: string;
-  type: 'chat' | 'activity_invite' | 'friend_request' | 'friend_accept';
+  type: 'chat' | 'activity_invite' | 'friend_request' | 'friend_accept' | 'group_chat';
   chatId?: string;
   activityId?: string;
   userId?: string;

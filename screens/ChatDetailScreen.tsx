@@ -329,9 +329,8 @@ const MessageBubble = React.memo<{
     borderBottomRightRadius: isOwn ? (isLast ? 18 : 6) : 18,
   };
 
-  // Avatar URL
-  const avatarUrl = sender.photo || sender.photoURL || 
-    `https://ui-avatars.com/api/?name=${encodeURIComponent(sender.username || 'User')}`;
+  // Avatar photo (explicit fallback handled by UserAvatar component)
+  const avatarPhoto = sender.photo || sender.photoURL || null;
 
   // Aggregate reactions (filter out empty emojis)
   const reactionCounts = reactions
@@ -356,7 +355,7 @@ const MessageBubble = React.memo<{
               activeOpacity={0.7}
             >
               <UserAvatar
-                photoUrl={avatarUrl}
+                photoUrl={avatarPhoto}
                 username={sender.username || 'User'}
                 size={28}
                 style={styles.avatar}
@@ -486,15 +485,23 @@ const MessageBubble = React.memo<{
 
                 {/* Image message */}
                 {message.type === 'image' && (
-                  <TouchableOpacity 
-                    activeOpacity={0.9} 
-                    onPress={onImagePress}
-                  >
-                    <Image
-                      source={{ uri: message.text || avatarUrl }}
-                      style={[styles.messageImage, cornerRadius]}
-                    />
-                  </TouchableOpacity>
+                  (() => {
+                    const resolvedUri = typeof message.text === 'string' && message.text ? message.text : avatarPhoto;
+                    if (!resolvedUri) {
+                      return null;
+                    }
+                    return (
+                      <TouchableOpacity 
+                        activeOpacity={0.9} 
+                        onPress={onImagePress}
+                      >
+                        <Image
+                          source={{ uri: resolvedUri }}
+                          style={[styles.messageImage, cornerRadius]}
+                        />
+                      </TouchableOpacity>
+                    );
+                  })()
                 )}
 
                 {/* Timestamp or loading indicator */}
@@ -2001,11 +2008,10 @@ const ChatDetailScreen = () => {
         return (
           <View style={styles.readReceipts}>
             {shown.map((p) => (
-              <Image
+              <UserAvatar
                 key={p.uid}
-                source={{
-                  uri: p.photo || `https://ui-avatars.com/api/?name=${encodeURIComponent(p.username)}`,
-                }}
+                photoUrl={p.photo || p.photoURL}
+                username={p.username || 'User'}
                 style={styles.readAvatar}
               />
             ))}
@@ -2161,11 +2167,10 @@ const ChatDetailScreen = () => {
             onPress={() => navigation.navigate('UserProfile', { userId: chatMeta.dmPeer!.uid })}
             activeOpacity={0.8}
           >
-            <Image
-              source={{
-                uri: chatMeta.dmPeer.photo || 
-                  `https://ui-avatars.com/api/?name=${encodeURIComponent(chatMeta.dmPeer.username)}`,
-              }}
+            <UserAvatar
+              photoUrl={chatMeta.dmPeer.photo || chatMeta.dmPeer.photoURL}
+              username={chatMeta.dmPeer.username}
+              size={38}
               style={styles.headerImage}
             />
           </TouchableOpacity>
@@ -2220,21 +2225,31 @@ const ChatDetailScreen = () => {
     if (chatMeta.isActivity && chatMeta.activityInfo) {
       return (
         <>
-          <View style={styles.headerIconCircle}>
-            {chatMeta.activityInfo.type && (
-              <ActivityIcon activity={chatMeta.activityInfo.type} size={22} color={theme.primary} />
-            )}
-          </View>
-          <View style={{ flex: 1, marginLeft: 10 }}>
-            <Text style={styles.headerTitle}>
-              {chatMeta.activityInfo.name}
-            </Text>
-            {chatMeta.activityInfo.date && chatMeta.activityInfo.time && (
-              <Text style={styles.headerSubtitle}>
-                {normalizeDateFormat(chatMeta.activityInfo.date)} at {chatMeta.activityInfo.time}
+          <TouchableOpacity 
+            style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}
+            onPress={() => {
+              if (chatMeta.activityId) {
+                navigation.navigate('ActivityDetails', { activityId: chatMeta.activityId });
+              }
+            }}
+            activeOpacity={0.7}
+          >
+            <View style={styles.headerIconCircle}>
+              {chatMeta.activityInfo.type && (
+                <ActivityIcon activity={chatMeta.activityInfo.type} size={22} color={theme.primary} />
+              )}
+            </View>
+            <View style={{ flex: 1, marginLeft: 10 }}>
+              <Text style={styles.headerTitle}>
+                {chatMeta.activityInfo.name}
               </Text>
-            )}
-          </View>
+              {chatMeta.activityInfo.date && chatMeta.activityInfo.time && (
+                <Text style={styles.headerSubtitle}>
+                  {normalizeDateFormat(chatMeta.activityInfo.date)} at {chatMeta.activityInfo.time}
+                </Text>
+              )}
+            </View>
+          </TouchableOpacity>
           <TouchableOpacity onPress={() => setOptionsVisible(true)} style={styles.headerButton}>
             <Ionicons name="information-circle-outline" size={26} color={theme.primary} />
           </TouchableOpacity>
@@ -2297,6 +2312,7 @@ const ChatDetailScreen = () => {
                 keyExtractor={(item) => item.id}
                 renderItem={renderMessage}
                 contentContainerStyle={styles.messageList}
+                nestedScrollEnabled
                 onLayout={(e) => {
                   const h = e?.nativeEvent?.layout?.height || 0;
                   if (h > 0) layoutHeightRef.current = h;
@@ -2730,10 +2746,10 @@ const ChatDetailScreen = () => {
                           onPress={() => navigation.navigate('UserProfile', { userId: item.uid })}
                           style={styles.participantInfo}
                         >
-                          <Image
-                            source={{
-                              uri: item.photo || `https://ui-avatars.com/api/?name=${encodeURIComponent(item.username)}`,
-                            }}
+                          <UserAvatar
+                            photoUrl={item.photo || item.photoURL}
+                            username={item.username || 'User'}
+                            size={44}
                             style={styles.participantAvatar}
                           />
                           <View style={{ flex: 1 }}>
@@ -2855,10 +2871,10 @@ const ChatDetailScreen = () => {
                       style={styles.userRow}
                       onPress={() => setAddingUsersMap((prev) => ({ ...prev, [item.uid]: !prev[item.uid] }))}
                     >
-                      <Image
-                        source={{
-                          uri: item.photo || `https://ui-avatars.com/api/?name=${encodeURIComponent(item.username)}`,
-                        }}
+                      <UserAvatar
+                        photoUrl={item.photo || item.photoURL}
+                        username={item.username || 'User'}
+                        size={44}
                         style={styles.userRowImage}
                       />
                       <Text style={styles.userRowText}>{item.username}</Text>

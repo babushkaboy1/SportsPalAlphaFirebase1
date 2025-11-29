@@ -18,9 +18,8 @@ import {
   Keyboard,
   
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { ActivityIcon } from '../components/ActivityIcons';
 import { useActivityContext } from '../context/ActivityContext';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -589,7 +588,8 @@ const CreateGameScreen = () => {
   const [invitedState, setInvitedState] = useState(false);
   const noSelectionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { toggleJoinActivity, reloadAllActivities, setJoinedActivities, profile } = useActivityContext();
-  const route = useRoute<RouteProp<RootStackParamList, 'CreateGame'>>();
+  const route = useRoute<any>();
+  const routeParams = route?.params as RootStackParamList['CreateGame'] | undefined;
   const insets = useSafeAreaInsets();
 
   // Removed activityName
@@ -922,22 +922,24 @@ const CreateGameScreen = () => {
 
   useEffect(() => {
     // Only restore form state if coming back from PickLocation (pickedCoords is present)
-    if (route.params?.pickedCoords) {
-      if (route.params?.formState) {
-  // Removed activityName restore
-        setDescription(route.params.formState.description || '');
-        setSport(route.params.formState.sport || '');
-  setDate(route.params.formState.date ? normalizeDateFormat(route.params.formState.date) : normalizeDateFormat(new Date().toISOString().split('T')[0]));
-        setTime(route.params.formState.time || (() => {
+    if (routeParams?.pickedCoords) {
+      const formState = routeParams.formState;
+      if (formState) {
+        setDescription(formState.description || '');
+        setSport(formState.sport || '');
+        const defaultDate = normalizeDateFormat(new Date().toISOString().split('T')[0]);
+        setDate(formState.date ? normalizeDateFormat(formState.date) : defaultDate);
+        const fallbackTime = (() => {
           const now = new Date();
           return `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-        })());
-        setMaxParticipants(route.params.formState.maxParticipants || 10);
+        })();
+        setTime(formState.time || fallbackTime);
+        setMaxParticipants(formState.maxParticipants || 10);
       }
-      setSelectedCoords(route.params.pickedCoords);
+      setSelectedCoords(routeParams.pickedCoords);
     }
     // Do NOT reset form fields unless a game is created!
-  }, [route.params?.pickedCoords]);
+  }, [routeParams?.pickedCoords, routeParams?.formState]);
 
   // Date/time picker handlers
   const onDateChange = (event: any, selectedDate?: Date) => {
@@ -980,14 +982,22 @@ const CreateGameScreen = () => {
 
   if (!isReady) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: theme.background, justifyContent: 'center', alignItems: 'center' }} edges={['top']}>
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: theme.background,
+          justifyContent: 'center',
+          alignItems: 'center',
+          paddingTop: insets.top,
+        }}
+      >
         <ActivityIndicator size="large" color={theme.primary} />
-      </SafeAreaView>
+      </View>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <View style={[styles.container, { paddingTop: insets.top }]}> 
       <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
         {/* Pull-to-reset indicator overlay */}
         <Animated.View
@@ -2106,7 +2116,7 @@ const CreateGameScreen = () => {
             </View>
           </Modal>
         )}
-    </SafeAreaView>
+    </View>
   );
 };
 

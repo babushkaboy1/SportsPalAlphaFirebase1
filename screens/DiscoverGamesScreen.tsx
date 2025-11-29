@@ -36,7 +36,7 @@ import {
 } from 'react-native';
 import MapView, { Marker, Region, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Haptics from 'expo-haptics';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 import * as Location from 'expo-location';
@@ -121,6 +121,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
   const { theme } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
   const { allActivities, isActivityJoined, toggleJoinActivity, profile, reloadAllActivities } = useActivityContext();
+  const insets = useSafeAreaInsets();
 
   // Discovery range from settings (default 70 km)
   const [discoveryRange, setDiscoveryRange] = useState(DEFAULT_RADIUS_KM);
@@ -782,7 +783,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
   );
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top']}>
+    <View style={[styles.safeArea, { paddingTop: insets.top }]}>
       <Animated.View style={{ flex: 1, opacity: fadeAnim, backgroundColor: theme.background }}>
         <Pressable 
           style={styles.headerContainer}
@@ -1529,7 +1530,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
           </Modal>
         )}
       </Animated.View>
-    </SafeAreaView>
+    </View>
   );
 };
 

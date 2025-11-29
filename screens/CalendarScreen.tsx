@@ -43,7 +43,7 @@ import {
 } from 'react-native';
 import * as Location from 'expo-location';
 import * as Haptics from 'expo-haptics';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Calendar } from 'react-native-calendars';
 import { useActivityContext } from '../context/ActivityContext';
 import { normalizeDateFormat } from '../utils/storage';
@@ -140,6 +140,7 @@ const getSportEmoji = (sport: string): string => {
 const CalendarScreen = ({ navigation, route }: any) => {
   const { theme, themeMode } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
+  const insets = useSafeAreaInsets();
   const { joinedActivities, allActivities, reloadAllActivities, toggleJoinActivity } = useActivityContext();
 
   // User location
@@ -383,7 +384,15 @@ const CalendarScreen = ({ navigation, route }: any) => {
   if (!allActivities || allActivities.length === 0) {
     // No activities exist in the system
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: theme.background, justifyContent: 'center', alignItems: 'center' }} edges={['top']}>
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: theme.background,
+          justifyContent: 'center',
+          alignItems: 'center',
+          paddingTop: insets.top,
+        }}
+      >
         <Ionicons name="calendar-outline" size={48} color={theme.primary} style={{ marginBottom: 10 }} />
         <Text style={{ color: theme.text, fontSize: 20, fontWeight: 'bold', textAlign: 'center', marginBottom: 8 }}>
           No activities found
@@ -398,7 +407,7 @@ const CalendarScreen = ({ navigation, route }: any) => {
         >
           <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 16 }}>Create Activity</Text>
         </TouchableOpacity>
-      </SafeAreaView>
+      </View>
     );
   }
 
@@ -412,7 +421,7 @@ const CalendarScreen = ({ navigation, route }: any) => {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top']}>
+    <View style={[styles.safeArea, { paddingTop: insets.top }]}> 
       <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
         <Text style={styles.headerTitle}>Calendar</Text>
         <ScrollView
@@ -579,7 +588,7 @@ const CalendarScreen = ({ navigation, route }: any) => {
           </View>
         </ScrollView>
       </Animated.View>
-    </SafeAreaView>
+    </View>
   );
 };
 const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.create({

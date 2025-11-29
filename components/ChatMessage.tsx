@@ -8,6 +8,7 @@ import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { PanGestureHandler, State as GHState } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
 import { auth } from '../firebaseConfig';
+import UserAvatar from './UserAvatar';
 
 type Message = {
   id: string;
@@ -50,9 +51,6 @@ type ChatMessageProps = {
   theme: any;
   styles: any;
 };
-
-const userAvatar = (username?: string, photo?: string) =>
-  photo || `https://ui-avatars.com/api/?name=${encodeURIComponent(username || 'User')}`;
 
 const bubbleCorners = (isOwn: boolean, isFirst: boolean, isLast: boolean) => {
   if (isOwn) {
@@ -104,6 +102,8 @@ const ChatMessage = React.memo<ChatMessageProps>(
     styles,
   }) => {
     const sender = profiles[item.senderId] || {};
+    const senderPhoto = sender.photo || sender.photoURL || null;
+    const senderUsername = sender.username || 'User';
 
     // System message
     if (item.type === 'system') {
@@ -138,8 +138,9 @@ const ChatMessage = React.memo<ChatMessageProps>(
           <View style={styles.avatarSlot}>
             {isLast ? (
               <TouchableOpacity onPress={() => onUserPress(item.senderId)} activeOpacity={0.7}>
-                <Image
-                  source={{ uri: userAvatar(sender.username, sender.photo || sender.photoURL) }}
+                <UserAvatar
+                  photoUrl={senderPhoto}
+                  username={senderUsername}
                   style={styles.bubbleAvatar}
                 />
               </TouchableOpacity>
@@ -154,7 +155,7 @@ const ChatMessage = React.memo<ChatMessageProps>(
           {/* Username above FIRST bubble of cluster for others */}
           {!isOwn && isFirst && (
             <TouchableOpacity onPress={() => onUserPress(item.senderId)} activeOpacity={0.7}>
-              <Text style={styles.nameAbove}>{sender.username || 'User'}</Text>
+              <Text style={styles.nameAbove}>{senderUsername}</Text>
             </TouchableOpacity>
           )}
 
@@ -280,14 +281,23 @@ const ChatMessage = React.memo<ChatMessageProps>(
                   )}
 
                   {item.type === 'image' && (
-                    <TouchableOpacity activeOpacity={0.9} onPress={() => item.text && onImagePress(item.text)}>
-                      <Image
-                        source={{
-                          uri: typeof item.text === 'string' && item.text ? item.text : userAvatar(sender.username),
-                        }}
-                        style={[styles.media, bubbleCorners(isOwn, isFirst, isLast)]}
-                      />
-                    </TouchableOpacity>
+                    (() => {
+                      const imageUri =
+                        typeof item.text === 'string' && item.text
+                          ? item.text
+                          : senderPhoto;
+                      if (!imageUri) {
+                        return null;
+                      }
+                      return (
+                        <TouchableOpacity activeOpacity={0.9} onPress={() => onImagePress(imageUri)}>
+                          <Image
+                            source={{ uri: imageUri }}
+                            style={[styles.media, bubbleCorners(isOwn, isFirst, isLast)]}
+                          />
+                        </TouchableOpacity>
+                      );
+                    })()
                   )}
 
                   {!!item.timestamp && (
@@ -404,11 +414,10 @@ const ChatMessage = React.memo<ChatMessageProps>(
                 return (
                   <View style={[styles.readAvatarsRow, { alignSelf: 'flex-end' }]}>
                     {shown.map((p) => (
-                      <Image
+                      <UserAvatar
                         key={p.uid}
-                        source={{
-                          uri: p.photo || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(p.username),
-                        }}
+                        photoUrl={p.photo || p.photoURL}
+                        username={p.username || 'User'}
                         style={styles.readAvatar}
                       />
                     ))}
