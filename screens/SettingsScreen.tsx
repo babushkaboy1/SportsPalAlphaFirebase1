@@ -5,7 +5,6 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  ScrollView,
   Switch,
   Modal,
   Pressable,
@@ -14,6 +13,7 @@ import {
   Alert,
   TextInput,
 } from 'react-native';
+import { ScrollView } from 'react-native-gesture-handler';
 import Slider from '@react-native-community/slider';
 import { auth, db, functions } from '../firebaseConfig';
 import { doc, getDoc } from 'firebase/firestore';
@@ -491,7 +491,11 @@ const SettingsScreen: React.FC = () => {
         <View style={{ width: 26 }} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={[styles.content, { paddingBottom: 24 + insets.bottom }]}
+        showsVerticalScrollIndicator={false}
+        nestedScrollEnabled
+      >
         {/* ACCOUNT */}
         <Section title="Account">
           <Row

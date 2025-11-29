@@ -5,7 +5,6 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  ScrollView,
   Alert,
   Linking,
   Platform,
@@ -16,9 +15,10 @@ import {
   Animated,
   ActivityIndicator,
 } from 'react-native';
+import { ScrollView } from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import * as Calendar from 'expo-calendar';
@@ -68,7 +68,12 @@ function darkenHex(color: string, amount = 0.12): string {
 const ActivityDetailsScreen = ({ route, navigation }: any) => {
   const { activityId } = route.params;
   const { theme } = useTheme();
+  const insets = useSafeAreaInsets();
   const styles = useMemo(() => createStyles(theme), [theme]);
+  const scrollContentStyle = useMemo(
+    () => ({ flexGrow: 1, paddingBottom: Math.max(insets.bottom, 24) }),
+    [insets.bottom]
+  );
   const { allActivities, isActivityJoined, toggleJoinActivity, profile } = useActivityContext();
 
   // ALL STATE HOOKS MUST BE BEFORE ANY CONDITIONAL RETURNS
@@ -114,6 +119,12 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
   const [gpxError, setGpxError] = useState<string | null>(null);
   const [gpxCoords, setGpxCoords] = useState<Array<{ latitude: number; longitude: number }>>([]);
   const [gpxWaypoints, setGpxWaypoints] = useState<Array<{ latitude: number; longitude: number; title?: string }>>([]);
+  const [gpxStats, setGpxStats] = useState<{
+    distance?: string;
+    ascent?: string;
+    descent?: string;
+    maxElevation?: string;
+  }>({});
   const gpxMapRef = useRef<MapView | null>(null);
 
   // Invite friends modal state
@@ -358,9 +369,17 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
   // Early return with loading state if activity is null to prevent rendering errors
   if (!activity) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: theme.background, justifyContent: 'center', alignItems: 'center' }} edges={['top']}>
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: theme.background,
+          justifyContent: 'center',
+          alignItems: 'center',
+          paddingTop: insets.top,
+        }}
+      >
         <ActivityIndicator size="large" color={theme.primary} />
-      </SafeAreaView>
+      </View>
     );
   }
 
@@ -812,8 +831,8 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
   })();
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top']}>
-      <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
+    <View style={[styles.safeArea, { paddingTop: insets.top }]}>
+      <Animated.View style={{ flex: 1, opacity: fadeAnim, backgroundColor: theme.background }}>
         {/* Header */}
         {activity.activity === 'American Football' ? (
           <View style={{ marginTop: 10, marginBottom: 0, alignItems: 'center', width: '100%' }}>
@@ -863,7 +882,9 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
         )}
 
         <ScrollView
-          contentContainerStyle={{ flexGrow: 1 }}
+          style={{ flex: 1 }}
+          contentContainerStyle={scrollContentStyle}
+          nestedScrollEnabled
           refreshControl={
             <RefreshControl
               refreshing={refreshing || refreshLocked}
@@ -1091,25 +1112,33 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                         }
                         console.log('GPX text length:', typeof text === 'string' ? text.length : '(non-string)');
 
-                        const pts: Array<{ latitude: number; longitude: number }> = [];
+                        const pts: Array<{ latitude: number; longitude: number; elevation?: number }> = [];
                         const wpts: Array<{ latitude: number; longitude: number; title?: string }> = [];
                         const xml = typeof text === 'string' ? text : '';
 
                         // Extract track/route points only (polylines)
                         const extractPoints = (tag: 'trkpt' | 'rtept') => {
-                          const regex = new RegExp(`<${tag}\\b[^>]*>`, 'gi');
+                          const regex = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'gi');
                           let count = 0;
                           let m: RegExpExecArray | null;
                           while ((m = regex.exec(xml)) !== null) {
                             count++;
                             const tagStr = m[0];
+                            const inner = m[1] || '';
                             const latMatch = /lat=\"([^\"]+)\"/i.exec(tagStr);
                             const lonMatch = /lon=\"([^\"]+)\"/i.exec(tagStr);
                             if (latMatch && lonMatch) {
                               const lat = parseFloat(latMatch[1].replace(',', '.'));
                               const lon = parseFloat(lonMatch[1].replace(',', '.'));
                               if (!Number.isNaN(lat) && !Number.isNaN(lon)) {
-                                pts.push({ latitude: lat, longitude: lon });
+                                // Try to extract elevation from <ele> tag
+                                let elevation: number | undefined;
+                                const eleMatch = /<ele>([\d\.\-]+)<\/ele>/i.exec(inner);
+                                if (eleMatch) {
+                                  const ele = parseFloat(eleMatch[1].replace(',', '.'));
+                                  if (!Number.isNaN(ele)) elevation = ele;
+                                }
+                                pts.push({ latitude: lat, longitude: lon, elevation });
                               }
                             }
                           }
@@ -1156,6 +1185,65 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                         } else {
                           setGpxCoords(pts);
                           setGpxWaypoints(wpts);
+                          
+                          // Calculate route statistics
+                          if (pts.length > 1) {
+                            let totalDistance = 0;
+                            let totalAscent = 0;
+                            let totalDescent = 0;
+                            let maxEle = -Infinity;
+                            
+                            for (let i = 0; i < pts.length; i++) {
+                              // Track max elevation
+                              if (pts[i].elevation !== undefined && pts[i].elevation! > maxEle) {
+                                maxEle = pts[i].elevation!;
+                              }
+                              
+                              // Calculate distance and elevation changes between consecutive points
+                              if (i > 0) {
+                                const p1 = pts[i - 1];
+                                const p2 = pts[i];
+                                
+                                // Haversine formula for distance
+                                const R = 6371; // Earth's radius in km
+                                const dLat = (p2.latitude - p1.latitude) * Math.PI / 180;
+                                const dLon = (p2.longitude - p1.longitude) * Math.PI / 180;
+                                const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                                         Math.cos(p1.latitude * Math.PI / 180) * Math.cos(p2.latitude * Math.PI / 180) *
+                                         Math.sin(dLon / 2) * Math.sin(dLon / 2);
+                                const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                                const dist = R * c;
+                                totalDistance += dist;
+                                
+                                // Elevation gain/loss
+                                if (p1.elevation !== undefined && p2.elevation !== undefined) {
+                                  const elevDiff = p2.elevation - p1.elevation;
+                                  if (elevDiff > 0) totalAscent += elevDiff;
+                                  else totalDescent += Math.abs(elevDiff);
+                                }
+                              }
+                            }
+                            
+                            // Format stats
+                            const stats: {
+                              distance?: string;
+                              ascent?: string;
+                              descent?: string;
+                              maxElevation?: string;
+                            } = {};
+                            
+                            if (totalDistance > 0) {
+                              stats.distance = totalDistance >= 1 
+                                ? `${totalDistance.toFixed(2)} km` 
+                                : `${(totalDistance * 1000).toFixed(0)} m`;
+                            }
+                            if (totalAscent > 0) stats.ascent = `${totalAscent.toFixed(0)} m`;
+                            if (totalDescent > 0) stats.descent = `${totalDescent.toFixed(0)} m`;
+                            if (maxEle > -Infinity) stats.maxElevation = `${maxEle.toFixed(0)} m`;
+                            
+                            setGpxStats(stats);
+                          }
+                          
                           const fitPts = pts.length > 0 ? pts : wpts;
                           setTimeout(() => {
                             try {
@@ -1318,9 +1406,11 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                 </View>
                 
                 {/* Progress percentage text */}
-                <Text style={styles.progressPercentage}>
-                  {Math.round((joinedUsers.length / activity.maxParticipants) * 100)}%
-                </Text>
+                {joinedUsers.length < activity.maxParticipants && (
+                  <Text style={styles.progressPercentage}>
+                    {Math.round((joinedUsers.length / activity.maxParticipants) * 100)}%
+                  </Text>
+                )}
               </View>
               
               {joinedUsers.length >= activity.maxParticipants && (
@@ -1389,28 +1479,40 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
       {/* GPX Route Modal (shows polyline) */}
       <Modal
         visible={showGpxModal}
-        transparent
-        animationType="slide"
+        transparent={true}
+        animationType="fade"
         onRequestClose={() => setShowGpxModal(false)}
       >
-        <Pressable style={styles.modalOverlay} onPress={() => setShowGpxModal(false)}>
-          <Pressable style={[styles.modalCard, { width: '95%', maxWidth: 920, padding: 12 }]} onPress={() => {}}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={{ color: theme.text, fontWeight: '700', fontSize: 16 }}>{(activity as any).activity} Route</Text>
-              <TouchableOpacity onPress={() => setShowGpxModal(false)}>
-                <Ionicons name="close" size={22} color={theme.muted} />
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
+          <View style={{ width: '95%', maxWidth: 600, maxHeight: '90%', backgroundColor: theme.card, borderRadius: 24, overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.5, shadowRadius: 20, elevation: 20 }}>
+            <View style={styles.routeModalHeader}>
+              <TouchableOpacity 
+                onPress={() => setShowGpxModal(false)}
+                style={styles.routeModalCloseButton}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <Ionicons name="close-circle" size={32} color={theme.primary} />
               </TouchableOpacity>
+              <View style={{ flex: 1, alignItems: 'center' }}>
+                <Text style={styles.routeModalTitle}>{(activity as any).activity} Route</Text>
+                <Text style={styles.routeModalSubtitle}>{simplifyLocation(activity.location)}</Text>
+              </View>
+              <View style={{ width: 40 }} />
             </View>
-            <View style={{ height: 420, marginTop: 12, borderRadius: 8, overflow: 'hidden' }}>
-              {gpxLoading ? (
-                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                  <ActivityIndicator size="large" color={theme.primary} />
-                </View>
-              ) : gpxError ? (
-                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 12 }}>
-                  <Text style={{ color: theme.text, textAlign: 'center' }}>{gpxError}</Text>
-                </View>
-              ) : (gpxCoords.length > 0 || gpxWaypoints.length > 0) ? (
+            <View style={{ height: 550 }}>
+            {gpxLoading ? (
+              <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.background }}>
+                <ActivityIndicator size="large" color={theme.primary} />
+                <Text style={{ color: theme.muted, marginTop: 16, fontSize: 15 }}>Loading route...</Text>
+              </View>
+            ) : gpxError ? (
+              <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.background, paddingHorizontal: 24 }}>
+                <Ionicons name="alert-circle-outline" size={64} color={theme.muted} style={{ marginBottom: 16 }} />
+                <Text style={{ color: theme.text, textAlign: 'center', fontSize: 16, fontWeight: '600', marginBottom: 8 }}>{gpxError}</Text>
+                <Text style={{ color: theme.muted, textAlign: 'center', fontSize: 14 }}>Unable to load route data</Text>
+              </View>
+            ) : (gpxCoords.length > 0 || gpxWaypoints.length > 0) ? (
+              <View style={{ flex: 1, position: 'relative' }}>
                 <MapView
                   ref={(r) => { gpxMapRef.current = r; }}
                   style={{ flex: 1 }}
@@ -1422,6 +1524,8 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                     longitudeDelta: 0.05,
                   }}
                   userInterfaceStyle={theme.isDark ? 'dark' : 'light'}
+                  showsCompass={true}
+                  showsScale={true}
                 >
                   {/* OpenStreetMap tiles for the GPX modal only */}
                   <UrlTile
@@ -1433,11 +1537,20 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                   {gpxCoords.length > 0 && (
                     <>
                       {/* Outline underlay for better visibility */}
-                      <Polyline coordinates={gpxCoords} strokeWidth={8} strokeColor="#0a2a2b" />
+                      <Polyline coordinates={gpxCoords} strokeWidth={8} strokeColor="rgba(0,0,0,0.3)" />
                       <Polyline coordinates={gpxCoords} strokeWidth={5} strokeColor={theme.primary} />
-                      {/* Start and end markers */}
-                      <Marker coordinate={gpxCoords[0]} />
-                      <Marker coordinate={gpxCoords[gpxCoords.length - 1]} />
+                      {/* Start marker with custom styling */}
+                      <Marker coordinate={gpxCoords[0]} title="Start">
+                        <View style={{ backgroundColor: '#10b981', width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: '#fff', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84, elevation: 5 }}>
+                          <Ionicons name="play" size={18} color="#fff" />
+                        </View>
+                      </Marker>
+                      {/* End marker with custom styling */}
+                      <Marker coordinate={gpxCoords[gpxCoords.length - 1]} title="Finish">
+                        <View style={{ backgroundColor: '#ef4444', width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: '#fff', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84, elevation: 5 }}>
+                          <Ionicons name="flag" size={18} color="#fff" />
+                        </View>
+                      </Marker>
                       
                       {/* Meeting point marker for drawn routes */}
                       {(activity as any).drawnRoute && activity.latitude && activity.longitude && (
@@ -1445,7 +1558,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                           coordinate={{ latitude: activity.latitude, longitude: activity.longitude }}
                           title="Meeting Point"
                         >
-                          <View style={{ backgroundColor: theme.primary, width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: '#fff' }}>
+                          <View style={{ backgroundColor: '#f59e0b', width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: '#fff', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84, elevation: 5 }}>
                             <Ionicons name="location" size={24} color="#fff" />
                           </View>
                         </Marker>
@@ -1468,14 +1581,50 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                     </Marker>
                   ))}
                 </MapView>
-              ) : (
-                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                  <Text style={{ color: '#fff' }}>No route data available</Text>
-                </View>
-              )}
-            </View>
-          </Pressable>
-        </Pressable>
+                
+                {/* Route stats overlay */}
+                {gpxStats && (gpxStats.distance || gpxStats.ascent || gpxStats.descent || gpxStats.maxElevation) && (
+                  <View style={styles.routeStatsOverlay}>
+                    {gpxStats.distance && (
+                      <View style={styles.routeStatItem}>
+                        <Ionicons name="speedometer-outline" size={20} color={theme.primary} />
+                        <Text style={styles.routeStatValue}>{gpxStats.distance}</Text>
+                        <Text style={styles.routeStatLabel}>Distance</Text>
+                      </View>
+                    )}
+                    {gpxStats.ascent && (
+                      <View style={styles.routeStatItem}>
+                        <Ionicons name="trending-up" size={20} color="#10b981" />
+                        <Text style={styles.routeStatValue}>{gpxStats.ascent}</Text>
+                        <Text style={styles.routeStatLabel}>Ascent</Text>
+                      </View>
+                    )}
+                    {gpxStats.descent && (
+                      <View style={styles.routeStatItem}>
+                        <Ionicons name="trending-down" size={20} color="#ef4444" />
+                        <Text style={styles.routeStatValue}>{gpxStats.descent}</Text>
+                        <Text style={styles.routeStatLabel}>Descent</Text>
+                      </View>
+                    )}
+                    {gpxStats.maxElevation && (
+                      <View style={styles.routeStatItem}>
+                        <Ionicons name="triangle-outline" size={20} color="#8b5cf6" />
+                        <Text style={styles.routeStatValue}>{gpxStats.maxElevation}</Text>
+                        <Text style={styles.routeStatLabel}>Max Elevation</Text>
+                      </View>
+                    )}
+                  </View>
+                )}
+              </View>
+            ) : (
+              <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.background }}>
+                <Ionicons name="map-outline" size={64} color={theme.muted} style={{ marginBottom: 16 }} />
+                <Text style={{ color: theme.text, fontSize: 16, fontWeight: '600' }}>No route data available</Text>
+              </View>
+            )}
+          </View>
+          </View>
+        </View>
       </Modal>
 
       {/* Invite Friends Modal */}
@@ -1822,7 +1971,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
           </Pressable>
         </Pressable>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 };
 
@@ -1890,4 +2039,68 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
   menuItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 },
   menuItemText: { color: t.text, fontSize: 16, fontWeight: '600' },
   menuDivider: { height: 1, backgroundColor: t.border },
+  
+  // Route modal styles
+  routeModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 2,
+    borderBottomColor: t.border,
+    backgroundColor: t.card,
+  },
+  routeModalCloseButton: {
+    padding: 4,
+    borderRadius: 20,
+    backgroundColor: t.background,
+  },
+  routeModalTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: t.text,
+    letterSpacing: 0.3,
+  },
+  routeModalSubtitle: {
+    fontSize: 14,
+    color: t.primary,
+    marginTop: 3,
+    fontWeight: '600',
+  },
+  routeStatsOverlay: {
+    position: 'absolute',
+    bottom: 20,
+    left: 16,
+    right: 16,
+    backgroundColor: t.card,
+    borderRadius: 16,
+    padding: 16,
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+    borderWidth: 1,
+    borderColor: t.border,
+  },
+  routeStatItem: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  routeStatValue: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: t.text,
+    marginTop: 4,
+  },
+  routeStatLabel: {
+    fontSize: 11,
+    color: t.muted,
+    marginTop: 2,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
 });

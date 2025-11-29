@@ -100,8 +100,8 @@ const LegalDocumentScreen: React.FC = () => {
         <View style={{ width: 26 }} />
       </View>
 
-      <ScrollView 
-        contentContainerStyle={styles.content} 
+      <ScrollView
+        contentContainerStyle={[styles.content, { paddingBottom: 24 + insets.bottom }]}
         showsVerticalScrollIndicator={true}
       >
         {/* Icon and Title */}

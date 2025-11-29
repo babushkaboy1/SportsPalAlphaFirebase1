@@ -15,18 +15,19 @@ function HostUsername({ activity }: { activity: any }) {
   }, [activity.creatorId, activity.creator]);
   return <Text style={{ fontSize: 14, color: theme.muted, fontWeight: '500' }}>{username}</Text>;
 }
-import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, FlatList, Animated, RefreshControl, Alert, Modal, Pressable, TextInput, Clipboard, Keyboard, Linking, ActivityIndicator } from 'react-native';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
+import { View, Text, StyleSheet, Image, TouchableOpacity, FlatList, Animated, RefreshControl, Alert, Modal, Pressable, TextInput, Clipboard, Keyboard, Linking, ActivityIndicator, PanResponder } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { doc, getDoc, onSnapshot, collection, query as fsQuery, where, getDocs } from 'firebase/firestore';
 import { db, auth } from '../firebaseConfig';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useActivityContext } from '../context/ActivityContext';
 import { ActivityIcon } from '../components/ActivityIcons';
 import UserAvatar from '../components/UserAvatar';
+import PagerView, { PagerViewOnPageSelectedEvent } from 'react-native-pager-view';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../types/navigation';
 import { sendFriendRequest, cancelFriendRequest, removeFriend, acceptIncomingRequestFromProfile, declineIncomingRequestFromProfile } from '../utils/firestoreFriends';
@@ -73,7 +74,54 @@ const UserProfileScreen = () => {
   const [profile, setProfile] = useState<any>(null);
   const { allActivities, reloadAllActivities, isActivityJoined, toggleJoinActivity } = useActivityContext();
   const [activeTab, setActiveTab] = useState<'games' | 'history'>('games');
+  const tabs: Array<'games' | 'history'> = ['games', 'history'];
+  const pagerRef = useRef<PagerView | null>(null);
+  const activeTabRef = useRef(activeTab);
   const [userJoinedActivities, setUserJoinedActivities] = useState<any[]>([]);
+  const listContentPadding = useMemo(
+    () => ({ paddingBottom: Math.max(insets.bottom, 24) }),
+    [insets.bottom]
+  );
+
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
+
+  const backSwipeResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponderCapture: (_evt, gestureState) => {
+        if (activeTabRef.current !== 'games') return false;
+        if (!navigation.canGoBack()) return false;
+        return gestureState.x0 <= 30;
+      },
+      onMoveShouldSetPanResponderCapture: (_evt, gestureState) => {
+        if (activeTabRef.current !== 'games') return false;
+        if (!navigation.canGoBack()) return false;
+        if (gestureState.dx <= 0) return false;
+        if (Math.abs(gestureState.dx) <= Math.abs(gestureState.dy)) return false;
+        return Math.abs(gestureState.dx) > 6;
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        if (activeTabRef.current !== 'games') return;
+        if (!navigation.canGoBack()) return;
+        if (gestureState.dx > 30 && Math.abs(gestureState.dy) < 60) {
+          navigation.goBack();
+        }
+      },
+      onPanResponderTerminate: (_, gestureState) => {
+        if (activeTabRef.current !== 'games') return;
+        if (!navigation.canGoBack()) return;
+        if (gestureState.dx > 30 && Math.abs(gestureState.dy) < 60) {
+          navigation.goBack();
+        }
+      },
+      onPanResponderTerminationRequest: () => false,
+    })
+  ).current;
+
+
+
+
   const [isReady, setIsReady] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshLocked, setRefreshLocked] = useState(false);
@@ -598,15 +646,45 @@ const UserProfileScreen = () => {
     );
   };
 
+  const handleTabPress = (tab: 'games' | 'history', index: number) => {
+    Keyboard.dismiss();
+    setActiveTab(tab);
+    const pager = pagerRef.current as (PagerView & { setPageWithoutAnimation?: (page: number) => void }) | null;
+    if (!pager) return;
+    if (typeof (pager as any).setPageWithoutAnimation === 'function') {
+      (pager as any).setPageWithoutAnimation(index);
+    } else {
+      pager.setPage(index);
+    }
+  };
+
+  const handlePageSelected = (event: PagerViewOnPageSelectedEvent) => {
+    const index = event.nativeEvent.position;
+    const nextTab = tabs[index];
+    if (nextTab && nextTab !== activeTab) {
+      setActiveTab(nextTab);
+    }
+  };
+
+  const getIconName = (tab: 'games' | 'history'): keyof typeof Ionicons.glyphMap => (
+    tab === 'games' ? 'list' : 'time'
+  );
+
   if (!isReady) {
     return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: theme.background }} edges={['top']} />
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: theme.background,
+          paddingTop: insets.top,
+        }}
+      />
     );
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      <Animated.View style={{ flex: 1, opacity: fadeAnim, backgroundColor: theme.background }}>
         <View style={styles.headerRow}>
           <View style={styles.headerLeft}>
             <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
@@ -813,130 +891,138 @@ const UserProfileScreen = () => {
         )}
 
         <View style={styles.tabBar}>
-          <TouchableOpacity
-            style={[styles.tab, activeTab === 'games' && styles.activeTab]}
-            onPress={() => {
-              Keyboard.dismiss();
-              setActiveTab('games');
-            }}
-          >
-            <Ionicons name="list" size={28} color={activeTab === 'games' ? theme.primary : theme.muted} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.tab, activeTab === 'history' && styles.activeTab]}
-            onPress={() => {
-              Keyboard.dismiss();
-              setActiveTab('history');
-            }}
-          >
-            <Ionicons name="time" size={28} color={activeTab === 'history' ? theme.primary : theme.muted} />
-          </TouchableOpacity>
+          {tabs.map((tab, index) => (
+            <TouchableOpacity
+              key={tab}
+              style={[styles.tab, activeTab === tab && styles.activeTab]}
+              onPress={() => handleTabPress(tab, index)}
+            >
+              <Ionicons
+                name={getIconName(tab)}
+                size={28}
+                color={activeTab === tab ? theme.primary : theme.muted}
+              />
+            </TouchableOpacity>
+          ))}
         </View>
-        <View style={styles.contentContainer}>
-          {activeTab === 'games' ? (
-            <View style={{ flex: 1 }}>
-              <TouchableOpacity activeOpacity={1} onPress={() => Keyboard.dismiss()}>
-                <Text style={styles.tabTitleCentered}>Scheduled Activities</Text>
-              </TouchableOpacity>
-              <View style={styles.userSearchRow}>
-                <Ionicons name="search" size={16} color={theme.primary} style={{ marginRight: 8 }} />
-                <TextInput
-                  style={[styles.searchInput, { flex: 1 }]}
-                  placeholder="Search activity or host..."
-                  placeholderTextColor={theme.muted}
-                  value={scheduledSearchQuery}
-                  onChangeText={setScheduledSearchQuery}
-                  returnKeyType="search"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-                {scheduledSearchQuery.trim().length > 0 && (
-                  <TouchableOpacity style={styles.clearButton} onPress={() => setScheduledSearchQuery('')}>
-                    <Ionicons name="close-circle" size={18} color={theme.primary} />
-                  </TouchableOpacity>
+        <View style={styles.pagerContainer}>
+          <PagerView
+            ref={pagerRef}
+            style={styles.pager}
+            initialPage={tabs.indexOf(activeTab)}
+            onPageSelected={handlePageSelected}
+            overScrollMode="never"
+          >
+            <View
+              key="games"
+              style={styles.pagerPage}
+              {...backSwipeResponder.panHandlers}
+            >
+              <View style={{ flex: 1 }}>
+                <TouchableOpacity activeOpacity={1} onPress={() => Keyboard.dismiss()}>
+                  <Text style={styles.tabTitleCentered}>Scheduled Activities</Text>
+                </TouchableOpacity>
+                <View style={styles.userSearchRow}>
+                  <Ionicons name="search" size={16} color={theme.primary} style={{ marginRight: 8 }} />
+                  <TextInput
+                    style={[styles.searchInput, { flex: 1 }]}
+                    placeholder="Search activity or host..."
+                    placeholderTextColor={theme.muted}
+                    value={scheduledSearchQuery}
+                    onChangeText={setScheduledSearchQuery}
+                    returnKeyType="search"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  {scheduledSearchQuery.trim().length > 0 && (
+                    <TouchableOpacity style={styles.clearButton} onPress={() => setScheduledSearchQuery('')}>
+                      <Ionicons name="close-circle" size={18} color={theme.primary} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+                {filteredUpcoming.length === 0 ? (
+                  <View style={styles.emptyState}>
+                    <Ionicons name="calendar-outline" size={48} color={theme.primary} />
+                    <Text style={styles.tabTitleCentered}>No scheduled activities</Text>
+                    <Text style={styles.emptyStateText}>Their upcoming activities will appear here.</Text>
+                  </View>
+                ) : (
+                  <FlatList
+                    data={filteredUpcoming.slice(0, displayedActivitiesCount)}
+                    renderItem={renderActivity}
+                    keyExtractor={(item) => item.id}
+                    contentContainerStyle={[styles.listContainer, listContentPadding]}
+                    onEndReached={displayedActivitiesCount < filteredUpcoming.length ? handleLoadMoreActivities : null}
+                    onEndReachedThreshold={0.5}
+                    ListFooterComponent={
+                      isLoadingMoreActivities ? (
+                        <View style={{ paddingVertical: 20, alignItems: 'center' }}>
+                          <ActivityIndicator size="small" color={theme.primary} />
+                        </View>
+                      ) : null
+                    }
+                    refreshControl={
+                      <RefreshControl
+                        refreshing={refreshing || refreshLocked}
+                        onRefresh={onRefresh}
+                        colors={[theme.primary] as any}
+                        tintColor={theme.primary}
+                        progressBackgroundColor="transparent"
+                      />
+                    }
+                  />
                 )}
               </View>
-              {filteredUpcoming.length === 0 ? (
-                <View style={styles.emptyState}>
-                  <Ionicons name="calendar-outline" size={48} color={theme.primary} />
-                  <Text style={styles.tabTitleCentered}>No scheduled activities</Text>
-                  <Text style={styles.emptyStateText}>Their upcoming activities will appear here.</Text>
-                </View>
-              ) : (
-                <FlatList
-                  data={filteredUpcoming.slice(0, displayedActivitiesCount)}
-                  renderItem={renderActivity}
-                  keyExtractor={(item) => item.id}
-                  contentContainerStyle={styles.listContainer}
-                  onEndReached={displayedActivitiesCount < filteredUpcoming.length ? handleLoadMoreActivities : null}
-                  onEndReachedThreshold={0.5}
-                  ListFooterComponent={
-                    isLoadingMoreActivities ? (
-                      <View style={{ paddingVertical: 20, alignItems: 'center' }}>
-                        <ActivityIndicator size="small" color={theme.primary} />
-                      </View>
-                    ) : null
-                  }
-                  refreshControl={
-                    <RefreshControl
-                      refreshing={refreshing || refreshLocked}
-                      onRefresh={onRefresh}
-                      colors={[theme.primary] as any}
-                      tintColor={theme.primary}
-                      progressBackgroundColor="transparent"
-                    />
-                  }
-                />
-              )}
             </View>
-          ) : (
-            <View style={{ flex: 1 }}>
-              <TouchableOpacity activeOpacity={1} onPress={() => Keyboard.dismiss()}>
-                <Text style={styles.tabTitleCentered}>Activity History</Text>
-              </TouchableOpacity>
-              <View style={styles.userSearchRow}>
-                <Ionicons name="search" size={16} color={theme.primary} style={{ marginRight: 8 }} />
-                <TextInput
-                  style={[styles.searchInput, { flex: 1 }]}
-                  placeholder="Search activity or host..."
-                  placeholderTextColor={theme.muted}
-                  value={historySearchQuery}
-                  onChangeText={setHistorySearchQuery}
-                  returnKeyType="search"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-                {historySearchQuery.trim().length > 0 && (
-                  <TouchableOpacity style={styles.clearButton} onPress={() => setHistorySearchQuery('')}>
-                    <Ionicons name="close-circle" size={18} color={theme.primary} />
-                  </TouchableOpacity>
+            <View key="history" style={styles.pagerPage}>
+              <View style={{ flex: 1 }}>
+                <TouchableOpacity activeOpacity={1} onPress={() => Keyboard.dismiss()}>
+                  <Text style={styles.tabTitleCentered}>Activity History</Text>
+                </TouchableOpacity>
+                <View style={styles.userSearchRow}>
+                  <Ionicons name="search" size={16} color={theme.primary} style={{ marginRight: 8 }} />
+                  <TextInput
+                    style={[styles.searchInput, { flex: 1 }]}
+                    placeholder="Search activity or host..."
+                    placeholderTextColor={theme.muted}
+                    value={historySearchQuery}
+                    onChangeText={setHistorySearchQuery}
+                    returnKeyType="search"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  {historySearchQuery.trim().length > 0 && (
+                    <TouchableOpacity style={styles.clearButton} onPress={() => setHistorySearchQuery('')}>
+                      <Ionicons name="close-circle" size={18} color={theme.primary} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+                {filteredHistory.length === 0 ? (
+                  <View style={styles.emptyState}>
+                    <Ionicons name="time-outline" size={48} color={theme.primary} />
+                    <Text style={styles.tabTitleCentered}>No past activities</Text>
+                    <Text style={styles.emptyStateText}>Their past activities will appear here.</Text>
+                  </View>
+                ) : (
+                  <FlatList
+                    data={filteredHistory.slice(0, displayedHistoryCount)}
+                    renderItem={renderHistoryActivity}
+                    keyExtractor={(item) => item.id}
+                    contentContainerStyle={[styles.listContainer, listContentPadding]}
+                    onEndReached={displayedHistoryCount < filteredHistory.length ? handleLoadMoreHistory : null}
+                    onEndReachedThreshold={0.5}
+                    ListFooterComponent={
+                      isLoadingMoreHistory ? (
+                        <View style={{ paddingVertical: 20, alignItems: 'center' }}>
+                          <ActivityIndicator size="small" color={theme.primary} />
+                        </View>
+                      ) : null
+                    }
+                  />
                 )}
               </View>
-              {filteredHistory.length === 0 ? (
-                <View style={styles.emptyState}>
-                  <Ionicons name="time-outline" size={48} color={theme.primary} />
-                  <Text style={styles.tabTitleCentered}>No past activities</Text>
-                  <Text style={styles.emptyStateText}>Their past activities will appear here.</Text>
-                </View>
-              ) : (
-                <FlatList
-                  data={filteredHistory.slice(0, displayedHistoryCount)}
-                  renderItem={renderHistoryActivity}
-                  keyExtractor={(item) => item.id}
-                  contentContainerStyle={styles.listContainer}
-                  onEndReached={displayedHistoryCount < filteredHistory.length ? handleLoadMoreHistory : null}
-                  onEndReachedThreshold={0.5}
-                  ListFooterComponent={
-                    isLoadingMoreHistory ? (
-                      <View style={{ paddingVertical: 20, alignItems: 'center' }}>
-                        <ActivityIndicator size="small" color={theme.primary} />
-                      </View>
-                    ) : null
-                  }
-                />
-              )}
             </View>
-          )}
+          </PagerView>
         </View>
       </Animated.View>
       {/* Favourite sports modal */}
@@ -968,6 +1054,7 @@ const UserProfileScreen = () => {
                     <Text style={{ color: theme.text, marginLeft: 10, fontWeight: '600' }}>{item}</Text>
                   </View>
                 )}
+                contentContainerStyle={{ paddingBottom: 16 }}
               />
             )}
           </Pressable>
@@ -1004,6 +1091,7 @@ const UserProfileScreen = () => {
                     </View>
                   ) : null
                 }
+                contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 20) }}
                 renderItem={({ item }) => (
                   <TouchableOpacity
                     style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }}
@@ -1091,7 +1179,7 @@ const UserProfileScreen = () => {
           />
         </View>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 };
 
@@ -1405,8 +1493,19 @@ const createStyles = (t: any) => StyleSheet.create({
     borderBottomWidth: 2,
     borderBottomColor: t.primary,
   },
-  contentContainer: {
+  pagerContainer: {
+    flex: 1,
     paddingHorizontal: 20,
+  },
+  pager: {
+    flex: 1,
+    backgroundColor: t.background,
+  },
+  pagerPage: {
+    flex: 1,
+    backgroundColor: t.background,
+  },
+  contentContainer: {
     flex: 1,
   },
   tabContent: {
