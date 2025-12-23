@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -16,6 +16,8 @@ import {
   Image,
   Pressable,
   Keyboard,
+  PanResponder,
+  Dimensions,
   
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -33,7 +35,7 @@ import { normalizeDateFormat, uploadGpxFile } from '../utils/storage';
 import { auth } from '../firebaseConfig'; // Add this import
 import * as Haptics from 'expo-haptics';
 import { useTheme } from '../context/ThemeContext';
-import MapView, { Marker, Polyline } from 'react-native-maps';
+import MapView, { Marker, Polyline, Region } from 'react-native-maps';
 import * as FileSystem from 'expo-file-system/legacy';
 
 // Haversine formula to calculate distance between two coordinates
@@ -575,6 +577,611 @@ const SuccessModal: React.FC<SuccessModalProps> = ({
   );
 };
 
+// Improved Route Drawing Modal Component
+interface RouteDrawerModalProps {
+  visible: boolean;
+  initialCoords: { latitude: number; longitude: number };
+  drawnRoute: Array<{ latitude: number; longitude: number }>;
+  setDrawnRoute: React.Dispatch<React.SetStateAction<Array<{ latitude: number; longitude: number }>>>;
+  onClose: () => void;
+  onDone: (route: Array<{ latitude: number; longitude: number }>) => void;
+  theme: any;
+  insets: { top: number; bottom: number };
+}
+
+const RouteDrawerModal: React.FC<RouteDrawerModalProps> = ({
+  visible,
+  initialCoords,
+  drawnRoute,
+  setDrawnRoute,
+  onClose,
+  onDone,
+  theme,
+  insets,
+}) => {
+  const mapRef = useRef<MapView>(null);
+  const [isDrawingMode, setIsDrawingMode] = useState(false);
+  const [mapRegion, setMapRegion] = useState<Region>({
+    latitude: initialCoords.latitude,
+    longitude: initialCoords.longitude,
+    latitudeDelta: 0.01,
+    longitudeDelta: 0.01,
+  });
+  const [mapLayout, setMapLayout] = useState({ x: 0, y: 0, width: 0, height: 0 });
+  const isDrawingRef = useRef(false);
+  const lastPointRef = useRef<{ latitude: number; longitude: number } | null>(null);
+  const pointsBufferRef = useRef<Array<{ latitude: number; longitude: number }>>([]);
+  const flushTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Convert screen coordinates to map coordinates
+  const screenToCoord = useCallback((screenX: number, screenY: number) => {
+    if (mapLayout.width === 0 || mapLayout.height === 0) return null;
+    
+    const { latitude, longitude, latitudeDelta, longitudeDelta } = mapRegion;
+    
+    // Calculate the position relative to the map container
+    const relX = screenX - mapLayout.x;
+    const relY = screenY - mapLayout.y;
+    
+    // Convert to normalized position (0-1)
+    const normX = relX / mapLayout.width;
+    const normY = relY / mapLayout.height;
+    
+    // Convert to coordinates
+    const lat = latitude + (0.5 - normY) * latitudeDelta;
+    const lng = longitude + (normX - 0.5) * longitudeDelta;
+    
+    return { latitude: lat, longitude: lng };
+  }, [mapRegion, mapLayout]);
+
+  // Flush buffered points to state
+  const flushPoints = useCallback(() => {
+    if (pointsBufferRef.current.length > 0) {
+      const bufferedPoints = [...pointsBufferRef.current];
+      pointsBufferRef.current = [];
+      setDrawnRoute(prev => [...prev, ...bufferedPoints]);
+    }
+  }, [setDrawnRoute]);
+
+  // Add point with throttling
+  const addPoint = useCallback((coord: { latitude: number; longitude: number }) => {
+    // Check minimum distance from last point
+    if (lastPointRef.current) {
+      const dist = Math.sqrt(
+        Math.pow(coord.latitude - lastPointRef.current.latitude, 2) +
+        Math.pow(coord.longitude - lastPointRef.current.longitude, 2)
+      );
+      if (dist < 0.00005) return; // Skip if too close
+    }
+    
+    lastPointRef.current = coord;
+    pointsBufferRef.current.push(coord);
+    
+    // Debounce flush to reduce re-renders
+    if (flushTimeoutRef.current) {
+      clearTimeout(flushTimeoutRef.current);
+    }
+    flushTimeoutRef.current = setTimeout(flushPoints, 16); // ~60fps
+  }, [flushPoints]);
+
+  // PanResponder for drawing overlay
+  const panResponder = useMemo(() => PanResponder.create({
+    onStartShouldSetPanResponder: () => isDrawingMode,
+    onMoveShouldSetPanResponder: () => isDrawingMode,
+    onPanResponderGrant: (evt) => {
+      if (!isDrawingMode) return;
+      isDrawingRef.current = true;
+      const { pageX, pageY } = evt.nativeEvent;
+      const coord = screenToCoord(pageX, pageY);
+      if (coord) {
+        lastPointRef.current = null;
+        pointsBufferRef.current = [];
+        addPoint(coord);
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      }
+    },
+    onPanResponderMove: (evt) => {
+      if (!isDrawingMode || !isDrawingRef.current) return;
+      const { pageX, pageY } = evt.nativeEvent;
+      const coord = screenToCoord(pageX, pageY);
+      if (coord) {
+        addPoint(coord);
+      }
+    },
+    onPanResponderRelease: () => {
+      isDrawingRef.current = false;
+      flushPoints();
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    },
+    onPanResponderTerminate: () => {
+      isDrawingRef.current = false;
+      flushPoints();
+    },
+  }), [isDrawingMode, screenToCoord, addPoint, flushPoints]);
+
+  // Calculate route distance
+  const routeDistance = useMemo(() => {
+    if (drawnRoute.length < 2) return 0;
+    let total = 0;
+    for (let i = 1; i < drawnRoute.length; i++) {
+      total += calculateDistance(
+        drawnRoute[i - 1].latitude,
+        drawnRoute[i - 1].longitude,
+        drawnRoute[i].latitude,
+        drawnRoute[i].longitude
+      );
+    }
+    return total;
+  }, [drawnRoute]);
+
+  // Handle map layout
+  const onMapLayout = useCallback((event: any) => {
+    const { x, y, width, height } = event.nativeEvent.layout;
+    setMapLayout({ x, y, width, height });
+  }, []);
+
+  // Handle region change
+  const onRegionChangeComplete = useCallback((region: Region) => {
+    setMapRegion(region);
+  }, []);
+
+  // Clear route
+  const handleClear = useCallback(() => {
+    if (drawnRoute.length > 0) {
+      Alert.alert(
+        'Clear Route',
+        'Are you sure you want to clear the entire route?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { 
+            text: 'Clear', 
+            style: 'destructive', 
+            onPress: () => {
+              setDrawnRoute([]);
+              lastPointRef.current = null;
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+            }
+          },
+        ]
+      );
+    }
+  }, [drawnRoute.length, setDrawnRoute]);
+
+  // Undo last segment
+  const handleUndo = useCallback(() => {
+    if (drawnRoute.length > 0) {
+      const undoCount = Math.max(1, Math.min(50, Math.floor(drawnRoute.length / 10)));
+      setDrawnRoute(prev => prev.slice(0, -undoCount));
+      lastPointRef.current = drawnRoute[drawnRoute.length - undoCount - 1] || null;
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    }
+  }, [drawnRoute, setDrawnRoute]);
+
+  // Toggle drawing mode
+  const toggleDrawingMode = useCallback(() => {
+    setIsDrawingMode(prev => {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      return !prev;
+    });
+  }, []);
+
+  // Handle back with confirmation if route exists
+  const handleBack = useCallback(() => {
+    if (drawnRoute.length > 0) {
+      Alert.alert(
+        'Discard Route?',
+        'You have an unsaved route. Going back will clear it. Tap the ✓ to save your route instead.',
+        [
+          { text: 'Keep Drawing', style: 'cancel' },
+          { text: 'Discard', style: 'destructive', onPress: () => {
+            setDrawnRoute([]); // Clear the route
+            onClose();
+          }},
+        ]
+      );
+    } else {
+      onClose();
+    }
+  }, [drawnRoute.length, onClose, setDrawnRoute]);
+
+  if (!visible) return null;
+
+  return (
+    <Modal
+      visible={visible}
+      animationType="slide"
+      onRequestClose={handleBack}
+      statusBarTranslucent
+    >
+      <View style={{ flex: 1, backgroundColor: theme.background }}>
+        {/* Header - matching CreateGameScreen style */}
+        <View style={{ 
+          backgroundColor: theme.background, 
+          paddingTop: insets.top,
+        }}>
+          {/* Top bar with back, title, and check */}
+          <View style={{ 
+            flexDirection: 'row', 
+            alignItems: 'center', 
+            justifyContent: 'space-between', 
+            paddingHorizontal: 16, 
+            paddingTop: 12,
+            paddingBottom: 12,
+          }}>
+            <TouchableOpacity 
+              onPress={handleBack} 
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              style={{
+                width: 44,
+                height: 44,
+                borderRadius: 22,
+                backgroundColor: theme.card,
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderWidth: 1,
+                borderColor: theme.border,
+              }}
+            >
+              <Ionicons name="arrow-back" size={24} color={theme.text} />
+            </TouchableOpacity>
+            
+            {/* Title in center */}
+            <Text 
+              style={{ 
+                fontSize: 24, 
+                color: theme.primary, 
+                fontWeight: 'bold', 
+                textAlign: 'center',
+                flex: 1,
+                marginHorizontal: 8,
+              }}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+            >
+              Draw Your Route
+            </Text>
+            
+            <TouchableOpacity 
+              onPress={() => onDone(drawnRoute)} 
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              style={{
+                width: 44,
+                height: 44,
+                borderRadius: 22,
+                backgroundColor: drawnRoute.length >= 2 ? theme.primary : theme.card,
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderWidth: 1,
+                borderColor: drawnRoute.length >= 2 ? theme.primary : theme.border,
+              }}
+            >
+              <Ionicons 
+                name="checkmark" 
+                size={26} 
+                color={drawnRoute.length >= 2 ? '#fff' : theme.muted} 
+              />
+            </TouchableOpacity>
+          </View>
+          
+          {/* Status indicator */}
+          <View style={{ 
+            height: 36, 
+            marginHorizontal: 16,
+            marginBottom: 10,
+            paddingHorizontal: 14,
+            borderRadius: 18,
+            justifyContent: 'center',
+            backgroundColor: isDrawingMode ? `${theme.primary}20` : theme.card,
+            borderWidth: 1,
+            borderColor: isDrawingMode ? theme.primary : theme.border,
+          }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+              <View style={{ 
+                width: 8, 
+                height: 8, 
+                borderRadius: 4, 
+                backgroundColor: isDrawingMode ? '#4CAF50' : theme.muted,
+              }} />
+              <Text style={{ 
+                fontSize: 13, 
+                color: isDrawingMode ? theme.primary : theme.muted, 
+                fontWeight: '600' 
+              }}>
+                {isDrawingMode ? 'Drawing active — drag to draw' : 'Pan & zoom, then tap Start Drawing'}
+              </Text>
+            </View>
+          </View>
+        </View>
+
+        {/* Map Container */}
+        <View style={{ flex: 1 }} onLayout={onMapLayout}>
+          <MapView
+            ref={mapRef}
+            style={{ flex: 1 }}
+            initialRegion={mapRegion}
+            onRegionChangeComplete={onRegionChangeComplete}
+            scrollEnabled={!isDrawingMode}
+            zoomEnabled={!isDrawingMode}
+            rotateEnabled={!isDrawingMode}
+            pitchEnabled={false}
+            userInterfaceStyle={theme.isDark ? 'dark' : 'light'}
+            showsCompass={!isDrawingMode}
+            showsScale={true}
+          >
+            {/* Meeting Point Marker */}
+            <Marker
+              coordinate={initialCoords}
+              title="Meeting Point"
+              anchor={{ x: 0.5, y: 0.5 }}
+            >
+              <View style={{ 
+                width: 44, 
+                height: 44, 
+                alignItems: 'center', 
+                justifyContent: 'center',
+              }}>
+                <View style={{ 
+                  backgroundColor: theme.primary, 
+                  width: 36, 
+                  height: 36, 
+                  borderRadius: 18, 
+                  alignItems: 'center', 
+                  justifyContent: 'center', 
+                  borderWidth: 3, 
+                  borderColor: '#fff',
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.3,
+                  shadowRadius: 4,
+                  elevation: 5,
+                }}>
+                  <Ionicons name="flag" size={18} color="#fff" />
+                </View>
+              </View>
+            </Marker>
+
+            {/* Drawn Route Polyline */}
+            {drawnRoute.length > 1 && (
+              <Polyline
+                coordinates={drawnRoute}
+                strokeColor={theme.primary}
+                strokeWidth={5}
+                lineCap="round"
+                lineJoin="round"
+              />
+            )}
+
+            {/* Start Marker */}
+            {drawnRoute.length > 0 && (
+              <Marker coordinate={drawnRoute[0]} anchor={{ x: 0.5, y: 0.5 }}>
+                <View style={{ 
+                  backgroundColor: '#4CAF50', 
+                  width: 28, 
+                  height: 28, 
+                  borderRadius: 14, 
+                  borderWidth: 3, 
+                  borderColor: '#fff', 
+                  alignItems: 'center', 
+                  justifyContent: 'center',
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.3,
+                  shadowRadius: 3,
+                  elevation: 4,
+                }}>
+                  <Ionicons name="play" size={12} color="#fff" />
+                </View>
+              </Marker>
+            )}
+
+            {/* End Marker */}
+            {drawnRoute.length > 1 && (
+              <Marker coordinate={drawnRoute[drawnRoute.length - 1]} anchor={{ x: 0.5, y: 0.5 }}>
+                <View style={{ 
+                  backgroundColor: '#f44336', 
+                  width: 28, 
+                  height: 28, 
+                  borderRadius: 14, 
+                  borderWidth: 3, 
+                  borderColor: '#fff', 
+                  alignItems: 'center', 
+                  justifyContent: 'center',
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.3,
+                  shadowRadius: 3,
+                  elevation: 4,
+                }}>
+                  <Ionicons name="stop" size={12} color="#fff" />
+                </View>
+              </Marker>
+            )}
+          </MapView>
+
+          {/* Drawing Overlay - captures touch when in drawing mode */}
+          {isDrawingMode && (
+            <View
+              style={{
+                ...StyleSheet.absoluteFillObject,
+                backgroundColor: 'transparent',
+              }}
+              {...panResponder.panHandlers}
+            />
+          )}
+
+          {/* Drawing indicator overlay */}
+          {isDrawingMode && (
+            <View 
+              pointerEvents="none" 
+              style={{ 
+                position: 'absolute', 
+                top: 16, 
+                left: 16, 
+                right: 16,
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <View style={{
+                backgroundColor: 'rgba(76, 175, 80, 0.95)',
+                paddingHorizontal: 16,
+                paddingVertical: 8,
+                borderRadius: 20,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 8,
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.25,
+                shadowRadius: 4,
+                elevation: 5,
+              }}>
+                <View style={{ 
+                  width: 8, 
+                  height: 8, 
+                  borderRadius: 4, 
+                  backgroundColor: '#fff',
+                }} />
+                <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>
+                  DRAWING
+                </Text>
+              </View>
+            </View>
+          )}
+        </View>
+
+        {/* Bottom Controls */}
+        <View style={{ 
+          backgroundColor: theme.card, 
+          borderTopWidth: 1, 
+          borderTopColor: theme.border, 
+          paddingHorizontal: 16,
+          paddingTop: 12,
+          paddingBottom: Math.max(16, insets.bottom + 8),
+        }}>
+          {/* Route Stats */}
+          <View style={{ 
+            backgroundColor: theme.background, 
+            padding: 14, 
+            borderRadius: 12, 
+            marginBottom: 14, 
+            borderWidth: 1, 
+            borderColor: drawnRoute.length > 0 ? theme.primary : theme.border,
+          }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <Ionicons name="analytics" size={22} color={theme.primary} />
+                <View>
+                  <Text style={{ color: theme.muted, fontSize: 11, fontWeight: '600', textTransform: 'uppercase' }}>
+                    Distance
+                  </Text>
+                  <Text style={{ color: theme.text, fontWeight: 'bold', fontSize: 18 }}>
+                    {routeDistance > 0 ? `${routeDistance.toFixed(2)} km` : '—'}
+                  </Text>
+                </View>
+              </View>
+              <View style={{ alignItems: 'flex-end' }}>
+                <Text style={{ color: theme.muted, fontSize: 11, fontWeight: '600', textTransform: 'uppercase' }}>
+                  Points
+                </Text>
+                <Text style={{ color: theme.text, fontWeight: 'bold', fontSize: 18 }}>
+                  {drawnRoute.length}
+                </Text>
+              </View>
+            </View>
+          </View>
+          
+          {/* Drawing Mode Toggle */}
+          <TouchableOpacity
+            style={{
+              backgroundColor: isDrawingMode ? theme.primary : theme.background,
+              paddingVertical: 16,
+              borderRadius: 12,
+              alignItems: 'center',
+              marginBottom: 12,
+              borderWidth: 2,
+              borderColor: theme.primary,
+              flexDirection: 'row',
+              justifyContent: 'center',
+              gap: 10,
+            }}
+            onPress={toggleDrawingMode}
+            activeOpacity={0.8}
+          >
+            <Ionicons 
+              name={isDrawingMode ? "brush" : "brush-outline"} 
+              size={22} 
+              color={isDrawingMode ? '#fff' : theme.primary} 
+            />
+            <Text style={{ 
+              color: isDrawingMode ? '#fff' : theme.primary, 
+              fontWeight: 'bold', 
+              fontSize: 16 
+            }}>
+              {isDrawingMode ? 'Drawing Mode ON' : 'Start Drawing'}
+            </Text>
+            {isDrawingMode && (
+              <View style={{
+                backgroundColor: 'rgba(255,255,255,0.3)',
+                paddingHorizontal: 8,
+                paddingVertical: 2,
+                borderRadius: 8,
+                marginLeft: 4,
+              }}>
+                <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>TAP TO STOP</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+          
+          {/* Action Buttons */}
+          <View style={{ flexDirection: 'row', gap: 12 }}>
+            <TouchableOpacity
+              style={{
+                flex: 1,
+                backgroundColor: drawnRoute.length > 0 ? theme.danger : theme.muted,
+                paddingVertical: 14,
+                borderRadius: 12,
+                alignItems: 'center',
+                flexDirection: 'row',
+                justifyContent: 'center',
+                gap: 6,
+                opacity: drawnRoute.length === 0 ? 0.5 : 1,
+              }}
+              onPress={handleClear}
+              disabled={drawnRoute.length === 0}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="trash-outline" size={18} color="#fff" />
+              <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 15 }}>Clear All</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={{
+                flex: 1,
+                backgroundColor: drawnRoute.length > 0 ? theme.primaryStrong : theme.muted,
+                paddingVertical: 14,
+                borderRadius: 12,
+                alignItems: 'center',
+                flexDirection: 'row',
+                justifyContent: 'center',
+                gap: 6,
+                opacity: drawnRoute.length === 0 ? 0.5 : 1,
+              }}
+              onPress={handleUndo}
+              disabled={drawnRoute.length === 0}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="arrow-undo" size={18} color="#fff" />
+              <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 15 }}>Undo</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
 const CreateGameScreen = () => {
   const navigation = useNavigation<NavigationProp>();
   const { theme } = useTheme();
@@ -616,7 +1223,6 @@ const CreateGameScreen = () => {
   });
   const [drawnRoute, setDrawnRoute] = useState<Array<{ latitude: number; longitude: number }>>([]);
   const [showRouteDrawer, setShowRouteDrawer] = useState(false);
-  const [isDrawingMode, setIsDrawingMode] = useState(false);
 
   // Keyboard state for adjusting ScrollView padding so inputs appear above keyboard
   const [keyboardHeight, setKeyboardHeight] = useState<number>(0);
@@ -1882,239 +2488,33 @@ const CreateGameScreen = () => {
 
         {/* Route Drawing Modal */}
         {showRouteDrawer && selectedCoords && (
-          <Modal
+          <RouteDrawerModal
             visible={showRouteDrawer}
-            animationType="slide"
-            onRequestClose={() => setShowRouteDrawer(false)}
-          >
-            <View style={{ flex: 1, backgroundColor: theme.background, paddingTop: insets.top }}>
-              {/* Header */}
-              <View style={{ backgroundColor: theme.card, borderBottomWidth: 1, borderBottomColor: theme.border }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12 }}>
-                  <TouchableOpacity onPress={() => setShowRouteDrawer(false)}>
-                    <Ionicons name="close" size={28} color={theme.text} />
-                  </TouchableOpacity>
-                  <Text style={{ fontSize: 18, fontWeight: 'bold', color: theme.primary }}>Draw Your Route</Text>
-                  <TouchableOpacity onPress={() => {
-                    if (drawnRoute.length < 2) {
-                      Alert.alert('Route Too Short', 'Please draw a route with at least 2 points.');
-                      return;
-                    }
-                    
-                    // Calculate distance and auto-fill
-                    let totalDistance = 0;
-                    for (let i = 1; i < drawnRoute.length; i++) {
-                      totalDistance += calculateDistance(
-                        drawnRoute[i - 1].latitude,
-                        drawnRoute[i - 1].longitude,
-                        drawnRoute[i].latitude,
-                        drawnRoute[i].longitude
-                      );
-                    }
-                    
-                    // Set the distance in gpxStats
-                    setGpxStats((s: any) => ({ ...s, distance: `${totalDistance.toFixed(2)} km` }));
-                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                    setShowRouteDrawer(false);
-                  }}>
-                    <Text style={{ fontSize: 16, fontWeight: 'bold', color: theme.primary }}>Done</Text>
-                  </TouchableOpacity>
-                </View>
-                <Text style={{ paddingHorizontal: 16, paddingBottom: 12, fontSize: 13, color: theme.muted }}>
-                  {isDrawingMode ? 'Drawing mode active - drag your finger to draw the route' : 'Scroll and zoom to explore, then enable drawing mode'}
-                </Text>
-              </View>
-
-              {/* Map */}
-              <MapView
-                style={{ flex: 1 }}
-                initialRegion={{
-                  latitude: selectedCoords.latitude,
-                  longitude: selectedCoords.longitude,
-                  latitudeDelta: 0.01,
-                  longitudeDelta: 0.01,
-                }}
-                scrollEnabled={!isDrawingMode}
-                zoomEnabled={!isDrawingMode}
-                rotateEnabled={!isDrawingMode}
-                pitchEnabled={!isDrawingMode}
-                onPanDrag={isDrawingMode ? (e) => {
-                  const { latitude, longitude } = e.nativeEvent.coordinate;
-                  setDrawnRoute(prev => {
-                    // Avoid adding duplicate points too close together
-                    if (prev.length > 0) {
-                      const last = prev[prev.length - 1];
-                      const distance = Math.sqrt(
-                        Math.pow(latitude - last.latitude, 2) + 
-                        Math.pow(longitude - last.longitude, 2)
-                      );
-                      // Only add point if it's far enough from the last one
-                      if (distance < 0.0001) return prev;
-                    }
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    return [...prev, { latitude, longitude }];
-                  });
-                } : undefined}
-                userInterfaceStyle={theme.isDark ? 'dark' : 'light'}
-              >
-                {/* Meeting Point Marker */}
-                {Platform.OS === 'android' ? (
-                  <Marker
-                    coordinate={selectedCoords}
-                    title="Meeting Point"
-                    pinColor={theme.primary}
-                  />
-                ) : (
-                  <Marker
-                    coordinate={selectedCoords}
-                    title="Meeting Point"
-                    anchor={{ x: 0.5, y: 0.5 }}
-                  >
-                    <View style={{ width: 46, height: 46, alignItems: 'center', justifyContent: 'center' }}>
-                      <View style={{ backgroundColor: theme.primary, width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: '#fff' }}>
-                        <Ionicons name="location" size={24} color="#fff" />
-                      </View>
-                    </View>
-                  </Marker>
-                )}
-
-                {/* Drawn Route Polyline */}
-                {drawnRoute.length > 1 && (
-                  <Polyline
-                    coordinates={drawnRoute}
-                    strokeColor={theme.primary}
-                    strokeWidth={4}
-                  />
-                )}
-
-                {/* Start and End Markers */}
-                {drawnRoute.length > 0 && (
-                  <Marker
-                    coordinate={drawnRoute[0]}
-                    anchor={{ x: 0.5, y: 0.5 }}
-                  >
-                    <View style={{ backgroundColor: '#4CAF50', width: 24, height: 24, borderRadius: 12, borderWidth: 3, borderColor: '#fff', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-                      <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>S</Text>
-                    </View>
-                  </Marker>
-                )}
-                {drawnRoute.length > 1 && (
-                  <Marker
-                    coordinate={drawnRoute[drawnRoute.length - 1]}
-                    anchor={{ x: 0.5, y: 0.5 }}
-                  >
-                    <View style={{ backgroundColor: '#f44336', width: 24, height: 24, borderRadius: 12, borderWidth: 3, borderColor: '#fff', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-                      <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>E</Text>
-                    </View>
-                  </Marker>
-                )}
-              </MapView>
-
-              {/* Bottom Controls */}
-              <View style={{ backgroundColor: theme.card, borderTopWidth: 1, borderTopColor: theme.border, padding: 16, paddingBottom: Math.max(16, insets.bottom) }}>
-                {/* Route Distance Display */}
-                {drawnRoute.length > 1 && (
-                  <View style={{ backgroundColor: theme.background, padding: 12, borderRadius: 10, marginBottom: 12, borderWidth: 1, borderColor: theme.primary }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                      <Ionicons name="trail-sign" size={18} color={theme.primary} />
-                      <Text style={{ color: theme.text, fontWeight: 'bold', fontSize: 16 }}>
-                        Route Distance: {(() => {
-                          let totalDistance = 0;
-                          for (let i = 1; i < drawnRoute.length; i++) {
-                            totalDistance += calculateDistance(
-                              drawnRoute[i - 1].latitude,
-                              drawnRoute[i - 1].longitude,
-                              drawnRoute[i].latitude,
-                              drawnRoute[i].longitude
-                            );
-                          }
-                          return `${totalDistance.toFixed(2)} km`;
-                        })()}
-                      </Text>
-                    </View>
-                  </View>
-                )}
-                
-                {/* Drawing Mode Toggle */}
-                <TouchableOpacity
-                  style={{
-                    backgroundColor: isDrawingMode ? theme.primary : theme.card,
-                    paddingVertical: 14,
-                    borderRadius: 10,
-                    alignItems: 'center',
-                    marginBottom: 12,
-                    borderWidth: 2,
-                    borderColor: theme.primary,
-                    flexDirection: 'row',
-                    justifyContent: 'center',
-                    gap: 8,
-                  }}
-                  onPress={() => {
-                    setIsDrawingMode(!isDrawingMode);
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                  }}
-                >
-                  <Ionicons name={isDrawingMode ? "lock-closed" : "lock-open"} size={20} color={isDrawingMode ? '#fff' : theme.primary} />
-                  <Text style={{ color: isDrawingMode ? '#fff' : theme.primary, fontWeight: 'bold', fontSize: 16 }}>
-                    {isDrawingMode ? 'Drawing Mode ON' : 'Enable Drawing'}
-                  </Text>
-                </TouchableOpacity>
-                
-                <View style={{ flexDirection: 'row', gap: 12 }}>
-                  <TouchableOpacity
-                    style={{
-                      flex: 1,
-                      backgroundColor: theme.danger,
-                      paddingVertical: 14,
-                      borderRadius: 10,
-                      alignItems: 'center',
-                      opacity: drawnRoute.length === 0 ? 0.5 : 1,
-                    }}
-                    onPress={() => {
-                      if (drawnRoute.length > 0) {
-                        Alert.alert(
-                          'Clear Route',
-                          'Are you sure you want to clear the entire route?',
-                          [
-                            { text: 'Cancel', style: 'cancel' },
-                            { text: 'Clear', style: 'destructive', onPress: () => setDrawnRoute([]) },
-                          ]
-                        );
-                      }
-                    }}
-                    disabled={drawnRoute.length === 0}
-                  >
-                    <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 16 }}>Clear</Text>
-                  </TouchableOpacity>
-                  
-                  <TouchableOpacity
-                    style={{
-                      flex: 1,
-                      backgroundColor: drawnRoute.length > 0 ? theme.primary : theme.muted,
-                      paddingVertical: 14,
-                      borderRadius: 10,
-                      alignItems: 'center',
-                      opacity: drawnRoute.length === 0 ? 0.5 : 1,
-                    }}
-                    onPress={() => {
-                      if (drawnRoute.length > 0) {
-                        const undoCount = Math.min(50, Math.floor(drawnRoute.length / 10));
-                        setDrawnRoute(prev => prev.slice(0, -undoCount));
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                      }
-                    }}
-                    disabled={drawnRoute.length === 0}
-                  >
-                    <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 16 }}>Undo</Text>
-                  </TouchableOpacity>
-                </View>
-                
-                <Text style={{ textAlign: 'center', marginTop: 12, color: theme.muted, fontSize: 13 }}>
-                  {drawnRoute.length === 0 ? 'Enable drawing mode to start' : `${drawnRoute.length} point${drawnRoute.length === 1 ? '' : 's'} drawn`}
-                </Text>
-              </View>
-            </View>
-          </Modal>
+            initialCoords={selectedCoords}
+            drawnRoute={drawnRoute}
+            setDrawnRoute={setDrawnRoute}
+            onClose={() => setShowRouteDrawer(false)}
+            onDone={(route) => {
+              if (route.length < 2) {
+                Alert.alert('Route Too Short', 'Please draw a route with at least 2 points.');
+                return;
+              }
+              let totalDistance = 0;
+              for (let i = 1; i < route.length; i++) {
+                totalDistance += calculateDistance(
+                  route[i - 1].latitude,
+                  route[i - 1].longitude,
+                  route[i].latitude,
+                  route[i].longitude
+                );
+              }
+              setGpxStats((s: any) => ({ ...s, distance: `${totalDistance.toFixed(2)} km` }));
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              setShowRouteDrawer(false);
+            }}
+            theme={theme}
+            insets={insets}
+          />
         )}
     </View>
   );

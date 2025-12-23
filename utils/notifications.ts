@@ -65,6 +65,7 @@ export type PushData = {
 };
 
 const TOKEN_KEY = 'expoPushToken';
+const FCM_TOKEN_KEY = 'fcmPushToken';
 
 // Get Expo projectId from config in dev and production
 function getProjectId(): string | undefined {
@@ -104,42 +105,72 @@ export async function registerPushNotificationsForCurrentUser(): Promise<string 
     }
     if (finalStatus !== 'granted') return null;
 
-    const projectId = getProjectId();
-    // If projectId is undefined in dev web/preview, this will still work on device builds
-    const tokenResp = await Notifications.getExpoPushTokenAsync(
-      projectId ? { projectId } : undefined as any
-    );
-    const expoPushToken = tokenResp.data;
-
     const uid = auth.currentUser?.uid;
-    if (!uid || !expoPushToken) return expoPushToken || null;
+    if (!uid) return null;
 
-    // Save token to profile.expoPushTokens (array)
-    const profileRef = doc(db, 'profiles', uid);
-    const snap = await getDoc(profileRef);
-    if (!snap.exists()) {
-      await setDoc(profileRef, { expoPushTokens: [expoPushToken] }, { merge: true });
-    } else {
-      await updateDoc(profileRef, { expoPushTokens: arrayUnion(expoPushToken) as any }).catch(async () => {
-        await setDoc(profileRef, { expoPushTokens: [expoPushToken] }, { merge: true });
-      });
+    // We store BOTH token types when possible:
+    // - FCM token (Android) lets Firebase show the app name as sender
+    // - Expo token gives a reliable fallback and works well on iOS
+    let fcmToken: string | null = null;
+    let expoToken: string | null = null;
+
+    if (Platform.OS === 'android') {
+      try {
+        const fcmTokenResp = await Notifications.getDevicePushTokenAsync();
+        if (fcmTokenResp.data) {
+          fcmToken = fcmTokenResp.data;
+          console.log('📱 Got FCM token for Android');
+        }
+      } catch (e) {
+        console.warn('Failed to get FCM token:', e);
+      }
     }
 
-    // Persist locally to allow cleanup on logout
-    try { await AsyncStorage.setItem(TOKEN_KEY, expoPushToken); } catch {}
+    try {
+      const projectId = getProjectId();
+      const tokenResp = await Notifications.getExpoPushTokenAsync(
+        projectId ? { projectId } : (undefined as any)
+      );
+      expoToken = tokenResp.data;
+      console.log('📱 Got Expo push token');
+    } catch (e) {
+      console.warn('Failed to get Expo push token:', e);
+    }
 
-    return expoPushToken;
+    if (!fcmToken && !expoToken) return null;
+
+    // Save tokens to profile
+    const profileRef = doc(db, 'profiles', uid);
+
+    if (fcmToken) {
+      await setDoc(profileRef, { fcmPushTokens: arrayUnion(fcmToken) as any }, { merge: true });
+      try {
+        await AsyncStorage.setItem(FCM_TOKEN_KEY, fcmToken);
+      } catch {}
+    }
+    if (expoToken) {
+      await setDoc(profileRef, { expoPushTokens: arrayUnion(expoToken) as any }, { merge: true });
+      try {
+        await AsyncStorage.setItem(TOKEN_KEY, expoToken);
+      } catch {}
+    }
+
+    return fcmToken || expoToken;
   } catch (e) {
-    // Fail silently; app should continue to work without push
+    console.error('Push registration failed:', e);
     return null;
   }
 }
 
-export async function removeCurrentDevicePushToken(expoPushToken: string) {
+export async function removeCurrentDevicePushToken(token: string) {
   try {
     const uid = auth.currentUser?.uid;
-    if (!uid || !expoPushToken) return;
-    await updateDoc(doc(db, 'profiles', uid), { expoPushTokens: arrayRemove(expoPushToken) as any });
+    if (!uid || !token) return;
+    // Remove from both token arrays (we don't know which type it is)
+    await updateDoc(doc(db, 'profiles', uid), { 
+      expoPushTokens: arrayRemove(token) as any,
+      fcmPushTokens: arrayRemove(token) as any,
+    });
   } catch {}
 }
 
@@ -164,8 +195,13 @@ export async function getLastNotificationResponseData(): Promise<PushData | null
 
 export async function removeSavedTokenAndUnregister() {
   try {
-    const token = await AsyncStorage.getItem(TOKEN_KEY);
-    if (token) await removeCurrentDevicePushToken(token);
+    const expoToken = await AsyncStorage.getItem(TOKEN_KEY);
+    if (expoToken) await removeCurrentDevicePushToken(expoToken);
+  } catch {}
+  try {
+    const fcmToken = await AsyncStorage.getItem(FCM_TOKEN_KEY);
+    if (fcmToken) await removeCurrentDevicePushToken(fcmToken);
   } catch {}
   try { await AsyncStorage.removeItem(TOKEN_KEY); } catch {}
+  try { await AsyncStorage.removeItem(FCM_TOKEN_KEY); } catch {}
 }

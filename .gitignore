@@ -15,6 +15,8 @@ expo-env.d.ts
 *.jks
 *.p8
 *.p12
+functions/secrets/
+secrets/apple-pass.p12
 *.key
 *.mobileprovision
 

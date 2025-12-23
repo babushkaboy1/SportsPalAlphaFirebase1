@@ -1,6 +1,7 @@
 import React from 'react';
-import { View, TouchableOpacity, Text, StyleSheet } from 'react-native';
+import { View, TouchableOpacity, Text, StyleSheet, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type BottomTabItem = {
   key: string;
@@ -29,8 +30,22 @@ export const BottomTabs: React.FC<BottomTabsProps> = ({
   backgroundColor,
   borderColor,
 }) => {
+  const insets = useSafeAreaInsets();
+  const bottomPadding = Math.max(insets.bottom, Platform.OS === 'android' ? 18 : 24);
+  const containerHeight = 58 + bottomPadding;
+
   return (
-    <View style={[styles.container, { backgroundColor, borderTopColor: borderColor || 'transparent' }]}>
+    <View
+      style={[
+        styles.container,
+        {
+          backgroundColor,
+          borderTopColor: borderColor || 'transparent',
+          paddingBottom: bottomPadding,
+          minHeight: containerHeight,
+        },
+      ]}
+    >
       {items.map((item, index) => {
         const isActive = index === activeIndex;
         const iconName = isActive && item.iconActive ? item.iconActive : item.icon;
@@ -63,16 +78,14 @@ export const BottomTabs: React.FC<BottomTabsProps> = ({
 const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
-    height: 82,
     borderTopWidth: StyleSheet.hairlineWidth,
-    paddingBottom: 34,
+    paddingTop: 10,
   },
   tab: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingTop: 8,
-    paddingVertical: 0,
+    paddingTop: 6,
   },
   iconWrapper: {
     position: 'relative',

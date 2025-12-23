@@ -576,6 +576,13 @@ const SettingsScreen: React.FC = () => {
 
         {/* SUPPORT */}
         <Section title="Support">
+          <Row
+            icon="card-outline"
+            label="Apple Wallet Pass"
+            sub="Add or update your SportsPal pass"
+            rightIcon="chevron-forward"
+            onPress={() => navigation.navigate('SportsPalPass')}
+          />
           <Row icon="mail-open-outline" label="Contact support" onPress={handleContactSupport} />
           <Row icon="star-outline" label="Rate us" onPress={handleRateApp} />
           <Row 

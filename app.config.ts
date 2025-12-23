@@ -6,7 +6,7 @@ export default ({ config }: { config: any }) => ({
   slug: "SportsPal4",
   owner: "sportspal",
   scheme: "sportspal", // 👈 Add this line
-  version: "1.0.6",
+  version: "1.0.7",
   orientation: "portrait",
   // Updated app icon to new turquoise orb asset
   icon: "./assets/app-icon.png",
@@ -23,6 +23,8 @@ export default ({ config }: { config: any }) => ({
   ios: {
     supportsTablet: true,
     bundleIdentifier: "com.sportspal",
+    buildNumber: "48",
+    googleServicesFile: "./GoogleService-Info.plist",
     associatedDomains: ["applinks:sportspal-1b468.web.app"],
     // iOS splash configuration - ensures splash shows immediately, not app icon
     splash: {
@@ -78,7 +80,21 @@ export default ({ config }: { config: any }) => ({
     },
     edgeToEdgeEnabled: true,
     package: "com.sportspal.app",
+    googleServicesFile: "./google-services.json",
+    versionCode: 5,
+    // Enable R8 code shrinking and upload mapping file to Google Play
+    enableProguardInReleaseBuilds: true,
+    enableShrinkResourcesInReleaseBuilds: true,
     intentFilters: [
+      {
+        action: "VIEW",
+        data: [
+          {
+            scheme: "sportspal"
+          }
+        ],
+        category: ["BROWSABLE", "DEFAULT"]
+      },
       {
         action: "VIEW",
         autoVerify: true,
@@ -119,6 +135,18 @@ export default ({ config }: { config: any }) => ({
       // Allow writing for saving images
       "WRITE_EXTERNAL_STORAGE"
     ],
+    blockedPermissions: [],
+    permissionsUsages: {
+      CAMERA: "This app uses the camera to allow you to take and upload profile pictures and share photos with friends.",
+      ACCESS_FINE_LOCATION: "This app uses your location to show nearby sports events and friends.",
+      ACCESS_COARSE_LOCATION: "This app uses your location to show nearby sports events and friends.",
+      POST_NOTIFICATIONS: "This app sends you notifications about new messages, activity invites, friend requests, and upcoming sports events so you never miss out.",
+      RECORD_AUDIO: "This app uses the microphone for recording audio messages and calls.",
+      READ_MEDIA_IMAGES: "This app needs access to your photo library to let you select and upload images for your profile, activities, and to share with other users.",
+      READ_MEDIA_VIDEO: "This app needs access to your video library to let you select and upload videos for your profile, activities, and to share with other users.",
+      READ_EXTERNAL_STORAGE: "This app needs access to your photo library to let you select and upload images for your profile, activities, and to share with other users.",
+      WRITE_EXTERNAL_STORAGE: "This app needs access to save images to your photo library."
+    },
     softwareKeyboardLayoutMode: "resize",
     config: {
       googleMaps: {

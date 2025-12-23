@@ -28,10 +28,12 @@ import { reauthenticateWithCredential, EmailAuthProvider, updatePassword } from 
 import { doc, setDoc, query, where, getDocs, collection, serverTimestamp } from 'firebase/firestore';
 import { auth, db, storage } from '../firebaseConfig';
 import { compressImage, uploadProfileImage, testStorageConnection } from '../utils/imageUtils';
+import { removeSavedTokenAndUnregister } from '../utils/notifications';
 import { ref, uploadBytes, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { Linking } from 'react-native';
 import { ActivityIcon } from '../components/ActivityIcons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Sports Options for the grid (alphabetical order; grid renders 3 per row)
 const sportsOptions = [
@@ -463,6 +465,8 @@ const CreateProfileScreen = ({ route }: any) => {
         uid: userId,
         emailVerified: !!auth.currentUser?.emailVerified,
         updatedAt: serverTimestamp(),
+        profileComplete: true,
+        profileCompletedAt: serverTimestamp(),
       };
 
       // Only add these fields when creating a new profile
@@ -474,6 +478,13 @@ const CreateProfileScreen = ({ route }: any) => {
       }
 
       await setDoc(doc(db, "profiles", userId), profileDataToSave, { merge: true });
+
+      // Cache completion locally to prevent false "Complete your profile" on cold starts
+      if (profileDataToSave?.username && profileDataToSave?.birthDate) {
+        AsyncStorage.setItem(`profileComplete:${userId}`, '1').catch(() => {});
+      } else {
+        AsyncStorage.removeItem(`profileComplete:${userId}`).catch(() => {});
+      }
       
       if (isEdit) {
         Alert.alert('Success', 'Your profile has been updated!');
@@ -519,6 +530,17 @@ const CreateProfileScreen = ({ route }: any) => {
     (p) => p.providerId === 'password'
   );
 
+  const handleSignOut = async () => {
+    try {
+      await removeSavedTokenAndUnregister().catch(() => {});
+      await auth.signOut();
+      navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Login' }] }));
+    } catch (error: any) {
+      console.error('Sign out error:', error);
+      Alert.alert('Error', error?.message || 'Could not sign out. Please try again.');
+    }
+  };
+
   const mainCtaLabel = isEdit ? 'Save' : 'Continue';
 
   return (
@@ -538,6 +560,17 @@ const CreateProfileScreen = ({ route }: any) => {
       >
   <Ionicons name="arrow-back" size={28} color={theme.primary} />
       </TouchableOpacity>
+
+      {/* Sign out button (create mode only) */}
+      {!isEdit && (
+        <TouchableOpacity
+          style={[styles.backButton, { top: insets.top + 10, right: 16, position: 'absolute', zIndex: 10 }]}
+          onPress={handleSignOut}
+          accessibilityLabel="Sign Out"
+        >
+          <Ionicons name="log-out-outline" size={28} color={theme.primary} />
+        </TouchableOpacity>
+      )}
 
       {/* Save button (edit mode only) */}
       {isEdit && (

@@ -1293,9 +1293,9 @@ const ProfileScreen = () => {
             <Ionicons name="create-outline" size={18} color={theme.primary} style={{ marginRight: 6 }} />
             <Text style={styles.profileActionText}>Edit Profile</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.profileActionButton} onPress={handleShareProfile}>
-            <Ionicons name="share-social-outline" size={18} color={theme.primary} style={{ marginRight: 6 }} />
-            <Text style={styles.profileActionText}>Share Profile</Text>
+          <TouchableOpacity style={styles.profileActionButton} onPress={() => navigation.navigate('SportsPalPass' as never)}>
+            <Ionicons name="wallet-outline" size={18} color={theme.primary} style={{ marginRight: 6 }} />
+            <Text style={styles.profileActionText}>SportsPal Pass</Text>
           </TouchableOpacity>
         </View>
       ) : null}

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { NavigationContainer, createNavigationContainerRef, StackActions, NavigationState } from '@react-navigation/native';
 import { createStackNavigator, CardStyleInterpolators } from '@react-navigation/stack';
-import { Platform, Dimensions } from 'react-native';
+import { Platform, Dimensions, Modal, View, Text, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { createMaterialTopTabNavigator, MaterialTopTabBarProps } from '@react-navigation/material-top-tabs';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { enableScreens } from 'react-native-screens';
@@ -11,7 +11,7 @@ import { useActivityContext } from './context/ActivityContext';
 import * as Location from 'expo-location';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth, db } from './firebaseConfig';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import * as NavigationBar from 'expo-navigation-bar';
 import * as SystemUI from 'expo-system-ui';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -19,6 +19,7 @@ import { registerPushNotificationsForCurrentUser, subscribeNotificationResponses
 import * as Linking from 'expo-linking';
 import { parseDeepLink } from './utils/deepLinking';
 import * as Updates from 'expo-updates';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Import your screens
 import LoginScreen from './screens/LoginScreen';
@@ -228,11 +229,18 @@ function AppInner() {
   const [isEmailVerified, setIsEmailVerified] = useState<boolean | null>(null);
   const [navReady, setNavReady] = useState(false);
   const splashHiddenRef = useRef(false);
+  const lastProfileCompleteRef = useRef(false);
   const pendingNavigationTargetRef = useRef<ExternalNavigationTarget | null>(null);
   const navigationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { theme, navTheme } = useTheme();
   const { currentNotification, dismissNotification, showNotification } = useInAppNotification();
   const [updateChecked, setUpdateChecked] = useState(false);
+  const [otaDownloading, setOtaDownloading] = useState(false);
+  const [otaReady, setOtaReady] = useState(false);
+  const [otaPromptVisible, setOtaPromptVisible] = useState(false);
+  const [otaRestarting, setOtaRestarting] = useState(false);
+
+  const profileCompleteKey = useCallback((uid: string) => `profileComplete:${uid}`, []);
 
   const clearNavigationTimeout = useCallback(() => {
     if (navigationTimeoutRef.current) {
@@ -383,7 +391,8 @@ function AppInner() {
     clearNavigationTimeout();
   }, [clearNavigationTimeout]);
 
-  // Check for OTA updates on app launch (only in production)
+  // Check for OTA updates on app launch (production builds).
+  // Premium flow: download in the background, then prompt user to restart.
   useEffect(() => {
     const checkForUpdates = async () => {
       // Skip in development mode
@@ -393,31 +402,54 @@ function AppInner() {
         return;
       }
 
+      // Some environments (e.g., certain dev clients) may not have Updates enabled
+      if (!Updates.isEnabled) {
+        console.log('[Updates] Updates are not enabled in this build');
+        setUpdateChecked(true);
+        return;
+      }
+
       try {
         console.log('[Updates] Checking for updates...');
         const update = await Updates.checkForUpdateAsync();
 
+        // Do not block app start on the download step
+        setUpdateChecked(true);
+
         if (update.isAvailable) {
-          console.log('[Updates] Update available! Downloading...');
+          console.log('[Updates] Update available! Downloading in background...');
+          setOtaDownloading(true);
           await Updates.fetchUpdateAsync();
-          console.log('[Updates] Update downloaded! Reloading app...');
-          // Keep splash visible and reload immediately to apply the update
-          // The splash will remain visible during reload, preventing white flash
-          await SplashScreen.preventAutoHideAsync().catch(() => {});
-          await Updates.reloadAsync();
+          console.log('[Updates] Update downloaded. Prompting user to restart.');
+          setOtaReady(true);
+          setOtaPromptVisible(true);
         } else {
           console.log('[Updates] App is up to date');
-          setUpdateChecked(true);
         }
       } catch (error) {
         console.error('[Updates] Error checking for updates:', error);
         // Continue anyway - don't block app launch
         setUpdateChecked(true);
+      } finally {
+        setOtaDownloading(false);
       }
     };
 
     checkForUpdates();
   }, []);
+
+  const restartForUpdate = useCallback(async () => {
+    if (!otaReady) return;
+    try {
+      setOtaRestarting(true);
+      // Allow the overlay to render for a smoother transition
+      await new Promise((r) => setTimeout(r, 250));
+      await Updates.reloadAsync();
+    } catch (e) {
+      console.error('[Updates] Failed to reload:', e);
+      setOtaRestarting(false);
+    }
+  }, [otaReady]);
 
   // Connect in-app notification handler
   useEffect(() => {
@@ -450,10 +482,21 @@ function AppInner() {
     let cancelled = false;
     const checkProfile = async () => {
       if (!user) {
+        lastProfileCompleteRef.current = false;
         if (!cancelled) setHasProfile(null);
         return;
       }
-      // Small delay to ensure auth state is fully settled
+
+      let cachedComplete = false;
+      try {
+        const cached = await AsyncStorage.getItem(profileCompleteKey(user.uid));
+        cachedComplete = cached === '1';
+        if (!cancelled && cachedComplete) {
+          setHasProfile(true);
+          lastProfileCompleteRef.current = true;
+        }
+      } catch {}
+
       await new Promise(resolve => setTimeout(resolve, 50));
       if (cancelled) return;
       
@@ -461,19 +504,43 @@ function AppInner() {
         const snap = await getDoc(doc(db, 'profiles', user.uid));
         if (!cancelled) {
           if (!snap.exists()) {
-            setHasProfile(false); // no profile doc at all
+            lastProfileCompleteRef.current = false;
+            setHasProfile(false);
+            AsyncStorage.removeItem(profileCompleteKey(user.uid)).catch(() => {});
           } else {
             const data = snap.data() || {};
-            // Treat profile as complete ONLY if required fields present
-            const complete = !!data.username && !!data.birthDate;
-            setHasProfile(complete);
+            const birth = data.birthDate || data.birthdate || data.birth_date;
+            const termsAccepted = data.acceptedTerms ?? data.termsAccepted ?? data.accepted_terms ?? false;
+            const communityAccepted = data.acceptedCommunityGuidelines ?? data.acceptedCommunity ?? data.accepted_community ?? false;
+            const adulthoodAccepted = data.acceptedAdulthood ?? data.confirmedAdult ?? true;
+
+            const inferredComplete = !!data.username && !!birth && !!termsAccepted && !!communityAccepted && !!adulthoodAccepted;
+            const complete = data.profileComplete === true || inferredComplete;
+
+            // Once we have a positive signal, keep it unless the profile doc truly disappears
+            if (complete || lastProfileCompleteRef.current || cachedComplete) {
+              lastProfileCompleteRef.current = true;
+              setHasProfile(true);
+              AsyncStorage.setItem(profileCompleteKey(user.uid), '1').catch(() => {});
+              if (complete && data.profileComplete !== true) {
+                setDoc(doc(db, 'profiles', user.uid), { profileComplete: true, profileCompletedAt: data.profileCompletedAt || new Date() }, { merge: true }).catch(() => {});
+              }
+            } else {
+              lastProfileCompleteRef.current = false;
+              setHasProfile(false);
+              AsyncStorage.removeItem(profileCompleteKey(user.uid)).catch(() => {});
+            }
           }
         }
       } catch (e) {
-        // If we can't determine, default to allowing app but log
         console.warn('Profile check failed', e);
-        // Fail safe: force profile creation again rather than skipping straight in
-        if (!cancelled) setHasProfile(false);
+        if (!cancelled) {
+          if (lastProfileCompleteRef.current || cachedComplete) {
+            setHasProfile(true);
+          } else {
+            setHasProfile(null);
+          }
+        }
       }
     };
     checkProfile();
@@ -625,6 +692,55 @@ function AppInner() {
             onPress={handleNotificationPress}
             onDismiss={dismissNotification}
           />
+
+          {/* OTA Update Prompt */}
+          <Modal
+            visible={otaPromptVisible}
+            transparent
+            animationType="fade"
+            onRequestClose={() => {
+              if (!otaRestarting) setOtaPromptVisible(false);
+            }}
+          >
+            <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+              <View style={{ width: '100%', maxWidth: 520, backgroundColor: theme.card, borderRadius: 22, padding: 18, borderWidth: 1, borderColor: theme.border }}>
+                <Text style={{ color: theme.text, fontSize: 18, fontWeight: '800', marginBottom: 6 }}>Update ready</Text>
+                <Text style={{ color: theme.muted, fontSize: 14, lineHeight: 20 }}>
+                  A new version is downloaded and ready. Restart SportsPal to apply it.
+                </Text>
+
+                <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
+                  <TouchableOpacity
+                    onPress={() => setOtaPromptVisible(false)}
+                    disabled={otaRestarting}
+                    style={{ flex: 1, paddingVertical: 12, borderRadius: 14, borderWidth: 1, borderColor: theme.border, alignItems: 'center', opacity: otaRestarting ? 0.6 : 1 }}
+                  >
+                    <Text style={{ color: theme.text, fontWeight: '700' }}>Later</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={restartForUpdate}
+                    disabled={otaRestarting}
+                    style={{ flex: 1, paddingVertical: 12, borderRadius: 14, backgroundColor: theme.primary, alignItems: 'center', opacity: otaRestarting ? 0.8 : 1 }}
+                  >
+                    <Text style={{ color: theme.isDark ? '#000' : '#fff', fontWeight: '900' }}>Restart</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {otaDownloading ? (
+                  <Text style={{ marginTop: 12, color: theme.muted, fontSize: 12 }}>Downloading update…</Text>
+                ) : null}
+              </View>
+            </View>
+          </Modal>
+
+          {/* Smooth restart overlay */}
+          <Modal visible={otaRestarting} transparent animationType="fade">
+            <View style={{ flex: 1, backgroundColor: theme.background, alignItems: 'center', justifyContent: 'center' }}>
+              <ActivityIndicator size="large" color={theme.primary} />
+              <Text style={{ marginTop: 14, color: theme.text, fontWeight: '800' }}>Applying update…</Text>
+              <Text style={{ marginTop: 6, color: theme.muted }}>This will only take a moment.</Text>
+            </View>
+          </Modal>
           </NavigationContainer>
           </InboxBadgeProvider>
           {/* Splash hiding logic mounted within providers to access context */}

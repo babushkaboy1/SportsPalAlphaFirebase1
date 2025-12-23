@@ -6,23 +6,89 @@ import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import { getStorage } from 'firebase-admin/storage';
+import { getMessaging } from 'firebase-admin/messaging';
 import { Expo, ExpoPushMessage } from 'expo-server-sdk';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as crypto from 'crypto';
+// @ts-ignore
+import * as forge from 'node-forge';
+// @ts-ignore - passkit-generator ships without typings
+import { PKPass } from 'passkit-generator';
 
 initializeApp();
 const db = getFirestore();
 const auth = getAuth();
 const storage = getStorage();
+const messaging = getMessaging();
 const expo = new Expo();
 
-async function getExpoTokensForUser(userId: string): Promise<string[]> {
+// Minimal 1x1 PNG to satisfy required pass assets (icon/logo)
+const PASS_ICON = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y2GsH0AAAAASUVORK5CYII=',
+  'base64'
+);
+
+// Sport to emoji mapping for pass display
+const SPORT_EMOJIS: Record<string, string> = {
+  basketball: '🏀',
+  running: '🏃',
+  soccer: '⚽',
+  hiking: '🥾',
+  gym: '🏋️',
+  calisthenics: '💪',
+  padel: '🎾',
+  tennis: '🎾',
+  cycling: '🚴',
+  swimming: '🏊',
+  badminton: '🏸',
+  volleyball: '🏐',
+  'table tennis': '🏓',
+  'table-tennis': '🏓',
+  boxing: '🥊',
+  yoga: '🧘',
+  'martial arts': '🥋',
+  karate: '🥋',
+  'american football': '🏈',
+  'american-football': '🏈',
+  cricket: '🏏',
+  golf: '⛳',
+  baseball: '⚾',
+  'field hockey': '🏑',
+  'field-hockey': '🏑',
+  'ice hockey': '🏒',
+  'ice-hockey': '🏒',
+};
+
+function getSportEmojis(sports: string[]): string {
+  if (!sports.length) return '🏃';
+  return sports
+    .slice(0, 5) // max 5 emojis
+    .map(s => SPORT_EMOJIS[s.toLowerCase().trim()] || '🎯')
+    .join(' ');
+}
+
+// Get all push tokens for a user (both Expo and FCM)
+async function getTokensForUser(userId: string): Promise<{ expoTokens: string[]; fcmTokens: string[] }> {
   try {
     const snap = await db.doc(`profiles/${userId}`).get();
     const data = snap.data() as any;
-    const tokens: string[] = Array.isArray(data?.expoPushTokens) ? data.expoPushTokens : [];
-    return tokens.filter((t) => Expo.isExpoPushToken(t));
+    const expoTokens: string[] = Array.isArray(data?.expoPushTokens) 
+      ? data.expoPushTokens.filter((t: string) => Expo.isExpoPushToken(t)) 
+      : [];
+    const fcmTokens: string[] = Array.isArray(data?.fcmPushTokens) 
+      ? data.fcmPushTokens 
+      : [];
+    return { expoTokens, fcmTokens };
   } catch (e) {
-    return [];
+    return { expoTokens: [], fcmTokens: [] };
   }
+}
+
+// Legacy function for backwards compatibility
+async function getExpoTokensForUser(userId: string): Promise<string[]> {
+  const { expoTokens } = await getTokensForUser(userId);
+  return expoTokens;
 }
 
 async function sendExpoNotifications(messages: ExpoPushMessage[]) {
@@ -34,6 +100,84 @@ async function sendExpoNotifications(messages: ExpoPushMessage[]) {
     } catch (e) {
       logger.warn('Expo push send failed for chunk', e);
     }
+  }
+}
+
+// Send FCM notifications (for Android - shows "SportsPal" as sender)
+async function sendFcmNotifications(
+  tokens: string[], 
+  title: string, 
+  body: string, 
+  data?: Record<string, string>
+) {
+  if (!tokens.length) return;
+  
+  const message = {
+    tokens,
+    notification: {
+      title,
+      body,
+    },
+    data: data || {},
+    android: {
+      priority: 'high' as const,
+      notification: {
+        channelId: 'default',
+        priority: 'high' as const,
+        defaultSound: true,
+        defaultVibrateTimings: true,
+      },
+    },
+  };
+
+  try {
+    const response = await messaging.sendEachForMulticast(message);
+    if (response.failureCount > 0) {
+      response.responses.forEach((resp, idx) => {
+        if (!resp.success) {
+          logger.warn(`FCM send failed for token ${idx}:`, resp.error);
+        }
+      });
+    }
+    logger.info(`FCM sent: ${response.successCount} success, ${response.failureCount} failed`);
+  } catch (e) {
+    logger.error('FCM send failed:', e);
+  }
+}
+
+// Send to all tokens for a user (FCM for Android, Expo for iOS)
+async function sendNotificationToUser(
+  userId: string,
+  title: string,
+  body: string,
+  data?: Record<string, any>
+) {
+  const { expoTokens, fcmTokens } = await getTokensForUser(userId);
+  
+  // Convert data values to strings for FCM
+  const stringData: Record<string, string> = {};
+  if (data) {
+    for (const [key, value] of Object.entries(data)) {
+      stringData[key] = String(value);
+    }
+  }
+
+  // Send to FCM tokens (Android)
+  if (fcmTokens.length > 0) {
+    await sendFcmNotifications(fcmTokens, title, body, stringData);
+  }
+
+  // Send to Expo tokens (iOS and fallback)
+  if (expoTokens.length > 0) {
+    const messages: ExpoPushMessage[] = expoTokens.map((to) => ({
+      to,
+      title,
+      body,
+      data: data || {},
+      sound: 'default',
+      priority: 'high',
+    }));
+    await sendExpoNotifications(messages);
   }
 }
 
@@ -76,20 +220,12 @@ export const onChatMessageCreated = onDocumentCreated(
 
     // Build messages for all recipient tokens
     const body = summarizeMessageBody(messageType, messageText);
+    const notifData = { type: 'chat', chatId, messageId, senderPhoto: senderPhoto || '' };
 
-    const tokenLists = await Promise.all(recipients.map((u) => getExpoTokensForUser(u)));
-    const tokens = tokenLists.flat();
-
-    const messages: ExpoPushMessage[] = tokens.map((to) => ({
-      to,
-      title: senderName,
-      body,
-      data: { type: 'chat', chatId, messageId, senderPhoto },
-      sound: 'default',
-      priority: 'high',
-    }));
-
-    await sendExpoNotifications(messages);
+    // Send notifications to all recipients using the unified function
+    await Promise.all(recipients.map((userId) => 
+      sendNotificationToUser(userId, senderName, body, notifData)
+    ));
   }
 );
 
@@ -101,9 +237,6 @@ export const onAppNotificationCreated = onDocumentCreated('notifications/{id}', 
   const type: string = notif.type;
   const fromUsername: string | undefined = notif.fromUsername || undefined;
   const activityId: string | undefined = notif.activityId || undefined;
-
-  const tokens = await getExpoTokensForUser(userId);
-  if (!tokens.length) return;
 
   let title = 'Notification';
   let body = 'You have a new notification';
@@ -118,16 +251,11 @@ export const onAppNotificationCreated = onDocumentCreated('notifications/{id}', 
     body = 'invited you to join an activity';
   }
 
-  const messages: ExpoPushMessage[] = tokens.map((to) => ({
-    to,
-    title,
-    body,
-    data: type === 'activity_invite' && activityId ? { type: 'activity_invite', activityId } : { type },
-    sound: 'default',
-    priority: 'high',
-  }));
+  const notifData = type === 'activity_invite' && activityId 
+    ? { type: 'activity_invite', activityId } 
+    : { type };
 
-  await sendExpoNotifications(messages);
+  await sendNotificationToUser(userId, title, body, notifData);
 });
 
 /**
@@ -257,6 +385,474 @@ export const handleDeepLink = onRequest(async (request, response) => {
   // For iOS and Android, try to open the app first via Universal Links / App Links
   // If app not installed, show the fallback page with store links
   response.send(fallbackHtml);
+});
+
+/**
+ * Generate Apple Wallet pass (.pkpass) for a user
+ * Env (set via functions:config or runtime env):
+ *   APPLE_TEAM_ID, APPLE_PASS_TYPE_ID, APPLE_P12_PASSWORD, APPLE_P12_PATH (default ./secrets/apple-pass.p12), optional APPLE_WWDR_PATH
+ * Deploy: firebase deploy --only functions:getAppleWalletPass
+ */
+export const getAppleWalletPass = onRequest({ 
+  timeoutSeconds: 20,
+  secrets: ["APPLE_TEAM_ID", "APPLE_PASS_TYPE_ID", "APPLE_P12_PASSWORD", "APPLE_P12_PATH"]
+}, async (req, res) => {
+  try {
+    if (req.method !== 'GET') {
+      res.status(405).send('Method not allowed');
+      return;
+    }
+
+    const userId = (req.query.userId as string | undefined)?.trim();
+    if (!userId) {
+      res.status(400).send('Missing userId');
+      return;
+    }
+
+    const teamId = process.env.APPLE_TEAM_ID;
+    const passTypeId = process.env.APPLE_PASS_TYPE_ID;
+    const p12Password = process.env.APPLE_P12_PASSWORD;
+    const p12Path = process.env.APPLE_P12_PATH || './secrets/apple-pass.p12';
+    const wwdrPath = process.env.APPLE_WWDR_PATH || './secrets/wwdr.pem';
+
+    if (!teamId || !passTypeId || !p12Password) {
+      res.status(500).send('Missing Apple Wallet configuration. Set APPLE_TEAM_ID, APPLE_PASS_TYPE_ID, APPLE_P12_PASSWORD.');
+      return;
+    }
+
+    const resolvedP12Path = path.resolve(__dirname, '..', p12Path);
+    if (!fs.existsSync(resolvedP12Path)) {
+      res.status(500).send('Apple pass certificate not found on server. Upload secrets and redeploy.');
+      return;
+    }
+
+    let wwdrBuffer: Buffer | undefined;
+    const resolvedWwdr = path.resolve(__dirname, '..', wwdrPath);
+    if (fs.existsSync(resolvedWwdr)) {
+      wwdrBuffer = fs.readFileSync(resolvedWwdr);
+    } else {
+      logger.warn(`WWDR certificate not found at ${resolvedWwdr}`);
+    }
+
+
+
+    // Load user profile (users/{id} or fallback profiles/{id})
+    const userDoc = await db.doc(`users/${userId}`).get();
+    let userData: any = userDoc.data();
+    if (!userData) {
+      const profileDoc = await db.doc(`profiles/${userId}`).get();
+      userData = profileDoc.data();
+    }
+
+    if (!userData) {
+      res.status(404).send('User not found');
+      return;
+    }
+
+    const username = userData.username || userData.username_lower || 'Member';
+    const sportsArray: string[] = Array.isArray(userData.sports)
+      ? userData.sports
+      : Array.isArray(userData.selectedSports)
+        ? userData.selectedSports
+        : [];
+    const sportsEmojis = getSportEmojis(sportsArray);
+    const sportsValue = sportsArray.length ? sportsArray.slice(0, 3).join(', ') : 'Active Athlete';
+    const createdAt = userData.createdAt?.toDate ? userData.createdAt.toDate() : (userData.createdAt?._seconds ? new Date(userData.createdAt._seconds * 1000) : null);
+    const memberSinceYear = createdAt ? String(createdAt.getFullYear()) : '2025';
+    const memberSinceFormatted = createdAt 
+      ? createdAt.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+      : 'Member';
+    
+    // Parse birthday if available
+    let birthdayDisplay = '';
+    if (userData.birthday) {
+      try {
+        const bday = userData.birthday?.toDate ? userData.birthday.toDate() : new Date(userData.birthday);
+        birthdayDisplay = bday.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      } catch { /* ignore */ }
+    }
+
+    // Format sports list nicely (capitalize first letter)
+    const formatSport = (sport: string) => sport.charAt(0).toUpperCase() + sport.slice(1).toLowerCase();
+    const sportsFormatted = sportsArray.length 
+      ? sportsArray.slice(0, 3).map(formatSport).join(' • ')
+      : 'Active Athlete';
+
+    // Extract cert and key from P12 using node-forge
+    const p12Buffer = fs.readFileSync(resolvedP12Path);
+    const p12Asn1 = forge.asn1.fromDer(p12Buffer.toString('binary'));
+    const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, p12Password);
+
+    // Get certificate
+    const certBags = p12.getBags({ bagType: forge.pki.oids.certBag });
+    const certBag = certBags[forge.pki.oids.certBag]?.[0];
+    if (!certBag) {
+      throw new Error('No certificate found in P12');
+    }
+    const cert = certBag.cert;
+    const signerCert = forge.pki.certificateToPem(cert);
+
+    // Get private key
+    let keyBag = p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag })[forge.pki.oids.pkcs8ShroudedKeyBag]?.[0];
+    if (!keyBag) {
+      keyBag = p12.getBags({ bagType: forge.pki.oids.keyBag })[forge.pki.oids.keyBag]?.[0];
+    }
+    if (!keyBag) {
+      throw new Error('No private key found in P12');
+    }
+    const key = keyBag.key;
+    const signerKey = forge.pki.privateKeyToPem(key);
+
+    const certificates: any = {
+      wwdr: wwdrBuffer,
+      signerCert,
+      signerKey,
+    };
+
+    // Load real logo and icon assets
+    const logoPath = path.resolve(__dirname, '..', 'secrets/logo.png');
+    const iconPath = path.resolve(__dirname, '..', 'secrets/icon.png');
+    const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : PASS_ICON;
+    const iconBuffer = fs.existsSync(iconPath) ? fs.readFileSync(iconPath) : PASS_ICON;
+
+    // Build the pass.json content - Premium SportsPal Pass
+    const passJson = {
+      formatVersion: 1,
+      passTypeIdentifier: passTypeId,
+      teamIdentifier: teamId,
+      serialNumber: userId,
+      organizationName: 'SportsPal',
+      description: 'SportsPal Member Pass',
+      backgroundColor: 'rgb(18,18,18)', // Dark theme background #121212
+      foregroundColor: 'rgb(26,233,239)', // Primary cyan #1ae9ef
+      labelColor: 'rgb(160,160,160)', // Subtle gray for labels
+      logoText: 'SportsPal',
+      generic: {
+        headerFields: [
+          { key: 'memberSince', label: 'MEMBER SINCE', value: memberSinceFormatted },
+        ],
+        primaryFields: [
+          { key: 'username', label: '', value: username },
+        ],
+        secondaryFields: [
+          { key: 'sports', label: 'SPORTS', value: sportsFormatted },
+        ],
+        auxiliaryFields: birthdayDisplay ? [
+          { key: 'birthday', label: 'BIRTHDAY', value: birthdayDisplay },
+        ] : [],
+        backFields: [
+          { key: 'uid', label: 'Member ID', value: userId },
+          { key: 'appInfo', label: 'About SportsPal', value: 'Find sports partners, join activities, and stay active with your community!' },
+          { key: 'website', label: 'Website', value: 'sportspal.app' },
+          { key: 'support', label: 'Support', value: 'support@sportspal.app' },
+        ],
+      },
+      barcodes: [
+        {
+          format: 'PKBarcodeFormatQR',
+          message: `https://sportspal.app/profile/${userId}`,
+          messageEncoding: 'iso-8859-1',
+          altText: `@${username}`,
+        },
+      ],
+    };
+
+    // Try to fetch user's profile picture as thumbnail
+    let thumbnailBuffer: Buffer | null = null;
+    const photoUrl = userData.photo || userData.photoURL;
+    if (photoUrl && typeof photoUrl === 'string') {
+      try {
+        const response = await fetch(photoUrl);
+        if (response.ok) {
+          const arrayBuffer = await response.arrayBuffer();
+          thumbnailBuffer = Buffer.from(arrayBuffer);
+        }
+      } catch (e) {
+        logger.warn('Could not fetch profile picture for pass thumbnail', e);
+      }
+    }
+
+    // Build the pass files
+    const passFiles: Record<string, Buffer> = {
+      'pass.json': Buffer.from(JSON.stringify(passJson)),
+      'icon.png': iconBuffer,
+      'icon@2x.png': iconBuffer,
+      'logo.png': logoBuffer,
+      'logo@2x.png': logoBuffer,
+    };
+
+    // Add thumbnail if we have a profile picture
+    if (thumbnailBuffer) {
+      passFiles['thumbnail.png'] = thumbnailBuffer;
+      passFiles['thumbnail@2x.png'] = thumbnailBuffer;
+    }
+
+    // Create pass using Buffer model (v3 API)
+    const pass = new PKPass(passFiles, certificates);
+
+    const buffer: Buffer = await pass.getAsBuffer();
+
+    res.setHeader('Content-Type', 'application/vnd.apple.pkpass');
+    res.setHeader('Content-Disposition', 'attachment; filename="sportspal.pkpass"');
+    res.status(200).send(buffer);
+  } catch (err: any) {
+    logger.error('getAppleWalletPass failed', err);
+    res.status(500).send('Failed to generate pass');
+  }
+});
+
+/**
+ * Generate Google Wallet pass (JWT save URL) for a user
+ * Returns a URL that opens Google Wallet to save the pass
+ * 
+ * Required secrets:
+ *   GOOGLE_WALLET_ISSUER_ID - Your Google Wallet Issuer ID
+ *   GOOGLE_WALLET_KEY_PATH - Path to service account JSON (default: ./secrets/google-wallet-key.json)
+ * 
+ * Deploy: firebase deploy --only functions:getGoogleWalletPassUrl
+ */
+export const getGoogleWalletPassUrl = onRequest({ 
+  timeoutSeconds: 20,
+  cors: true,
+}, async (req, res) => {
+  try {
+    if (req.method !== 'GET') {
+      res.status(405).send('Method not allowed');
+      return;
+    }
+
+    const userId = (req.query.userId as string | undefined)?.trim();
+    if (!userId) {
+      res.status(400).send('Missing userId');
+      return;
+    }
+
+    // Configuration
+    const issuerId = process.env.GOOGLE_WALLET_ISSUER_ID || '3388000000023034306';
+    const keyPath = process.env.GOOGLE_WALLET_KEY_PATH || './secrets/google-wallet-key.json';
+
+    // Load service account key
+    const resolvedKeyPath = path.resolve(__dirname, '..', keyPath);
+    if (!fs.existsSync(resolvedKeyPath)) {
+      logger.error(`Google Wallet key not found at ${resolvedKeyPath}`);
+      res.status(500).send('Google Wallet configuration not found. Upload service account key and redeploy.');
+      return;
+    }
+
+    const serviceAccountKey = JSON.parse(fs.readFileSync(resolvedKeyPath, 'utf8'));
+    if (!serviceAccountKey.private_key || !serviceAccountKey.client_email) {
+      res.status(500).send('Invalid service account key format.');
+      return;
+    }
+
+    // Load user profile
+    const userDoc = await db.doc(`users/${userId}`).get();
+    let userData: any = userDoc.data();
+    if (!userData) {
+      const profileDoc = await db.doc(`profiles/${userId}`).get();
+      userData = profileDoc.data();
+    }
+
+    if (!userData) {
+      res.status(404).send('User not found');
+      return;
+    }
+
+    const username = userData.username || userData.username_lower || 'Member';
+    const sportsArray: string[] = Array.isArray(userData.sports)
+      ? userData.sports
+      : Array.isArray(userData.selectedSports)
+        ? userData.selectedSports
+        : [];
+    
+    // Format sports list nicely (capitalize first letter)
+    const formatSport = (sport: string) => sport.charAt(0).toUpperCase() + sport.slice(1).toLowerCase();
+    const sportsFormatted = sportsArray.length 
+      ? sportsArray.slice(0, 4).map(formatSport).join(' • ')
+      : 'Active Athlete';
+    
+    const createdAt = userData.createdAt?.toDate 
+      ? userData.createdAt.toDate() 
+      : (userData.createdAt?._seconds ? new Date(userData.createdAt._seconds * 1000) : null);
+    const memberSinceFormatted = createdAt 
+      ? createdAt.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+      : 'SportsPal Member';
+    
+    // Parse birthday if available
+    let birthdayDisplay = '';
+    if (userData.birthday) {
+      try {
+        const bday = userData.birthday?.toDate ? userData.birthday.toDate() : new Date(userData.birthday);
+        birthdayDisplay = bday.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      } catch { /* ignore */ }
+    }
+
+    // Get profile photo URL for header image
+    const photoUrl = userData.photo || userData.photoURL || '';
+
+    // Create a unique object ID for this pass
+    const objectId = `${issuerId}.sportspal-${userId}`;
+
+    // Build text modules for the pass
+    const textModulesData = [
+      {
+        id: 'sports',
+        header: 'SPORTS',
+        body: sportsFormatted,
+      },
+    ];
+    
+    // Add birthday if available
+    if (birthdayDisplay) {
+      textModulesData.push({
+        id: 'birthday',
+        header: 'BIRTHDAY',
+        body: birthdayDisplay,
+      });
+    }
+    
+    // Add Member ID
+    textModulesData.push({
+      id: 'memberId',
+      header: 'MEMBER ID',
+      body: userId.slice(0, 12) + '...',
+    });
+
+    // Build the Generic Pass object - Premium Design
+    // See: https://developers.google.com/wallet/generic/rest/v1/genericobject
+    const genericObject = {
+      id: objectId,
+      classId: `${issuerId}.sportspal-pass`,
+      genericType: 'GENERIC_TYPE_UNSPECIFIED',
+      hexBackgroundColor: '#121212', // Dark theme
+      logo: {
+        sourceUri: {
+          uri: 'https://sportspal-1b468.web.app/logo.png',
+        },
+        contentDescription: {
+          defaultValue: {
+            language: 'en',
+            value: 'SportsPal',
+          },
+        },
+      },
+      cardTitle: {
+        defaultValue: {
+          language: 'en',
+          value: 'SportsPal',
+        },
+      },
+      subheader: {
+        defaultValue: {
+          language: 'en',
+          value: `Member since ${memberSinceFormatted}`,
+        },
+      },
+      header: {
+        defaultValue: {
+          language: 'en',
+          value: username,
+        },
+      },
+      textModulesData,
+      linksModuleData: {
+        uris: [
+          {
+            uri: 'https://sportspal.app',
+            description: 'Visit SportsPal',
+            id: 'website',
+          },
+          {
+            uri: `https://sportspal.app/profile/${userId}`,
+            description: 'View Profile',
+            id: 'profile',
+          },
+        ],
+      },
+      barcode: {
+        type: 'QR_CODE',
+        value: `https://sportspal.app/profile/${userId}`,
+        alternateText: `@${username}`,
+      },
+      heroImage: photoUrl ? {
+        sourceUri: {
+          uri: photoUrl,
+        },
+        contentDescription: {
+          defaultValue: {
+            language: 'en',
+            value: `${username}'s profile`,
+          },
+        },
+      } : undefined,
+    };
+
+    // Remove undefined heroImage if no photo
+    if (!photoUrl) {
+      delete genericObject.heroImage;
+    }
+
+    // Define the Generic Pass Class (will be created if it doesn't exist)
+    const classId = `${issuerId}.sportspal-pass`;
+    const genericClass = {
+      id: classId,
+      issuerName: 'SportsPal',
+      reviewStatus: 'DRAFT',  // Use DRAFT for testing, change to UNDER_REVIEW for production
+    };
+
+    // Build JWT claims
+    const now = Math.floor(Date.now() / 1000);
+    const claims = {
+      iss: serviceAccountKey.client_email,
+      aud: 'google',
+      typ: 'savetowallet',
+      iat: now,
+      origins: ['https://sportspal-1b468.web.app', 'https://sportspal.app'],
+      payload: {
+        genericClasses: [genericClass],
+        genericObjects: [genericObject],
+      },
+    };
+
+    // Sign the JWT with RS256 using Node's crypto module
+    const header = {
+      alg: 'RS256',
+      typ: 'JWT',
+    };
+
+    const base64UrlEncode = (data: string | Buffer): string => {
+      const base64 = Buffer.isBuffer(data) 
+        ? data.toString('base64')
+        : Buffer.from(data).toString('base64');
+      return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+    };
+
+    const headerEncoded = base64UrlEncode(JSON.stringify(header));
+    const claimsEncoded = base64UrlEncode(JSON.stringify(claims));
+    const signatureInput = `${headerEncoded}.${claimsEncoded}`;
+
+    // Create signature using Node's crypto module (RS256 = RSA + SHA256)
+    const sign = crypto.createSign('RSA-SHA256');
+    sign.update(signatureInput);
+    sign.end();
+    const signatureBuffer = sign.sign(serviceAccountKey.private_key);
+    const signatureBase64Url = base64UrlEncode(signatureBuffer);
+
+    const jwt = `${signatureInput}.${signatureBase64Url}`;
+
+    // Build the save URL
+    const saveUrl = `https://pay.google.com/gp/v/save/${jwt}`;
+
+    logger.info(`Generated Google Wallet pass URL for user ${userId}, objectId: ${objectId}`);
+
+    // Return the URL as JSON
+    res.setHeader('Content-Type', 'application/json');
+    res.status(200).json({ saveUrl, objectId });
+
+  } catch (err: any) {
+    logger.error('getGoogleWalletPassUrl failed', { error: err.message, stack: err.stack });
+    res.status(500).send(`Failed to generate Google Wallet pass URL: ${err.message}`);
+  }
 });
 
 /**

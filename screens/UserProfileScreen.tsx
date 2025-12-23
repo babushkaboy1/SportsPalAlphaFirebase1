@@ -89,33 +89,26 @@ const UserProfileScreen = () => {
 
   const backSwipeResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponderCapture: (_evt, gestureState) => {
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_evt, gestureState) => {
         if (activeTabRef.current !== 'games') return false;
         if (!navigation.canGoBack()) return false;
-        return gestureState.x0 <= 30;
+        // Only trigger if starting from very left edge and swiping right
+        if (gestureState.x0 > 40) return false;
+        if (gestureState.dx < 15) return false;
+        if (Math.abs(gestureState.dy) > Math.abs(gestureState.dx)) return false;
+        return true;
       },
-      onMoveShouldSetPanResponderCapture: (_evt, gestureState) => {
-        if (activeTabRef.current !== 'games') return false;
-        if (!navigation.canGoBack()) return false;
-        if (gestureState.dx <= 0) return false;
-        if (Math.abs(gestureState.dx) <= Math.abs(gestureState.dy)) return false;
-        return Math.abs(gestureState.dx) > 6;
-      },
+      onMoveShouldSetPanResponderCapture: () => false,
+      onPanResponderMove: () => {},
       onPanResponderRelease: (_, gestureState) => {
         if (activeTabRef.current !== 'games') return;
         if (!navigation.canGoBack()) return;
-        if (gestureState.dx > 30 && Math.abs(gestureState.dy) < 60) {
+        if (gestureState.x0 <= 40 && gestureState.dx > 80 && Math.abs(gestureState.dy) < 100) {
           navigation.goBack();
         }
       },
-      onPanResponderTerminate: (_, gestureState) => {
-        if (activeTabRef.current !== 'games') return;
-        if (!navigation.canGoBack()) return;
-        if (gestureState.dx > 30 && Math.abs(gestureState.dy) < 60) {
-          navigation.goBack();
-        }
-      },
-      onPanResponderTerminationRequest: () => false,
+      onPanResponderTerminationRequest: () => true,
     })
   ).current;
 

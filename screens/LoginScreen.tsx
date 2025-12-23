@@ -21,10 +21,15 @@ import { auth, db } from '../firebaseConfig';
 import { doc, getDoc } from 'firebase/firestore';
 import * as Google from 'expo-auth-session/providers/google';
 import * as Facebook from 'expo-auth-session/providers/facebook';
+import * as WebBrowser from 'expo-web-browser';
+import { makeRedirectUri, ResponseType } from 'expo-auth-session';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import * as Crypto from 'expo-crypto';
 import Svg, { Path } from 'react-native-svg';
 import { GOOGLE_ANDROID_CLIENT_ID, GOOGLE_IOS_CLIENT_ID, GOOGLE_WEB_CLIENT_ID, FACEBOOK_APP_ID } from '@env';
+
+// Required for auth-session to properly close the browser and return to the app
+WebBrowser.maybeCompleteAuthSession();
 
 // Google Logo Component (multicolor)
 const GoogleLogo = () => (
@@ -55,10 +60,23 @@ const LoginScreen = ({ navigation }: any) => {
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  // Build platform-specific redirect URI for Google auth
+  const iosClientId = GOOGLE_IOS_CLIENT_ID || '797980453879-ceat11cgpq7o6svdfpia6tu70rl1o5at.apps.googleusercontent.com';
+  const reversedIosClientId = `com.googleusercontent.apps.${iosClientId.replace('.apps.googleusercontent.com', '')}`;
+  const redirectUri = Platform.select({
+    ios: makeRedirectUri({ native: `${reversedIosClientId}:/oauthredirect` }),
+    android: makeRedirectUri({ scheme: 'sportspal' }),
+    default: makeRedirectUri({ scheme: 'sportspal' }),
+  });
+
   const [request, response, promptAsync] = Google.useAuthRequest({
-    androidClientId: GOOGLE_ANDROID_CLIENT_ID || '690971568236-d4ijqaml0rt2dv98eve2bckmvtf13l1c.apps.googleusercontent.com',
-    iosClientId: GOOGLE_IOS_CLIENT_ID || '690971568236-qnqatg8h63re13j433l1oj22aiqktvts.apps.googleusercontent.com',
-    webClientId: GOOGLE_WEB_CLIENT_ID || '690971568236-1slb2hq568pk1cqnpo44aioi5549avl7.apps.googleusercontent.com',
+    androidClientId: GOOGLE_ANDROID_CLIENT_ID || '797980453879-2s8joa3gkv6n5a70ekuv1jtgmt916hig.apps.googleusercontent.com',
+    iosClientId: GOOGLE_IOS_CLIENT_ID || '797980453879-ceat11cgpq7o6svdfpia6tu70rl1o5at.apps.googleusercontent.com',
+    webClientId: GOOGLE_WEB_CLIENT_ID || '797980453879-us77gkeq4najb1bno3ftbounlqjc5vdn.apps.googleusercontent.com',
+    redirectUri,
+    // Default responseType = code; auto-exchange will give us an id_token in authentication.idToken
+    scopes: ['openid', 'profile', 'email'],
   });
   const [fbRequest, fbResponse, fbPromptAsync] = Facebook.useAuthRequest({
     clientId: FACEBOOK_APP_ID || '',
@@ -91,8 +109,15 @@ const LoginScreen = ({ navigation }: any) => {
   useEffect(() => {
     (async () => {
       if (response?.type === 'success') {
-        const { id_token } = response.params as any;
-        const googleCred = GoogleAuthProvider.credential(id_token);
+        const params: any = response.params || {};
+        const idToken = params.id_token || (response as any)?.authentication?.idToken;
+        if (!idToken) {
+          console.warn('Google auth response missing id_token');
+          Alert.alert('Google Sign-In', 'Google sign-in did not return an ID token. Please try again.');
+          flowRef.current = { mode: null, forLink: false };
+          return;
+        }
+        const googleCred = GoogleAuthProvider.credential(idToken);
         if (flowRef.current.forLink) {
           // Sign in with existing method (Google), then link pending
           try {
@@ -455,7 +480,10 @@ const LoginScreen = ({ navigation }: any) => {
           {/* Google Login */}
           <TouchableOpacity
             style={styles.googleButton}
-            onPress={() => { flowRef.current = { mode: 'google', forLink: false }; promptAsync(); }}
+            onPress={() => {
+              flowRef.current = { mode: 'google', forLink: false };
+              promptAsync();
+            }}
           >
             <View style={styles.socialIcon}>
               <GoogleLogo />
