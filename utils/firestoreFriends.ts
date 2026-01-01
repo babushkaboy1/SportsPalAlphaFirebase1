@@ -192,12 +192,18 @@ export async function cancelFriendRequest(targetUserId: string) {
     await Promise.all(
       snap.docs.map(async (d) => {
         try {
+          // First try to delete the notification
           await deleteDoc(d.ref);
         } catch (e) {
-          // If delete is not permitted (e.g., rules or already handled), best-effort mark as read/canceled
+          // If delete fails, try to mark as canceled only (simpler update)
           try {
-            await updateDoc(d.ref, { read: true, canceled: true });
-          } catch {}
+            await updateDoc(d.ref, { canceled: true });
+          } catch {
+            // If that fails too (maybe read is false), try with both read and canceled
+            try {
+              await updateDoc(d.ref, { read: true, canceled: true });
+            } catch {}
+          }
         }
       })
     );

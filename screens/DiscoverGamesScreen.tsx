@@ -1,11 +1,18 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { auth } from '../firebaseConfig';
+import { useActivityContext } from '../context/ActivityContext';
 
 // Helper component for host username - now uses cached creatorUsername
 function HostUsername({ activity }: { activity: any }) {
   const { theme } = useTheme();
+  const { isUserBlockedById } = useActivityContext();
+  
+  // Check if creator is blocked
+  if (activity.creatorId && isUserBlockedById(activity.creatorId)) {
+    return <Text style={{ fontSize: 14, color: theme.muted, fontWeight: '500' }}>Blocked User</Text>;
+  }
   
   // Use cached creatorUsername from ActivityContext (no more fetching!)
   let displayName = activity.creatorUsername || activity.creator || 'Unknown';
@@ -16,6 +23,55 @@ function HostUsername({ activity }: { activity: any }) {
   }
   
   return <Text style={{ fontSize: 14, color: theme.muted, fontWeight: '500' }}>{displayName}</Text>;
+}
+
+// Helper component for blocked user card in search results
+function BlockedUserSearchCard({ user }: { user: { uid: string } }) {
+  const { theme } = useTheme();
+  const navigation = useNavigation();
+  
+  return (
+    <TouchableOpacity
+      style={{
+        backgroundColor: theme.card,
+        borderRadius: 16,
+        padding: 16,
+        marginBottom: 12,
+        borderLeftWidth: 4,
+        borderLeftColor: theme.muted,
+        opacity: 0.6,
+      }}
+      onPress={() => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        (navigation as any).navigate('UserProfile', { userId: user.uid });
+      }}
+    >
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <View style={{ 
+          width: 56, 
+          height: 56, 
+          borderRadius: 28, 
+          backgroundColor: theme.muted, 
+          justifyContent: 'center', 
+          alignItems: 'center',
+          borderWidth: 2,
+          borderColor: theme.muted,
+        }}>
+          <Ionicons name="ban" size={24} color={theme.text} />
+        </View>
+        <View style={{ flex: 1, marginLeft: 14 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Text style={{ fontSize: 18, fontWeight: '700', color: theme.muted }}>Blocked User</Text>
+            <View style={{ backgroundColor: `${theme.danger}20`, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 }}>
+              <Text style={{ fontSize: 11, fontWeight: '600', color: theme.danger }}>BLOCKED</Text>
+            </View>
+          </View>
+          <Text style={{ fontSize: 13, color: theme.muted, marginTop: 4 }}>Tap to view profile</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={22} color={theme.muted} />
+      </View>
+    </TouchableOpacity>
+  );
 }
 
 import {
@@ -46,7 +102,6 @@ import type { NavigationProp } from '@react-navigation/native'; // ✅ typed, UI
 import { ActivityIcon } from '../components/ActivityIcons';
 import { fetchAllActivities } from '../utils/firestoreActivities';
 import { activities as fakeActivities, Activity } from '../data/activitiesData';
-import { useActivityContext } from '../context/ActivityContext';
 import { getDisplayCreatorUsername } from '../utils/getDisplayCreatorUsername';
 import { shareActivity } from '../utils/deepLinking';
 import { db } from '../firebaseConfig';
@@ -123,7 +178,7 @@ type DiscoverNav = NavigationProp<RootStackParamList, 'ActivityDetails'>;
 const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation }) => {
   const { theme } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
-  const { allActivities, isActivityJoined, toggleJoinActivity, profile, reloadAllActivities, userLocation, discoveryRange: contextDiscoveryRange } = useActivityContext();
+  const { allActivities, isActivityJoined, toggleJoinActivity, profile, reloadAllActivities, userLocation, discoveryRange: contextDiscoveryRange, isUserBlockedById } = useActivityContext();
   const insets = useSafeAreaInsets();
 
   // Discovery range from context (loaded from AsyncStorage in ActivityContext)
@@ -805,7 +860,6 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
       <TouchableOpacity
         style={styles.card}
         onPress={() => navigation.navigate('ActivityDetails', { activityId: item.id })}
-        activeOpacity={0.9}
       >
         <View style={styles.cardHeader}>
           <View style={styles.cardHeaderLeft}>
@@ -898,7 +952,6 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
           (navigation as any).navigate('UserProfile', { userId: user.uid });
         }}
-        activeOpacity={0.9}
       >
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
           <UserAvatar
@@ -1642,7 +1695,9 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
                   {isSearchingUsers && <ActivityIndicator size="small" color={theme.primary} style={{ marginLeft: 8 }} />}
                 </View>
                 {searchedUsers.map((user) => (
-                  <UserProfileCard key={user.uid} user={user} activitiesCount={activitiesPerUser[user.uid] || 0} />
+                  isUserBlockedById(user.uid) 
+                    ? <BlockedUserSearchCard key={user.uid} user={user} />
+                    : <UserProfileCard key={user.uid} user={user} activitiesCount={activitiesPerUser[user.uid] || 0} />
                 ))}
                 {filteredActivities.length > 0 && (
                   <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 16, marginBottom: 8, gap: 8 }}>

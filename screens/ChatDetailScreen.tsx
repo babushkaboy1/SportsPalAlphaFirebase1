@@ -49,6 +49,7 @@ import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../types/navigation';
 import { uploadChatImage } from '../utils/imageUtils';
 import { muteChat, unmuteChat, isChatMuted } from '../utils/firestoreMutes';
+import { isBlockedByUser } from '../utils/firestoreBlocks';
 import { sendFriendRequest, cancelFriendRequest } from '../utils/firestoreFriends';
 import { useTheme } from '../context/ThemeContext';
 import { useActivityContext } from '../context/ActivityContext';
@@ -644,7 +645,7 @@ const ChatDetailScreen = () => {
   const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
   const route = useRoute<any>();
   const { chatId } = route.params;
-  const { allActivities, joinedActivities } = useActivityContext();
+  const { allActivities, joinedActivities, blockedUsers, isUserBlockedById } = useActivityContext();
   const { setCurrentChatId } = useInAppNotification();
 
   // Track when user is viewing this chat (suppress notifications)
@@ -691,6 +692,7 @@ const ChatDetailScreen = () => {
   const [toastVisible, setToastVisible] = useState(false);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
+  const [isBlockedByPeer, setIsBlockedByPeer] = useState(false); // They blocked us
   const [reactionsModalVisible, setReactionsModalVisible] = useState(false);
   const [selectedMessageReactions, setSelectedMessageReactions] = useState<Array<{ userId: string; emoji: string }>>([]);
 
@@ -721,6 +723,17 @@ const ChatDetailScreen = () => {
     prevHeight: number;
   } | null>(null);
 
+  // ========== CHECK IF OTHER USER IS BLOCKED (DM only) - bidirectional ==========
+  const isOtherUserBlocked = useMemo(() => {
+    if (!chatMeta.isDm || blockedUsers.length === 0) return false;
+    const me = auth.currentUser?.uid;
+    const otherUser = chatMeta.participants?.find(uid => uid !== me);
+    return otherUser ? blockedUsers.includes(otherUser) : false;
+  }, [chatMeta.isDm, chatMeta.participants, blockedUsers]);
+  
+  // Combined: DM is blocked if we blocked them OR they blocked us
+  const isDmBlocked = isOtherUserBlocked || isBlockedByPeer;
+
   // ========== TOAST ==========
   const showToast = useCallback((msg: string) => {
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
@@ -740,6 +753,21 @@ const ChatDetailScreen = () => {
     };
     checkMuted();
   }, [chatId]);
+
+  // ========== CHECK IF DM PEER HAS BLOCKED US (bidirectional) ==========
+  useEffect(() => {
+    const checkBlockedByPeer = async () => {
+      if (chatMeta.isDm && chatMeta.dmPeer?.uid) {
+        try {
+          const blocked = await isBlockedByUser(chatMeta.dmPeer.uid);
+          setIsBlockedByPeer(blocked);
+        } catch (e) {
+          console.log('Could not check if blocked by peer:', e);
+        }
+      }
+    };
+    checkBlockedByPeer();
+  }, [chatMeta.isDm, chatMeta.dmPeer?.uid]);
 
   // ========== RELOAD MUTE STATE WHEN SCREEN IS FOCUSED ==========
   useFocusEffect(
@@ -1596,6 +1624,7 @@ const ChatDetailScreen = () => {
   const [inviteSelection, setInviteSelection] = useState<Record<string, boolean>>({});
   const [selectedInvitee, setSelectedInvitee] = useState<Profile | null>(null);
   const [busy, setBusy] = useState(false);
+  const [dmOptionsModalVisible, setDmOptionsModalVisible] = useState(false);
 
   // ========== LOAD PARTICIPANTS ==========
   useEffect(() => {
@@ -2029,13 +2058,18 @@ const ChatDetailScreen = () => {
     const { isFirst, isLast } = getMessageClusterFlags(index);
     const isOwn = item.senderId === auth.currentUser?.uid;
     
+    // Check if sender is blocked
+    const isSenderBlocked = isUserBlockedById(item.senderId);
+    
     // Ensure sender has all required fields with fallbacks
     const senderProfile = profiles[item.senderId];
     const sender: Profile = {
       uid: item.senderId,
-      username: senderProfile?.username || 'User',
-      photo: senderProfile?.photo || senderProfile?.photoURL,
-      photoURL: senderProfile?.photoURL || senderProfile?.photo,
+      // Show "Blocked User" for blocked users (but not for own messages)
+      username: isSenderBlocked && !isOwn ? 'Blocked User' : (senderProfile?.username || 'User'),
+      // Hide photo for blocked users
+      photo: isSenderBlocked && !isOwn ? undefined : (senderProfile?.photo || senderProfile?.photoURL),
+      photoURL: isSenderBlocked && !isOwn ? undefined : (senderProfile?.photoURL || senderProfile?.photo),
     };
     
     const replyToMessage = item.replyToId 
@@ -2044,6 +2078,12 @@ const ChatDetailScreen = () => {
     const replySender = replyToMessage 
       ? profiles[replyToMessage.senderId] 
       : undefined;
+    
+    // Check if reply sender is blocked
+    const isReplySenderBlocked = replyToMessage ? isUserBlockedById(replyToMessage.senderId) : false;
+    const maskedReplySender = replySender && isReplySenderBlocked 
+      ? { ...replySender, username: 'Blocked User', photo: undefined, photoURL: undefined }
+      : replySender;
 
     const readReceipts = getReadReceipts(item, isOwn, index);
 
@@ -2074,13 +2114,13 @@ const ChatDetailScreen = () => {
           isLast={isLast}
           sender={sender}
           replyToMessage={replyToMessage}
-          replySender={replySender}
+          replySender={maskedReplySender}
           reactions={reactionsMap[item.id] || []}
           myReaction={myReactions[item.id]}
           showReactionPicker={reactionPickerId === item.id}
           onLongPress={async () => {
-            // Refresh profile if missing photo or has generic username
-            if (item.senderId && (!sender.photo || sender.username === 'User')) {
+            // Refresh profile if missing photo or has generic username (skip for blocked users)
+            if (item.senderId && !isSenderBlocked && (!sender.photo || sender.username === 'User')) {
               try {
                 const fresh = await getCachedProfile(item.senderId);
                 if (fresh && (fresh.photo || fresh.photoURL)) {
@@ -2115,7 +2155,11 @@ const ChatDetailScreen = () => {
             // Spotlight layout removed
           }}
           onImagePress={() => setViewerUri(item.text)}
-          onUserPress={(uid) => navigation.navigate('UserProfile', { userId: uid })}
+          onUserPress={(uid) => {
+            // Don't navigate to blocked user's profile
+            if (isUserBlockedById(uid)) return;
+            navigation.navigate('UserProfile', { userId: uid });
+          }}
           onClosePicker={() => setReactionPickerId(null)}
           onReactionsPress={() => {
             setSelectedMessageReactions(reactionsMap[item.id] || []);
@@ -2160,6 +2204,9 @@ const ChatDetailScreen = () => {
     if (chatMeta.isDm && chatMeta.dmPeer) {
       const isFriend = myFriendIds.includes(chatMeta.dmPeer.uid);
       const isRequested = myRequestsSent.includes(chatMeta.dmPeer.uid);
+      const isPeerBlocked = isUserBlockedById(chatMeta.dmPeer.uid);
+      // Combined: any block relationship (we blocked them OR they blocked us)
+      const hasBlockRelationship = isPeerBlocked || isBlockedByPeer;
 
       return (
         <>
@@ -2167,57 +2214,62 @@ const ChatDetailScreen = () => {
             onPress={() => navigation.navigate('UserProfile', { userId: chatMeta.dmPeer!.uid })}
             activeOpacity={0.8}
           >
-            <UserAvatar
-              photoUrl={chatMeta.dmPeer.photo || chatMeta.dmPeer.photoURL}
-              username={chatMeta.dmPeer.username}
-              size={38}
-              style={styles.headerImage}
-            />
+            {hasBlockRelationship ? (
+              <View style={{
+                width: 38,
+                height: 38,
+                borderRadius: 19,
+                backgroundColor: theme.muted,
+                justifyContent: 'center',
+                alignItems: 'center',
+              }}>
+                <Ionicons name="ban" size={18} color={theme.text} />
+              </View>
+            ) : (
+              <UserAvatar
+                photoUrl={chatMeta.dmPeer.photo || chatMeta.dmPeer.photoURL}
+                username={chatMeta.dmPeer.username}
+                size={38}
+                style={styles.headerImage}
+              />
+            )}
           </TouchableOpacity>
           <View style={{ flex: 1, marginLeft: 10 }}>
             <TouchableOpacity 
               onPress={() => navigation.navigate('UserProfile', { userId: chatMeta.dmPeer!.uid })}
               activeOpacity={0.7}
             >
-              <Text style={styles.headerTitle} numberOfLines={1}>
-                {chatMeta.dmPeer.username}
-              </Text>
+              {hasBlockRelationship ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Text style={[styles.headerTitle, { color: theme.muted }]} numberOfLines={1}>Blocked User</Text>
+                  <View style={{ backgroundColor: `${theme.danger}20`, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
+                    <Text style={{ fontSize: 10, fontWeight: '600', color: theme.danger }}>BLOCKED</Text>
+                  </View>
+                </View>
+              ) : (
+                <Text style={styles.headerTitle} numberOfLines={1}>
+                  {chatMeta.dmPeer.username}
+                </Text>
+              )}
             </TouchableOpacity>
           </View>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            {isFriend ? (
-              <View style={styles.dmHeaderConnected}>
-                <Ionicons name="checkmark-done" size={16} color="#fff" />
-                <Text style={styles.dmHeaderText}>Connected</Text>
-              </View>
-            ) : isRequested ? (
-              <TouchableOpacity
-                style={styles.dmHeaderRequested}
-                onPress={() => handleCancelRequest(chatMeta.dmPeer!.uid)}
-              >
-                <Ionicons name="person-add" size={16} color={theme.primary} />
-                <Text style={styles.dmHeaderRequestedText}>Sent</Text>
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity
-                style={styles.dmHeaderAdd}
-                onPress={() => handleAddFriend(chatMeta.dmPeer!.uid)}
-              >
-                <Ionicons name="person-add-outline" size={16} color={theme.primary} />
-                <Text style={styles.dmHeaderRequestedText}>Add</Text>
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity
-              style={styles.dmHeaderInvite}
-              onPress={() => {
-                setInviteSelection({});
-                setInviteModalVisible(true);
-              }}
-            >
-              <Ionicons name="calendar-outline" size={16} color="#fff" />
-              <Text style={styles.dmHeaderText}>Invite</Text>
-            </TouchableOpacity>
-          </View>
+          {/* Three-dot menu for DM options */}
+          <TouchableOpacity
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 18,
+              backgroundColor: theme.card,
+              justifyContent: 'center',
+              alignItems: 'center',
+              borderWidth: 1,
+              borderColor: theme.border,
+            }}
+            onPress={() => setDmOptionsModalVisible(true)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="ellipsis-vertical" size={18} color={theme.text} />
+          </TouchableOpacity>
         </>
       );
     }
@@ -2411,7 +2463,7 @@ const ChatDetailScreen = () => {
               <Text style={styles.typingText}>
                 {(() => {
                   const names = typingUsers
-                    .map((uid) => profiles[uid]?.username)
+                    .map((uid) => isUserBlockedById(uid) ? 'Blocked User' : profiles[uid]?.username)
                     .filter(Boolean);
                   if (!names.length) return 'Typing…';
                   if (names.length === 1) return `${names[0]} is typing…`;
@@ -2428,7 +2480,7 @@ const ChatDetailScreen = () => {
               <View style={{ flex: 1 }}>
                 <Text style={styles.replyBarLabel}>Replying to</Text>
                 <Text style={styles.replyBarText} numberOfLines={1}>
-                  {profiles[replyTo.senderId]?.username || 'User'}: {
+                  {isUserBlockedById(replyTo.senderId) ? 'Blocked User' : (profiles[replyTo.senderId]?.username || 'User')}: {
                     replyTo.type === 'text' 
                       ? replyTo.text 
                       : replyTo.type === 'image' 
@@ -2443,7 +2495,16 @@ const ChatDetailScreen = () => {
             </View>
           )}
 
-          {/* Input */}
+          {/* Input - Block DMs with blocked users (both directions), but allow group chat messaging */}
+          {isDmBlocked && chatMeta.isDm ? (
+            <View style={[styles.inputContainer, { paddingBottom: insets.bottom, justifyContent: 'center' }]}>
+              <Text style={{ color: theme.muted, textAlign: 'center', flex: 1 }}>
+                {isBlockedByPeer && !isOtherUserBlocked 
+                  ? 'This user has blocked you' 
+                  : 'You have blocked this user'}
+              </Text>
+            </View>
+          ) : (
           <View style={[styles.inputContainer, { paddingBottom: insets.bottom }]}>
             <TouchableOpacity style={styles.inputButton} onPress={handleCamera}>
               <Ionicons name="camera" size={22} color={theme.primary} />
@@ -2473,6 +2534,7 @@ const ChatDetailScreen = () => {
               <Ionicons name="send" size={24} color="#fff" />
             </TouchableOpacity>
           </View>
+          )}
 
           {/* Selected images */}
           {selectedImages.length > 0 && (
@@ -3071,6 +3133,211 @@ const ChatDetailScreen = () => {
                     </TouchableOpacity>
                   </View>
                 </View>
+              </View>
+            </View>
+          </Modal>
+
+          {/* DM Options Modal */}
+          <Modal visible={dmOptionsModalVisible} transparent animationType="fade" onRequestClose={() => setDmOptionsModalVisible(false)}>
+            <View style={styles.modalOverlay}>
+              <Pressable style={StyleSheet.absoluteFill} onPress={() => setDmOptionsModalVisible(false)} />
+              <View style={{ backgroundColor: theme.card, borderRadius: 16, borderWidth: 1, borderColor: theme.border, maxWidth: 300, width: '85%' }} pointerEvents="auto">
+                {/* Header with X button */}
+                <View style={{ padding: 16, borderBottomWidth: 1, borderBottomColor: theme.border, alignItems: 'center', position: 'relative' }}>
+                  {/* Close button */}
+                  <TouchableOpacity
+                    style={{
+                      position: 'absolute',
+                      top: 12,
+                      right: 12,
+                      width: 28,
+                      height: 28,
+                      borderRadius: 14,
+                      backgroundColor: theme.background,
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                    }}
+                    onPress={() => setDmOptionsModalVisible(false)}
+                  >
+                    <Ionicons name="close" size={18} color={theme.muted} />
+                  </TouchableOpacity>
+                  
+                  {chatMeta.dmPeer && (
+                    <>
+                      <UserAvatar
+                        photoUrl={chatMeta.dmPeer.photo || chatMeta.dmPeer.photoURL}
+                        username={chatMeta.dmPeer.username}
+                        size={50}
+                        style={{ marginBottom: 8 }}
+                      />
+                      <Text style={{ color: theme.text, fontSize: 16, fontWeight: '700' }}>{chatMeta.dmPeer.username}</Text>
+                      <Text style={{ color: theme.muted, fontSize: 12, marginTop: 2 }}>Direct Message</Text>
+                    </>
+                  )}
+                </View>
+
+                {/* Connection Status */}
+                {chatMeta.dmPeer && (() => {
+                  const isFriend = myFriendIds.includes(chatMeta.dmPeer.uid);
+                  const isRequested = myRequestsSent.includes(chatMeta.dmPeer.uid);
+                  const isPeerBlocked = isUserBlockedById(chatMeta.dmPeer.uid);
+                  
+                  if (isPeerBlocked || isBlockedByPeer) {
+                    return (
+                      <View style={{ padding: 12, alignItems: 'center', backgroundColor: theme.background }}>
+                        <Ionicons name="ban" size={24} color={theme.muted} />
+                        <Text style={{ color: theme.muted, fontSize: 14, marginTop: 4 }}>Blocked User</Text>
+                      </View>
+                    );
+                  }
+                  
+                  return (
+                    <View style={{ paddingVertical: 12, paddingHorizontal: 16, backgroundColor: theme.background }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                          <Ionicons 
+                            name={isFriend ? "people" : "person-add-outline"} 
+                            size={18} 
+                            color={isFriend ? theme.primary : theme.muted} 
+                          />
+                          <Text style={{ color: theme.text, fontSize: 14 }}>
+                            {isFriend ? 'Connected' : isRequested ? 'Request Sent' : 'Not Connected'}
+                          </Text>
+                        </View>
+                        {!isFriend && (
+                          isRequested ? (
+                            <TouchableOpacity
+                              style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: theme.border }}
+                              onPress={() => {
+                                handleCancelRequest(chatMeta.dmPeer!.uid);
+                                setDmOptionsModalVisible(false);
+                              }}
+                            >
+                              <Text style={{ color: theme.muted, fontSize: 13, fontWeight: '600' }}>Cancel</Text>
+                            </TouchableOpacity>
+                          ) : (
+                            <TouchableOpacity
+                              style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, backgroundColor: theme.primary }}
+                              onPress={() => {
+                                handleAddFriend(chatMeta.dmPeer!.uid);
+                                setDmOptionsModalVisible(false);
+                              }}
+                            >
+                              <Text style={{ color: '#fff', fontSize: 13, fontWeight: '600' }}>Connect</Text>
+                            </TouchableOpacity>
+                          )
+                        )}
+                      </View>
+                    </View>
+                  );
+                })()}
+
+                <View style={{ height: 1, backgroundColor: theme.border }} />
+
+                {/* View Profile */}
+                <TouchableOpacity
+                  style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
+                  onPress={() => {
+                    setDmOptionsModalVisible(false);
+                    if (chatMeta.dmPeer) {
+                      navigation.navigate('UserProfile', { userId: chatMeta.dmPeer.uid });
+                    }
+                  }}
+                >
+                  <Ionicons name="person-outline" size={22} color={theme.primary} />
+                  <Text style={{ color: theme.text, fontSize: 16, fontWeight: '600' }}>View Profile</Text>
+                </TouchableOpacity>
+
+                <View style={{ height: 1, backgroundColor: theme.border }} />
+
+                {/* Mute/Unmute */}
+                <TouchableOpacity
+                  style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
+                  onPress={() => {
+                    setDmOptionsModalVisible(false);
+                    handleMuteToggle();
+                  }}
+                >
+                  <Ionicons 
+                    name={isMuted ? "notifications" : "notifications-off"} 
+                    size={22} 
+                    color={theme.primary} 
+                  />
+                  <Text style={{ color: theme.text, fontSize: 16, fontWeight: '600' }}>
+                    {isMuted ? 'Unmute' : 'Mute'}
+                  </Text>
+                </TouchableOpacity>
+
+                {/* Invite to Activity - only if not blocked */}
+                {chatMeta.dmPeer && !isUserBlockedById(chatMeta.dmPeer.uid) && !isBlockedByPeer && (
+                  <>
+                    <View style={{ height: 1, backgroundColor: theme.border }} />
+                    <TouchableOpacity
+                      style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
+                      onPress={() => {
+                        setDmOptionsModalVisible(false);
+                        setInviteSelection({});
+                        setInviteModalVisible(true);
+                      }}
+                    >
+                      <Ionicons name="calendar-outline" size={22} color={theme.primary} />
+                      <Text style={{ color: theme.text, fontSize: 16, fontWeight: '600' }}>Invite to Activity</Text>
+                    </TouchableOpacity>
+                  </>
+                )}
+
+                {/* Danger Zone */}
+                <View style={{ height: 1, backgroundColor: theme.border, marginTop: 8 }} />
+                <Text style={{ color: theme.muted, fontSize: 12, fontWeight: '600', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4 }}>DANGER ZONE</Text>
+
+                {/* Block User Info */}
+                <TouchableOpacity
+                  style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
+                  onPress={() => {
+                    setDmOptionsModalVisible(false);
+                    Alert.alert(
+                      'Block User',
+                      'To block this user, visit their profile and tap the menu icon (⋮) in the top right corner.',
+                      [
+                        { text: 'OK', style: 'default' },
+                        {
+                          text: 'Go to Profile',
+                          onPress: () => {
+                            if (chatMeta.dmPeer) {
+                              navigation.navigate('UserProfile', { userId: chatMeta.dmPeer.uid });
+                            }
+                          },
+                        },
+                      ]
+                    );
+                  }}
+                >
+                  <Ionicons name="ban" size={22} color={theme.danger} />
+                  <Text style={{ color: theme.danger, fontSize: 16, fontWeight: '600' }}>Block User</Text>
+                </TouchableOpacity>
+
+                <View style={{ height: 1, backgroundColor: theme.border }} />
+
+                {/* Report User */}
+                <TouchableOpacity
+                  style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
+                  onPress={() => {
+                    setDmOptionsModalVisible(false);
+                    Alert.alert(
+                      'Report User',
+                      'Why are you reporting this user?',
+                      [
+                        { text: 'Harassment or bullying', onPress: () => Alert.alert('Reported', 'Thank you for your report. We will review it and take appropriate action.') },
+                        { text: 'Spam or scam', onPress: () => Alert.alert('Reported', 'Thank you for your report. We will review it and take appropriate action.') },
+                        { text: 'Inappropriate content', onPress: () => Alert.alert('Reported', 'Thank you for your report. We will review it and take appropriate action.') },
+                        { text: 'Cancel', style: 'cancel' },
+                      ]
+                    );
+                  }}
+                >
+                  <Ionicons name="flag-outline" size={22} color={theme.danger} />
+                  <Text style={{ color: theme.danger, fontSize: 16, fontWeight: '600' }}>Report User</Text>
+                </TouchableOpacity>
               </View>
             </View>
           </Modal>

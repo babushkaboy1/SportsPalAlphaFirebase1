@@ -14,6 +14,9 @@ import {
   Pressable,
   Animated,
   ActivityIndicator,
+  TextInput,
+  Keyboard,
+  KeyboardAvoidingView,
 } from 'react-native';
 import { ScrollView } from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -76,7 +79,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
     () => ({ flexGrow: 1, paddingBottom: Math.max(insets.bottom, 24) }),
     [insets.bottom]
   );
-  const { allActivities, isActivityJoined, toggleJoinActivity, profile } = useActivityContext();
+  const { allActivities, isActivityJoined, toggleJoinActivity, profile, blockedUsers, isUserBlockedById } = useActivityContext();
 
   // ALL STATE HOOKS MUST BE BEFORE ANY CONDITIONAL RETURNS
   const [creatorUsername, setCreatorUsername] = useState<string>('');
@@ -154,6 +157,11 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
 
   // Menu modal state
   const [menuVisible, setMenuVisible] = useState(false);
+  
+  // Report modal state
+  const [reportModalVisible, setReportModalVisible] = useState(false);
+  const [reportReason, setReportReason] = useState<string | null>(null);
+  const [reportDetails, setReportDetails] = useState('');
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const mapRef = useRef<MapView>(null);
@@ -395,11 +403,16 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
   useEffect(() => {
     if (!activity) return;
     const fetchUsername = async () => {
+      // Check if creator is blocked
+      if (activity.creatorId && isUserBlockedById(activity.creatorId)) {
+        setCreatorUsername('Blocked User');
+        return;
+      }
       const username = await getDisplayCreatorUsername(activity.creatorId, activity.creator);
       setCreatorUsername(username);
     };
     fetchUsername();
-  }, [activity]);
+  }, [activity, isUserBlockedById]);
 
   // Helper: fetch latest joined users & added-to-calendar state
   const fetchAndSetJoinedUsers = async () => {
@@ -966,15 +979,33 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
 
   const handleReportActivity = () => {
     setMenuVisible(false);
+    setReportReason(null);
+    setReportDetails('');
+    setTimeout(() => setReportModalVisible(true), 300);
+  };
+
+  const activityReportReasons = [
+    { id: 'inappropriate', label: 'Inappropriate content', icon: 'alert-circle-outline' as const },
+    { id: 'spam', label: 'Spam or misleading', icon: 'warning-outline' as const },
+    { id: 'dangerous', label: 'Dangerous location', icon: 'location-outline' as const },
+    { id: 'fake', label: 'Fake or scam activity', icon: 'shield-outline' as const },
+    { id: 'harassment', label: 'Harassment in description', icon: 'hand-left-outline' as const },
+    { id: 'other', label: 'Something else', icon: 'ellipsis-horizontal-outline' as const },
+  ];
+
+  const submitActivityReport = async () => {
+    if (!reportReason) {
+      Alert.alert('Please select a reason', 'Help us understand why you\'re reporting this activity.');
+      return;
+    }
+    // In production, you would send this to your backend
+    console.log('Activity report submitted:', { activityId, reason: reportReason, details: reportDetails });
+    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setReportModalVisible(false);
     Alert.alert(
-      'Report Activity',
-      'Why are you reporting this activity?',
-      [
-        { text: 'Inappropriate content', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
-        { text: 'Spam or misleading', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
-        { text: 'Dangerous location', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
-        { text: 'Cancel', style: 'cancel' },
-      ]
+      'Report Submitted',
+      'Thank you for helping keep SportsPal safe. Our team will review your report and take appropriate action.',
+      [{ text: 'OK' }]
     );
   };
 
@@ -1461,15 +1492,33 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                 </Text>
               </View>
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                {joinedUsers.map(user => (
+                {joinedUsers.map(user => {
+                  const isBlocked = isUserBlockedById(user.uid);
+                  return (
                   <TouchableOpacity
                     key={user.uid}
-                    style={{ alignItems: 'center', marginRight: 16 }}
+                    style={{ alignItems: 'center', marginRight: 16, opacity: isBlocked ? 0.5 : 1 }}
                     onPress={() => {
+                      if (isBlocked) return; // Don't navigate to blocked user's profile
                       if (user.uid === auth.currentUser?.uid) navigation.navigate('MainTabs', { screen: 'Profile' });
                       else navigation.navigate('UserProfile', { userId: user.uid });
                     }}
+                    disabled={isBlocked}
                   >
+                    {isBlocked ? (
+                      <View style={{ 
+                        width: 54, 
+                        height: 54, 
+                        borderRadius: 27, 
+                        backgroundColor: theme.muted,
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                        borderWidth: 2,
+                        borderColor: theme.muted,
+                      }}>
+                        <Ionicons name="ban" size={24} color={theme.text} />
+                      </View>
+                    ) : (
                     <UserAvatar
                       photoUrl={user.photo || user.photoURL}
                       username={user.username}
@@ -1477,9 +1526,13 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                       borderColor={theme.primary}
                       borderWidth={2}
                     />
-                    <Text style={{ color: theme.text, marginTop: 6, fontWeight: 'bold' }}>{user.username}</Text>
+                    )}
+                    <Text style={{ color: isBlocked ? theme.muted : theme.text, marginTop: 6, fontWeight: 'bold' }}>
+                      {isBlocked ? 'Blocked User' : user.username}
+                    </Text>
                   </TouchableOpacity>
-                ))}
+                  );
+                })}
               </ScrollView>
             </View>
 
@@ -2029,8 +2082,8 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                 <Ionicons name="chevron-forward" size={18} color={theme.muted} />
               </TouchableOpacity>
 
-              {/* View Host Profile */}
-              {activity.creatorId && activity.creatorId !== auth.currentUser?.uid && (
+              {/* View Host Profile - Hide if creator is blocked */}
+              {activity.creatorId && activity.creatorId !== auth.currentUser?.uid && !isUserBlockedById(activity.creatorId) && (
                 <TouchableOpacity
                   style={styles.menuModalItem}
                   onPress={() => {
@@ -2109,6 +2162,115 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
             </View>
           </Pressable>
         </Pressable>
+      </Modal>
+
+      {/* Report Activity Modal */}
+      <Modal visible={reportModalVisible} transparent animationType="fade" onRequestClose={() => setReportModalVisible(false)}>
+        <KeyboardAvoidingView 
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={{ flex: 1 }}
+        >
+          <Pressable style={styles.modalOverlay} onPress={() => setReportModalVisible(false)}>
+            <Pressable style={styles.reportModalCard} onPress={() => Keyboard.dismiss()}>
+              {/* Header */}
+              <View style={styles.reportModalHeader}>
+                <View style={[styles.reportModalIconWrap, { backgroundColor: `${theme.danger}15` }]}>
+                  <Ionicons name="flag" size={28} color={theme.danger} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.reportModalTitle}>Report Activity</Text>
+                  <Text style={styles.reportModalSubtitle}>Help us understand what's wrong</Text>
+                </View>
+                <TouchableOpacity 
+                  onPress={() => setReportModalVisible(false)} 
+                  style={styles.menuModalCloseBtn}
+                >
+                  <Ionicons name="close" size={20} color={theme.muted} />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView 
+                style={{ flexGrow: 0 }} 
+                contentContainerStyle={{ paddingBottom: 8 }}
+                showsVerticalScrollIndicator={true}
+                keyboardShouldPersistTaps="handled"
+                nestedScrollEnabled
+              >
+                {/* Reason Selection */}
+                <Text style={styles.reportSectionTitle}>Why are you reporting this activity?</Text>
+                <View style={styles.reportReasonList}>
+                  {activityReportReasons.map((reason) => (
+                    <TouchableOpacity
+                      key={reason.id}
+                      style={[
+                        styles.reportReasonItem,
+                        reportReason === reason.id && styles.reportReasonItemSelected
+                      ]}
+                      onPress={() => setReportReason(reason.id)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={[
+                        styles.reportReasonIcon,
+                        reportReason === reason.id && { backgroundColor: `${theme.danger}20` }
+                      ]}>
+                        <Ionicons 
+                          name={reason.icon} 
+                          size={20} 
+                          color={reportReason === reason.id ? theme.danger : theme.muted} 
+                        />
+                      </View>
+                      <Text style={[
+                        styles.reportReasonText,
+                        reportReason === reason.id && { color: theme.danger, fontWeight: '600' }
+                      ]}>{reason.label}</Text>
+                      {reportReason === reason.id && (
+                        <Ionicons name="checkmark-circle" size={22} color={theme.danger} />
+                      )}
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                {/* Additional Details */}
+                <Text style={styles.reportSectionTitle}>Tell us more (optional)</Text>
+                <Text style={styles.reportDetailHint}>
+                  Be as specific as you can. Your feedback helps us take the right action and keeps SportsPal safe for everyone.
+                </Text>
+                <TextInput
+                  style={styles.reportTextInput}
+                  placeholder="Describe what's wrong with this activity..."
+                  placeholderTextColor={theme.muted}
+                  value={reportDetails}
+                  onChangeText={setReportDetails}
+                  multiline
+                  numberOfLines={4}
+                  textAlignVertical="top"
+                  scrollEnabled={false}
+                />
+              </ScrollView>
+
+              {/* Actions */}
+              <View style={styles.reportModalActions}>
+                <TouchableOpacity
+                  style={styles.reportCancelBtn}
+                  onPress={() => setReportModalVisible(false)}
+                >
+                  <Text style={styles.reportCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.reportSubmitBtn,
+                    !reportReason && styles.reportSubmitBtnDisabled
+                  ]}
+                  onPress={submitActivityReport}
+                  disabled={!reportReason}
+                >
+                  <Ionicons name="send" size={18} color="#fff" />
+                  <Text style={styles.reportSubmitText}>Submit Report</Text>
+                </TouchableOpacity>
+              </View>
+            </Pressable>
+          </Pressable>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Rating Modal (for past activities from profile) */}
@@ -2635,5 +2797,140 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
   },
   ratingCardButtonTextSecondary: {
     color: t.primary,
+  },
+
+  // Report Modal Styles
+  reportModalCard: {
+    width: '100%',
+    maxWidth: 400,
+    backgroundColor: t.card,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: t.border,
+    overflow: 'hidden',
+    maxHeight: '85%',
+  },
+  reportModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: t.border,
+    gap: 12,
+  },
+  reportModalIconWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reportModalTitle: {
+    color: t.text,
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  reportModalSubtitle: {
+    color: t.muted,
+    fontSize: 13,
+    marginTop: 2,
+  },
+  reportSectionTitle: {
+    color: t.text,
+    fontSize: 15,
+    fontWeight: '700',
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 10,
+  },
+  reportReasonList: {
+    paddingHorizontal: 12,
+  },
+  reportReasonItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    marginVertical: 3,
+    borderRadius: 12,
+    backgroundColor: t.isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+    gap: 12,
+  },
+  reportReasonItemSelected: {
+    backgroundColor: t.isDark ? 'rgba(239, 68, 68, 0.1)' : 'rgba(239, 68, 68, 0.08)',
+    borderWidth: 1,
+    borderColor: t.danger,
+  },
+  reportReasonIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: t.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reportReasonText: {
+    flex: 1,
+    color: t.text,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  reportDetailHint: {
+    color: t.muted,
+    fontSize: 13,
+    paddingHorizontal: 16,
+    marginBottom: 10,
+    lineHeight: 18,
+  },
+  reportTextInput: {
+    backgroundColor: t.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: t.border,
+    padding: 14,
+    marginHorizontal: 16,
+    marginBottom: 16,
+    color: t.text,
+    fontSize: 14,
+    minHeight: 100,
+  },
+  reportModalActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+    borderTopWidth: 1,
+    borderTopColor: t.border,
+    gap: 12,
+  },
+  reportCancelBtn: {
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    backgroundColor: t.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
+  },
+  reportCancelText: {
+    color: t.muted,
+    fontWeight: '600',
+    fontSize: 15,
+  },
+  reportSubmitBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: t.danger,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    flex: 1,
+    justifyContent: 'center',
+  },
+  reportSubmitBtnDisabled: {
+    opacity: 0.5,
+  },
+  reportSubmitText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 15,
   },
 });

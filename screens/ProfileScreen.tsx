@@ -111,7 +111,7 @@ const ProfileScreen = () => {
   const route = useRoute<RouteProp<RootStackParamList, 'Profile'>>();
   const userId = route.params?.userId;
   const insets = useSafeAreaInsets();
-  const { joinedActivities, toggleJoinActivity, isActivityJoined, allActivities, profile: contextProfile, reloadAllActivities } = useActivityContext();
+  const { joinedActivities, toggleJoinActivity, isActivityJoined, allActivities, profile: contextProfile, reloadAllActivities, isUserBlockedById } = useActivityContext();
   
   // Initialize with contextProfile to avoid 0 flash (if viewing own profile)
   const [profile, setProfile] = useState<any>(() => {
@@ -1077,6 +1077,51 @@ const ProfileScreen = () => {
                   renderItem={({ item }) => {
                     const isFriend = myFriendIds.includes(item.uid);
                     const isRequested = myRequestsSent.includes(item.uid);
+                    const isUserBlocked = isUserBlockedById(item.uid);
+                    
+                    // Blocked user display
+                    if (isUserBlocked) {
+                      return (
+                        <View style={[styles.searchResultRow, { opacity: 0.6 }]}>
+                          <TouchableOpacity
+                            style={styles.searchResultTouchable}
+                            activeOpacity={0.8}
+                            onPress={() => {
+                              Keyboard.dismiss();
+                              navigation.navigate('UserProfile', { userId: item.uid });
+                            }}
+                          >
+                            <View style={{
+                              width: 48,
+                              height: 48,
+                              borderRadius: 24,
+                              backgroundColor: theme.muted,
+                              justifyContent: 'center',
+                              alignItems: 'center',
+                            }}>
+                              <Ionicons name="ban" size={20} color={theme.text} />
+                            </View>
+                            <View style={{ flex: 1, marginLeft: 12 }}>
+                              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                <Text style={[styles.searchResultName, { color: theme.muted }]}>Blocked User</Text>
+                                <View style={{ backgroundColor: `${theme.danger}20`, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
+                                  <Text style={{ fontSize: 10, fontWeight: '600', color: theme.danger }}>BLOCKED</Text>
+                                </View>
+                              </View>
+                              <Text style={{ fontSize: 12, color: theme.muted, marginTop: 2 }}>Tap to view profile</Text>
+                            </View>
+                          </TouchableOpacity>
+                          {/* Disabled buttons for blocked user */}
+                          <View style={[styles.addFriendBtn, { opacity: 0.4, backgroundColor: theme.muted }]}>
+                            <Ionicons name="ban" size={16} color={theme.text} />
+                          </View>
+                          <View style={[styles.messageIconBtn, { opacity: 0.4 }]}>
+                            <Ionicons name="chatbubble-ellipses-outline" size={18} color={theme.muted} />
+                          </View>
+                        </View>
+                      );
+                    }
+                    
                     return (
                       <View style={styles.searchResultRow}>
                         <TouchableOpacity
@@ -1606,37 +1651,70 @@ const ProfileScreen = () => {
                 contentContainerStyle={{ paddingBottom: 12 }}
                 showsVerticalScrollIndicator={true}
               >
-                {friends.map((item, index) => (
-                  <TouchableOpacity
-                    key={item.uid}
-                    style={{ 
-                      flexDirection: 'row', 
-                      alignItems: 'center', 
-                      backgroundColor: theme.card,
-                      padding: 12,
-                      borderRadius: 14,
-                      marginBottom: 10,
-                    }}
-                    activeOpacity={0.8}
-                    onPress={() => {
-                      setConnectionsModalVisible(false);
-                      navigation.navigate('UserProfile' as any, { userId: item.uid });
-                    }}
-                  >
-                    <UserAvatar
-                      photoUrl={item.photo}
-                      username={item.username}
-                      size={44}
-                      borderColor={theme.primary}
-                      borderWidth={2}
-                    />
-                    <View style={{ flex: 1, marginLeft: 12 }}>
-                      <Text style={{ color: theme.text, fontWeight: '700', fontSize: 15 }}>{item.username}</Text>
-                      <Text style={{ color: theme.muted, fontSize: 12, marginTop: 2 }}>Tap to view profile</Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={20} color={theme.muted} />
-                  </TouchableOpacity>
-                ))}
+                {friends.map((item, index) => {
+                  const isFriendBlocked = isUserBlockedById(item.uid);
+                  return (
+                    <TouchableOpacity
+                      key={item.uid}
+                      style={{ 
+                        flexDirection: 'row', 
+                        alignItems: 'center', 
+                        backgroundColor: theme.card,
+                        padding: 12,
+                        borderRadius: 14,
+                        marginBottom: 10,
+                        opacity: isFriendBlocked ? 0.6 : 1,
+                      }}
+                      activeOpacity={0.8}
+                      onPress={() => {
+                        setConnectionsModalVisible(false);
+                        navigation.navigate('UserProfile' as any, { userId: item.uid });
+                      }}
+                    >
+                      {isFriendBlocked ? (
+                        <View style={{ 
+                          width: 44, 
+                          height: 44, 
+                          borderRadius: 22, 
+                          backgroundColor: theme.muted, 
+                          justifyContent: 'center', 
+                          alignItems: 'center',
+                          borderWidth: 2,
+                          borderColor: theme.muted,
+                        }}>
+                          <Ionicons name="ban" size={20} color={theme.text} />
+                        </View>
+                      ) : (
+                        <UserAvatar
+                          photoUrl={item.photo}
+                          username={item.username}
+                          size={44}
+                          borderColor={theme.primary}
+                          borderWidth={2}
+                        />
+                      )}
+                      <View style={{ flex: 1, marginLeft: 12 }}>
+                        {isFriendBlocked ? (
+                          <>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                              <Text style={{ color: theme.muted, fontWeight: '700', fontSize: 15 }}>Blocked User</Text>
+                              <View style={{ backgroundColor: `${theme.danger}20`, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8 }}>
+                                <Text style={{ fontSize: 10, fontWeight: '600', color: theme.danger }}>BLOCKED</Text>
+                              </View>
+                            </View>
+                            <Text style={{ color: theme.muted, fontSize: 12, marginTop: 2 }}>Tap to view profile</Text>
+                          </>
+                        ) : (
+                          <>
+                            <Text style={{ color: theme.text, fontWeight: '700', fontSize: 15 }}>{item.username}</Text>
+                            <Text style={{ color: theme.muted, fontSize: 12, marginTop: 2 }}>Tap to view profile</Text>
+                          </>
+                        )}
+                      </View>
+                      <Ionicons name="chevron-forward" size={20} color={theme.muted} />
+                    </TouchableOpacity>
+                  );
+                })}
               </ScrollView>
             )}
           </View>

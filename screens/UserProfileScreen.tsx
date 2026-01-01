@@ -16,7 +16,7 @@ function HostUsername({ activity }: { activity: any }) {
   return <Text style={{ fontSize: 14, color: theme.muted, fontWeight: '500' }}>{username}</Text>;
 }
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList, Animated, RefreshControl, Alert, Modal, Pressable, TextInput, Clipboard, Keyboard, Linking, ActivityIndicator, PanResponder, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList, Animated, RefreshControl, Alert, Modal, Pressable, TextInput, Clipboard, Keyboard, Linking, ActivityIndicator, PanResponder, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
 import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
@@ -36,7 +36,7 @@ import { sendFriendRequest, cancelFriendRequest, removeFriend, acceptIncomingReq
 import { shareActivity, shareProfile } from '../utils/deepLinking';
 import { ensureDmChat } from '../utils/firestoreChats';
 import { getProfileFromCache, updateProfileInCache } from '../utils/chatCache';
-import { blockUser, isUserBlocked } from '../utils/firestoreBlocks';
+import { blockUser, unblockUser, isUserBlocked, isBlockedByUser } from '../utils/firestoreBlocks';
 
 // Slight darken helper for hex colors (fallback to original on parse failure)
 function darkenHex(color: string, amount = 0.12): string {
@@ -74,7 +74,7 @@ const UserProfileScreen = () => {
   const styles = React.useMemo(() => createStyles(theme), [theme]);
   const { userId } = route.params as { userId: string };
   const [profile, setProfile] = useState<any>(null);
-  const { allActivities, reloadAllActivities, isActivityJoined, toggleJoinActivity } = useActivityContext();
+  const { allActivities, reloadAllActivities, isActivityJoined, toggleJoinActivity, reloadBlockedUsers, isUserBlockedById } = useActivityContext();
   const [activeTab, setActiveTab] = useState<'games' | 'history'>('games');
   const tabs: Array<'games' | 'history'> = ['games', 'history'];
   const pagerRef = useRef<PagerView | null>(null);
@@ -140,6 +140,20 @@ const UserProfileScreen = () => {
   const [menuVisible, setMenuVisible] = useState(false);
   const [imageViewerVisible, setImageViewerVisible] = useState(false);
   const [isBlocked, setIsBlocked] = useState(false);
+  const [isBlockedByThem, setIsBlockedByThem] = useState(false); // They blocked us
+  
+  // Combined: any block relationship exists (we blocked them OR they blocked us)
+  const hasBlockRelationship = isBlocked || isBlockedByThem;
+  
+  // Report modal state
+  const [reportModalVisible, setReportModalVisible] = useState(false);
+  const [reportReason, setReportReason] = useState<string | null>(null);
+  const [reportDetails, setReportDetails] = useState('');
+  
+  // Block modal state
+  const [blockModalVisible, setBlockModalVisible] = useState(false);
+  const [blockReason, setBlockReason] = useState<string | null>(null);
+  const [blockDetails, setBlockDetails] = useState('');
 
   // Activities breakdown by sport for this user
   const activitiesBreakdown = React.useMemo(() => {
@@ -205,9 +219,13 @@ const UserProfileScreen = () => {
         setIsReady(true);
       }
       
-      // Check if user is blocked
-      const blocked = await isUserBlocked(userId);
+      // Check if user is blocked (both directions)
+      const [blocked, blockedByThem] = await Promise.all([
+        isUserBlocked(userId),
+        isBlockedByUser(userId)
+      ]);
       setIsBlocked(blocked);
+      setIsBlockedByThem(blockedByThem);
     };
     fetchProfile();
   }, [userId]);
@@ -397,42 +415,91 @@ const UserProfileScreen = () => {
 
   const handleReportUser = () => {
     setMenuVisible(false);
+    setReportReason(null);
+    setReportDetails('');
+    setTimeout(() => setReportModalVisible(true), 300);
+  };
+
+  const reportReasons = [
+    { id: 'inappropriate', label: 'Inappropriate behavior', icon: 'alert-circle-outline' as const },
+    { id: 'spam', label: 'Spam or fake account', icon: 'warning-outline' as const },
+    { id: 'harassment', label: 'Harassment or bullying', icon: 'hand-left-outline' as const },
+    { id: 'impersonation', label: 'Impersonating someone', icon: 'person-outline' as const },
+    { id: 'offensive', label: 'Offensive content', icon: 'eye-off-outline' as const },
+    { id: 'other', label: 'Something else', icon: 'ellipsis-horizontal-outline' as const },
+  ];
+
+  const submitReport = async () => {
+    if (!reportReason) {
+      Alert.alert('Please select a reason', 'Help us understand why you\'re reporting this user.');
+      return;
+    }
+    // In production, you would send this to your backend
+    console.log('Report submitted:', { userId, reason: reportReason, details: reportDetails });
+    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setReportModalVisible(false);
     Alert.alert(
-      'Report User',
-      'Why are you reporting this user?',
-      [
-        { text: 'Inappropriate behavior', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
-        { text: 'Spam or fake account', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
-        { text: 'Harassment', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
-        { text: 'Cancel', style: 'cancel' },
-      ]
+      'Report Submitted',
+      'Thank you for helping keep SportsPal safe. Our team will review your report and take appropriate action.',
+      [{ text: 'OK' }]
     );
   };
 
   const handleBlockUser = () => {
     setMenuVisible(false);
+    setBlockReason(null);
+    setBlockDetails('');
+    setTimeout(() => setBlockModalVisible(true), 300);
+  };
+
+  const blockReasons = [
+    { id: 'harassment', label: 'They\'re harassing me', icon: 'hand-left-outline' as const },
+    { id: 'spam', label: 'Sending spam or unwanted messages', icon: 'mail-unread-outline' as const },
+    { id: 'inappropriate', label: 'Inappropriate behavior', icon: 'alert-circle-outline' as const },
+    { id: 'safety', label: 'I don\'t feel safe', icon: 'shield-outline' as const },
+    { id: 'fake', label: 'Fake or misleading profile', icon: 'person-remove-outline' as const },
+    { id: 'personal', label: 'Personal reasons', icon: 'heart-dislike-outline' as const },
+  ];
+
+  const confirmBlock = async () => {
+    try {
+      // In production, you could log the reason
+      console.log('Block reason:', { userId, reason: blockReason, details: blockDetails });
+      await blockUser(userId);
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setIsBlocked(true);
+      setBlockModalVisible(false);
+      // Reload blocked users to update filtering across the app
+      await reloadBlockedUsers();
+      Alert.alert(
+        'User Blocked',
+        `${profile?.username || 'User'} has been blocked. They won\'t be able to contact you or see your activities.`,
+        [{ text: 'OK', onPress: () => navigation.goBack() }]
+      );
+    } catch (error) {
+      console.error('Error blocking user:', error);
+      Alert.alert('Error', 'Failed to block user. Please try again.');
+    }
+  };
+
+  const handleUnblockUser = () => {
     Alert.alert(
-      'Block User',
-      `Are you sure you want to block ${profile?.username || 'this user'}?\n\n• You won't see their profile or activities\n• They can't send you messages\n• Your connection will be removed\n• They won't be notified`,
+      'Unblock User',
+      `Are you sure you want to unblock ${profile?.username || 'this user'}? They will be able to see your profile and send you messages again.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Block',
-          style: 'destructive',
+          text: 'Unblock',
           onPress: async () => {
             try {
-              await blockUser(userId);
+              await unblockUser(userId);
               await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-              setIsBlocked(true);
-              Alert.alert('Blocked', `${profile?.username || 'User'} has been blocked.`, [
-                {
-                  text: 'OK',
-                  onPress: () => navigation.goBack(),
-                },
-              ]);
+              setIsBlocked(false);
+              await reloadBlockedUsers();
+              Alert.alert('User Unblocked', `${profile?.username || 'User'} has been unblocked.`);
             } catch (error) {
-              console.error('Error blocking user:', error);
-              Alert.alert('Error', 'Failed to block user. Please try again.');
+              console.error('Error unblocking user:', error);
+              Alert.alert('Error', 'Failed to unblock user. Please try again.');
             }
           },
         },
@@ -505,7 +572,6 @@ const UserProfileScreen = () => {
     <TouchableOpacity
       style={styles.activityCard}
       onPress={() => navigation.navigate('ActivityDetails', { activityId: item.id })}
-      activeOpacity={0.92}
     >
       {/* Card Header: Icon, Title, Distance */}
       <View style={styles.cardHeaderRow}>
@@ -627,7 +693,6 @@ const UserProfileScreen = () => {
       <TouchableOpacity
         style={styles.activityCard}
         onPress={() => navigation.navigate('ActivityDetails', { activityId: item.id })}
-        activeOpacity={0.92}
       >
         <View style={styles.cardHeaderRow}>
           <View style={styles.cardHeaderLeft}>
@@ -721,9 +786,16 @@ const UserProfileScreen = () => {
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backIconBtn}>
             <Ionicons name="arrow-back" size={24} color={theme.primary} />
           </TouchableOpacity>
-          <Text style={styles.usernameTitle} numberOfLines={1}>
-            {profile?.username || 'Username'}
-          </Text>
+          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+            <Text style={[styles.usernameTitle, hasBlockRelationship && { color: theme.muted }]} numberOfLines={1}>
+              {hasBlockRelationship ? 'Blocked User' : (profile?.username || 'Username')}
+            </Text>
+            {hasBlockRelationship && (
+              <View style={{ marginLeft: 8, backgroundColor: `${theme.danger}20`, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8 }}>
+                <Text style={{ fontSize: 10, fontWeight: '700', color: theme.danger }}>BLOCKED</Text>
+              </View>
+            )}
+          </View>
           <TouchableOpacity style={styles.menuIconBtn} onPress={() => setMenuVisible(true)}>
             <Ionicons name="ellipsis-vertical" size={22} color={theme.primary} />
           </TouchableOpacity>
@@ -735,17 +807,25 @@ const UserProfileScreen = () => {
           <TouchableOpacity 
             activeOpacity={0.85} 
             onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-              setImageViewerVisible(true);
+              if (!hasBlockRelationship) {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                setImageViewerVisible(true);
+              }
             }}
           >
-            <View style={[styles.avatarRingCompact, styles.avatarShadow]}>
-              <UserAvatar
-                photoUrl={profile?.photo}
-                username={profile?.username}
-                size={80}
-                style={styles.profileAvatarCompact}
-              />
+            <View style={[styles.avatarRingCompact, styles.avatarShadow, hasBlockRelationship && { opacity: 0.6 }]}>
+              {hasBlockRelationship ? (
+                <View style={[styles.profileAvatarCompact, { width: 80, height: 80, borderRadius: 40, backgroundColor: theme.muted, justifyContent: 'center', alignItems: 'center' }]}>
+                  <Ionicons name="ban" size={36} color={theme.text} />
+                </View>
+              ) : (
+                <UserAvatar
+                  photoUrl={profile?.photo}
+                  username={profile?.username}
+                  size={80}
+                  style={styles.profileAvatarCompact}
+                />
+              )}
             </View>
           </TouchableOpacity>
 
@@ -830,7 +910,25 @@ const UserProfileScreen = () => {
         {/* Action Buttons */}
         {!isSelf && (
           <View style={styles.actionCompactRow}>
-            {incomingRequest ? (
+            {hasBlockRelationship ? (
+              // Blocked user - show disabled buttons
+              <>
+                <View style={[styles.actionCompactBtnSecondary, { opacity: 0.4 }]}>
+                  <Ionicons name="ban" size={16} color={theme.muted} />
+                  <Text style={[styles.actionCompactBtnSecondaryText, { color: theme.muted }]}>Blocked</Text>
+                </View>
+                <View style={[styles.actionCompactBtnSecondary, { opacity: 0.4 }]}>
+                  <Ionicons name="chatbubble" size={16} color={theme.muted} />
+                  <Text style={[styles.actionCompactBtnSecondaryText, { color: theme.muted }]}>Message</Text>
+                </View>
+                <TouchableOpacity 
+                  style={styles.actionCompactBtnIcon} 
+                  onPress={handleShareProfile}
+                >
+                  <Ionicons name="share-outline" size={18} color={theme.primary} />
+                </TouchableOpacity>
+              </>
+            ) : incomingRequest ? (
               <>
                 <TouchableOpacity
                   style={styles.actionCompactBtnPrimary}
@@ -880,26 +978,30 @@ const UserProfileScreen = () => {
                 </Text>
               </TouchableOpacity>
             )}
-            <TouchableOpacity
-              style={styles.actionCompactBtnSecondary}
-              onPress={async () => {
-                try {
-                  const chatId = await ensureDmChat(userId);
-                  navigation.navigate('ChatDetail', { chatId });
-                } catch (e) {
-                  console.warn('open DM failed', e);
-                }
-              }}
-            >
-              <Ionicons name="chatbubble" size={16} color={theme.primary} />
-              <Text style={styles.actionCompactBtnSecondaryText}>Message</Text>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              style={styles.actionCompactBtnIcon} 
-              onPress={handleShareProfile}
-            >
-              <Ionicons name="share-outline" size={18} color={theme.primary} />
-            </TouchableOpacity>
+            {!hasBlockRelationship && (
+              <TouchableOpacity
+                style={styles.actionCompactBtnSecondary}
+                onPress={async () => {
+                  try {
+                    const chatId = await ensureDmChat(userId);
+                    navigation.navigate('ChatDetail', { chatId });
+                  } catch (e) {
+                    console.warn('open DM failed', e);
+                  }
+                }}
+              >
+                <Ionicons name="chatbubble" size={16} color={theme.primary} />
+                <Text style={styles.actionCompactBtnSecondaryText}>Message</Text>
+              </TouchableOpacity>
+            )}
+            {!hasBlockRelationship && (
+              <TouchableOpacity 
+                style={styles.actionCompactBtnIcon} 
+                onPress={handleShareProfile}
+              >
+                <Ionicons name="share-outline" size={18} color={theme.primary} />
+              </TouchableOpacity>
+            )}
           </View>
         )}
 
@@ -1160,7 +1262,9 @@ const UserProfileScreen = () => {
                 contentContainerStyle={{ paddingBottom: 12 }}
                 showsVerticalScrollIndicator={true}
               >
-                {userFriendProfiles.map((item) => (
+                {userFriendProfiles.map((item) => {
+                  const isFriendBlocked = isUserBlockedById(item.uid);
+                  return (
                   <TouchableOpacity
                     key={item.uid}
                     style={{ 
@@ -1170,6 +1274,7 @@ const UserProfileScreen = () => {
                       padding: 12,
                       borderRadius: 14,
                       marginBottom: 10,
+                      opacity: isFriendBlocked ? 0.6 : 1,
                     }}
                     activeOpacity={0.8}
                     onPress={() => {
@@ -1177,20 +1282,31 @@ const UserProfileScreen = () => {
                       navigation.navigate('UserProfile' as any, { userId: item.uid });
                     }}
                   >
-                    <UserAvatar
-                      photoUrl={item.photo}
-                      username={item.username}
-                      size={44}
-                      borderColor={theme.primary}
-                      borderWidth={2}
-                    />
+                    {isFriendBlocked ? (
+                      <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: theme.muted, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: theme.muted }}>
+                        <Ionicons name="ban" size={20} color={theme.text} />
+                      </View>
+                    ) : (
+                      <UserAvatar
+                        photoUrl={item.photo}
+                        username={item.username}
+                        size={44}
+                        borderColor={theme.primary}
+                        borderWidth={2}
+                      />
+                    )}
                     <View style={{ flex: 1, marginLeft: 12 }}>
-                      <Text style={{ color: theme.text, fontWeight: '700', fontSize: 15 }}>{item.username}</Text>
-                      <Text style={{ color: theme.muted, fontSize: 12, marginTop: 2 }}>Tap to view profile</Text>
+                      <Text style={{ color: isFriendBlocked ? theme.muted : theme.text, fontWeight: '700', fontSize: 15 }}>
+                        {isFriendBlocked ? 'Blocked User' : item.username}
+                      </Text>
+                      <Text style={{ color: theme.muted, fontSize: 12, marginTop: 2 }}>
+                        {isFriendBlocked ? 'Tap to view profile' : 'Tap to view profile'}
+                      </Text>
                     </View>
                     <Ionicons name="chevron-forward" size={20} color={theme.muted} />
                   </TouchableOpacity>
-                ))}
+                  );
+                })}
               </ScrollView>
             )}
           </View>
@@ -1364,38 +1480,413 @@ const UserProfileScreen = () => {
         </View>
       </Modal>
 
-      {/* Menu Modal */}
+      {/* Enhanced Menu Modal - matching ActivityDetailsScreen style */}
       <Modal visible={menuVisible} transparent animationType="fade" onRequestClose={() => setMenuVisible(false)}>
-        <Pressable style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center' }} onPress={() => setMenuVisible(false)}>
-          <Pressable style={{ backgroundColor: theme.card, borderRadius: 16, borderWidth: 1, borderColor: theme.border, maxWidth: 280, width: '80%' }}>
-            <TouchableOpacity onPress={() => setMenuVisible(false)} style={{ position: 'absolute', top: 8, right: 8, zIndex: 1, backgroundColor: theme.background, borderRadius: 15, padding: 2 }}>
-              <Ionicons name="close-circle" size={24} color={theme.muted} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
-              onPress={handleShareProfile}
-            >
-              <Ionicons name="share-social-outline" size={22} color={theme.primary} />
-              <Text style={{ color: theme.text, fontSize: 16, fontWeight: '600' }}>Share Profile</Text>
-            </TouchableOpacity>
-            <View style={{ height: 1, backgroundColor: theme.border }} />
-            <TouchableOpacity
-              style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
-              onPress={handleBlockUser}
-            >
-              <Ionicons name="ban-outline" size={22} color={theme.danger} />
-              <Text style={{ color: theme.danger, fontSize: 16, fontWeight: '600' }}>Block User</Text>
-            </TouchableOpacity>
-            <View style={{ height: 1, backgroundColor: theme.border }} />
-            <TouchableOpacity
-              style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
-              onPress={handleReportUser}
-            >
-              <Ionicons name="flag-outline" size={22} color={theme.danger} />
-              <Text style={{ color: theme.danger, fontSize: 16, fontWeight: '600' }}>Report User</Text>
-            </TouchableOpacity>
+        <Pressable style={styles.menuModalOverlay} onPress={() => setMenuVisible(false)}>
+          <Pressable style={styles.menuModalCard}>
+            {/* Header */}
+            <View style={styles.menuModalHeader}>
+              <View style={styles.menuModalIconWrap}>
+                <UserAvatar
+                  photoUrl={profile?.photo}
+                  username={profile?.username}
+                  size={40}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.menuModalTitle} numberOfLines={1}>{profile?.username || 'User'}</Text>
+                <Text style={styles.menuModalSubtitle}>Profile Options</Text>
+              </View>
+              <TouchableOpacity 
+                onPress={() => setMenuVisible(false)} 
+                style={styles.menuModalCloseBtn}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="close" size={20} color={theme.muted} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Actions */}
+            <View style={styles.menuModalActions}>
+              {/* Share Profile */}
+              <TouchableOpacity
+                style={styles.menuModalItem}
+                onPress={() => {
+                  setMenuVisible(false);
+                  handleShareProfile();
+                }}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.menuModalItemIcon, { backgroundColor: `${theme.primary}15` }]}>
+                  <Ionicons name="share-social-outline" size={20} color={theme.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.menuModalItemText}>Share Profile</Text>
+                  <Text style={styles.menuModalItemHint}>Send to friends or social media</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={theme.muted} />
+              </TouchableOpacity>
+
+              {/* Copy Profile Link */}
+              <TouchableOpacity
+                style={styles.menuModalItem}
+                onPress={async () => {
+                  setMenuVisible(false);
+                  const link = `sportspal://profile/${userId}`;
+                  Clipboard.setString(link);
+                  await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                  Alert.alert('Link Copied!', 'Profile link copied to clipboard');
+                }}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.menuModalItemIcon, { backgroundColor: `${theme.primary}15` }]}>
+                  <Ionicons name="link-outline" size={20} color={theme.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.menuModalItemText}>Copy Link</Text>
+                  <Text style={styles.menuModalItemHint}>Copy profile link to clipboard</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={theme.muted} />
+              </TouchableOpacity>
+
+              {/* View Activities */}
+              <TouchableOpacity
+                style={styles.menuModalItem}
+                onPress={() => {
+                  setMenuVisible(false);
+                  setActivitiesModalVisible(true);
+                }}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.menuModalItemIcon, { backgroundColor: `${theme.primary}15` }]}>
+                  <Ionicons name="fitness-outline" size={20} color={theme.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.menuModalItemText}>View All Activities</Text>
+                  <Text style={styles.menuModalItemHint}>{userJoinedActivities.length} activities joined</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={theme.muted} />
+              </TouchableOpacity>
+
+              {/* View Connections */}
+              <TouchableOpacity
+                style={styles.menuModalItem}
+                onPress={() => {
+                  setMenuVisible(false);
+                  setConnectionsModalVisible(true);
+                }}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.menuModalItemIcon, { backgroundColor: `${theme.primary}15` }]}>
+                  <Ionicons name="people-outline" size={20} color={theme.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.menuModalItemText}>View Connections</Text>
+                  <Text style={styles.menuModalItemHint}>{profile?.friends?.length || 0} connections</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={theme.muted} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Danger Zone */}
+            <View style={styles.menuModalDangerSection}>
+              {isBlocked ? (
+                // We blocked them - show unblock option
+                <TouchableOpacity
+                  style={styles.menuModalDangerItem}
+                  onPress={() => {
+                    setMenuVisible(false);
+                    setTimeout(() => handleUnblockUser(), 300);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.menuModalItemIcon, { backgroundColor: `${theme.primary}15` }]}>
+                    <Ionicons name="checkmark-circle-outline" size={20} color={theme.primary} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.menuModalItemText, { color: theme.primary }]}>Unblock User</Text>
+                    <Text style={styles.menuModalItemHint}>Allow interactions again</Text>
+                  </View>
+                </TouchableOpacity>
+              ) : isBlockedByThem ? (
+                // They blocked us - show info but no action (can't unblock from their side)
+                <View style={[styles.menuModalDangerItem, { opacity: 0.6 }]}>
+                  <View style={[styles.menuModalItemIcon, { backgroundColor: `${theme.muted}15` }]}>
+                    <Ionicons name="ban" size={20} color={theme.muted} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.menuModalItemText, { color: theme.muted }]}>Blocked by User</Text>
+                    <Text style={styles.menuModalItemHint}>This user has blocked you</Text>
+                  </View>
+                </View>
+              ) : (
+                // No block relationship - show block option
+                <TouchableOpacity
+                  style={styles.menuModalDangerItem}
+                  onPress={handleBlockUser}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.menuModalItemIcon, { backgroundColor: `${theme.danger}15` }]}>
+                    <Ionicons name="ban-outline" size={20} color={theme.danger} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.menuModalItemText, { color: theme.danger }]}>Block User</Text>
+                    <Text style={styles.menuModalItemHint}>Stop all interactions</Text>
+                  </View>
+                </TouchableOpacity>
+              )}
+
+              <TouchableOpacity
+                style={styles.menuModalDangerItem}
+                onPress={handleReportUser}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.menuModalItemIcon, { backgroundColor: `${theme.danger}15` }]}>
+                  <Ionicons name="flag-outline" size={20} color={theme.danger} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.menuModalItemText, { color: theme.danger }]}>Report User</Text>
+                  <Text style={styles.menuModalItemHint}>Flag inappropriate behavior</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
           </Pressable>
         </Pressable>
+      </Modal>
+
+      {/* Report User Modal */}
+      <Modal visible={reportModalVisible} transparent animationType="fade" onRequestClose={() => setReportModalVisible(false)}>
+        <KeyboardAvoidingView 
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={{ flex: 1 }}
+        >
+          <Pressable style={styles.menuModalOverlay} onPress={() => setReportModalVisible(false)}>
+            <Pressable style={styles.reportBlockModalCard} onPress={() => Keyboard.dismiss()}>
+              {/* Header */}
+              <View style={styles.reportBlockModalHeader}>
+                <View style={[styles.reportBlockModalIconWrap, { backgroundColor: `${theme.danger}15` }]}>
+                  <Ionicons name="flag" size={28} color={theme.danger} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.reportBlockModalTitle}>Report {profile?.username || 'User'}</Text>
+                  <Text style={styles.reportBlockModalSubtitle}>Help us understand what happened</Text>
+                </View>
+                <TouchableOpacity 
+                  onPress={() => setReportModalVisible(false)} 
+                  style={styles.menuModalCloseBtn}
+                >
+                  <Ionicons name="close" size={20} color={theme.muted} />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView 
+                style={{ flexGrow: 0 }} 
+                contentContainerStyle={{ paddingBottom: 8 }}
+                showsVerticalScrollIndicator={true}
+                keyboardShouldPersistTaps="handled"
+                nestedScrollEnabled
+              >
+                {/* Reason Selection */}
+                <Text style={styles.reportBlockSectionTitle}>Why are you reporting this user?</Text>
+                <View style={styles.reportBlockReasonList}>
+                  {reportReasons.map((reason) => (
+                    <TouchableOpacity
+                      key={reason.id}
+                      style={[
+                        styles.reportBlockReasonItem,
+                        reportReason === reason.id && styles.reportBlockReasonItemSelected
+                      ]}
+                      onPress={() => setReportReason(reason.id)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={[
+                        styles.reportBlockReasonIcon,
+                        reportReason === reason.id && { backgroundColor: `${theme.danger}20` }
+                      ]}>
+                        <Ionicons 
+                          name={reason.icon} 
+                          size={20} 
+                          color={reportReason === reason.id ? theme.danger : theme.muted} 
+                        />
+                      </View>
+                      <Text style={[
+                        styles.reportBlockReasonText,
+                        reportReason === reason.id && { color: theme.danger, fontWeight: '600' }
+                      ]}>{reason.label}</Text>
+                      {reportReason === reason.id && (
+                        <Ionicons name="checkmark-circle" size={22} color={theme.danger} />
+                      )}
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                {/* Additional Details */}
+                <Text style={styles.reportBlockSectionTitle}>Tell us more (optional)</Text>
+                <Text style={styles.reportBlockDetailHint}>
+                  Be as specific as you can. Your feedback helps us take the right action and keeps SportsPal safe for everyone.
+                </Text>
+                <TextInput
+                  style={styles.reportBlockTextInput}
+                  placeholder="Describe what happened..."
+                  placeholderTextColor={theme.muted}
+                  value={reportDetails}
+                  onChangeText={setReportDetails}
+                  multiline
+                  numberOfLines={4}
+                  textAlignVertical="top"
+                  scrollEnabled={false}
+                />
+              </ScrollView>
+
+              {/* Actions */}
+              <View style={styles.reportBlockModalActions}>
+                <TouchableOpacity
+                  style={styles.reportBlockCancelBtn}
+                  onPress={() => setReportModalVisible(false)}
+                >
+                  <Text style={styles.reportBlockCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.reportBlockSubmitBtn,
+                    !reportReason && styles.reportBlockSubmitBtnDisabled
+                  ]}
+                  onPress={submitReport}
+                  disabled={!reportReason}
+                >
+                  <Ionicons name="send" size={18} color="#fff" />
+                  <Text style={styles.reportBlockSubmitText}>Submit Report</Text>
+                </TouchableOpacity>
+              </View>
+            </Pressable>
+          </Pressable>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Block User Modal */}
+      <Modal visible={blockModalVisible} transparent animationType="fade" onRequestClose={() => setBlockModalVisible(false)}>
+        <KeyboardAvoidingView 
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={{ flex: 1 }}
+        >
+          <Pressable style={styles.menuModalOverlay} onPress={() => setBlockModalVisible(false)}>
+            <Pressable style={styles.reportBlockModalCard} onPress={() => Keyboard.dismiss()}>
+              {/* Header */}
+              <View style={styles.reportBlockModalHeader}>
+                <View style={[styles.reportBlockModalIconWrap, { backgroundColor: `${theme.danger}15` }]}>
+                  <Ionicons name="ban" size={28} color={theme.danger} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.reportBlockModalTitle}>Block {profile?.username || 'User'}</Text>
+                  <Text style={styles.reportBlockModalSubtitle}>This action can be undone later</Text>
+                </View>
+                <TouchableOpacity 
+                  onPress={() => setBlockModalVisible(false)} 
+                  style={styles.menuModalCloseBtn}
+                >
+                  <Ionicons name="close" size={20} color={theme.muted} />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView 
+                style={{ flexGrow: 0 }} 
+                contentContainerStyle={{ paddingBottom: 8 }}
+                showsVerticalScrollIndicator={true}
+                keyboardShouldPersistTaps="handled"
+                nestedScrollEnabled
+              >
+                {/* What happens info */}
+                <View style={styles.blockInfoBox}>
+                  <Text style={styles.blockInfoTitle}>What happens when you block someone:</Text>
+                  <View style={styles.blockInfoItem}>
+                    <Ionicons name="eye-off-outline" size={16} color={theme.muted} />
+                    <Text style={styles.blockInfoText}>You won't see their profile or activities</Text>
+                  </View>
+                  <View style={styles.blockInfoItem}>
+                    <Ionicons name="chatbubble-ellipses-outline" size={16} color={theme.muted} />
+                    <Text style={styles.blockInfoText}>They can't send you messages</Text>
+                  </View>
+                  <View style={styles.blockInfoItem}>
+                    <Ionicons name="people-outline" size={16} color={theme.muted} />
+                    <Text style={styles.blockInfoText}>Your connection will be removed</Text>
+                  </View>
+                  <View style={styles.blockInfoItem}>
+                    <Ionicons name="notifications-off-outline" size={16} color={theme.muted} />
+                    <Text style={styles.blockInfoText}>They won't be notified</Text>
+                  </View>
+                </View>
+
+                {/* Reason Selection */}
+                <Text style={styles.reportBlockSectionTitle}>Help us understand why (optional)</Text>
+                <View style={styles.reportBlockReasonList}>
+                  {blockReasons.map((reason) => (
+                    <TouchableOpacity
+                      key={reason.id}
+                      style={[
+                        styles.reportBlockReasonItem,
+                        blockReason === reason.id && styles.reportBlockReasonItemSelected
+                      ]}
+                      onPress={() => setBlockReason(reason.id)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={[
+                        styles.reportBlockReasonIcon,
+                        blockReason === reason.id && { backgroundColor: `${theme.danger}20` }
+                      ]}>
+                        <Ionicons 
+                          name={reason.icon} 
+                          size={20} 
+                          color={blockReason === reason.id ? theme.danger : theme.muted} 
+                        />
+                      </View>
+                      <Text style={[
+                        styles.reportBlockReasonText,
+                        blockReason === reason.id && { color: theme.danger, fontWeight: '600' }
+                      ]}>{reason.label}</Text>
+                      {blockReason === reason.id && (
+                        <Ionicons name="checkmark-circle" size={22} color={theme.danger} />
+                      )}
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                {/* Additional Details */}
+                <Text style={styles.reportBlockSectionTitle}>Anything else you'd like to share?</Text>
+                <Text style={styles.reportBlockDetailHint}>
+                  Your feedback is anonymous and helps us improve SportsPal for everyone.
+                </Text>
+                <TextInput
+                  style={styles.reportBlockTextInput}
+                  placeholder="Tell us more (optional)..."
+                  placeholderTextColor={theme.muted}
+                  value={blockDetails}
+                  onChangeText={setBlockDetails}
+                  multiline
+                  numberOfLines={3}
+                  textAlignVertical="top"
+                  scrollEnabled={false}
+                />
+              </ScrollView>
+
+              {/* Actions */}
+              <View style={styles.reportBlockModalActions}>
+                <TouchableOpacity
+                  style={styles.reportBlockCancelBtn}
+                  onPress={() => setBlockModalVisible(false)}
+                >
+                  <Text style={styles.reportBlockCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.reportBlockSubmitBtn}
+                  onPress={confirmBlock}
+                >
+                  <Ionicons name="ban" size={18} color="#fff" />
+                  <Text style={styles.reportBlockSubmitText}>Block User</Text>
+                </TouchableOpacity>
+              </View>
+            </Pressable>
+          </Pressable>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Full-Screen Image Viewer */}
@@ -2077,6 +2568,264 @@ const createStyles = (t: any) => StyleSheet.create({
   },
   listContainer: {
     paddingBottom: 0,
+  },
+  
+  // Enhanced Menu Modal Styles (matching ActivityDetailsScreen)
+  menuModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  menuModalCard: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: t.card,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: t.border,
+    overflow: 'hidden',
+  },
+  menuModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: t.border,
+    gap: 12,
+  },
+  menuModalIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: t.isDark ? 'rgba(26, 233, 239, 0.15)' : 'rgba(26, 233, 239, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  menuModalTitle: {
+    color: t.text,
+    fontSize: 17,
+    fontWeight: 'bold',
+  },
+  menuModalSubtitle: {
+    color: t.muted,
+    fontSize: 12,
+    marginTop: 1,
+  },
+  menuModalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: t.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  menuModalActions: {
+    padding: 8,
+  },
+  menuModalItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    gap: 12,
+  },
+  menuModalItemIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  menuModalItemText: {
+    color: t.text,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  menuModalItemHint: {
+    color: t.muted,
+    fontSize: 12,
+    marginTop: 1,
+  },
+  menuModalDangerSection: {
+    paddingHorizontal: 8,
+    paddingBottom: 8,
+    borderTopWidth: 1,
+    borderTopColor: t.border,
+    marginTop: 4,
+    paddingTop: 8,
+  },
+  menuModalDangerItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    gap: 12,
+  },
+
+  // Report/Block Modal Styles
+  reportBlockModalCard: {
+    width: '100%',
+    maxWidth: 400,
+    backgroundColor: t.card,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: t.border,
+    overflow: 'hidden',
+    maxHeight: '85%',
+  },
+  reportBlockModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: t.border,
+    gap: 12,
+  },
+  reportBlockModalIconWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reportBlockModalTitle: {
+    color: t.text,
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  reportBlockModalSubtitle: {
+    color: t.muted,
+    fontSize: 13,
+    marginTop: 2,
+  },
+  reportBlockSectionTitle: {
+    color: t.text,
+    fontSize: 15,
+    fontWeight: '700',
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 10,
+  },
+  reportBlockReasonList: {
+    paddingHorizontal: 12,
+  },
+  reportBlockReasonItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    marginVertical: 3,
+    borderRadius: 12,
+    backgroundColor: t.isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+    gap: 12,
+  },
+  reportBlockReasonItemSelected: {
+    backgroundColor: t.isDark ? 'rgba(239, 68, 68, 0.1)' : 'rgba(239, 68, 68, 0.08)',
+    borderWidth: 1,
+    borderColor: t.danger,
+  },
+  reportBlockReasonIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: t.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reportBlockReasonText: {
+    flex: 1,
+    color: t.text,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  reportBlockDetailHint: {
+    color: t.muted,
+    fontSize: 13,
+    paddingHorizontal: 16,
+    marginBottom: 10,
+    lineHeight: 18,
+  },
+  reportBlockTextInput: {
+    backgroundColor: t.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: t.border,
+    padding: 14,
+    marginHorizontal: 16,
+    marginBottom: 16,
+    color: t.text,
+    fontSize: 14,
+    minHeight: 100,
+  },
+  reportBlockModalActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+    borderTopWidth: 1,
+    borderTopColor: t.border,
+    gap: 12,
+  },
+  reportBlockCancelBtn: {
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    backgroundColor: t.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
+  },
+  reportBlockCancelText: {
+    color: t.muted,
+    fontWeight: '600',
+    fontSize: 15,
+  },
+  reportBlockSubmitBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: t.danger,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    flex: 1,
+    justifyContent: 'center',
+  },
+  reportBlockSubmitBtnDisabled: {
+    opacity: 0.5,
+  },
+  reportBlockSubmitText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  blockInfoBox: {
+    backgroundColor: t.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+    borderRadius: 12,
+    padding: 14,
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  blockInfoTitle: {
+    color: t.text,
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 10,
+  },
+  blockInfoItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 6,
+  },
+  blockInfoText: {
+    color: t.muted,
+    fontSize: 13,
+    flex: 1,
   },
 });
 

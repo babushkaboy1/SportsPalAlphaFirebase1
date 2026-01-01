@@ -1,5 +1,5 @@
 // context/ActivityContext.tsx
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { Activity } from '../data/activitiesData';
 import { getUserJoinedActivities, joinActivity, leaveActivity, fetchAllActivities, deleteActivity } from '../utils/firestoreActivities';
 import { onAuthStateChanged } from 'firebase/auth';
@@ -19,6 +19,7 @@ import {
 import { ActivityJoinLeaveModal } from '../components/ActivityJoinLeaveModal';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getBlockedUsers, clearBlockedUsersCache, getBlockedUsersCached } from '../utils/firestoreBlocks';
 
 // Default discovery radius
 const DEFAULT_RADIUS_KM = 70;
@@ -35,6 +36,9 @@ type ActivityContextType = {
   userLocation: { latitude: number; longitude: number } | null;
   discoveryRange: number;
   initialLocationLoaded: boolean;
+  blockedUsers: string[];
+  reloadBlockedUsers: () => Promise<void>;
+  isUserBlockedById: (userId: string) => boolean;
 };
 
 const ActivityContext = createContext<ActivityContextType | undefined>(undefined);
@@ -49,11 +53,14 @@ export const useActivityContext = () => {
 
 export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [joinedActivities, setJoinedActivities] = useState<string[]>([]);
-  const [allActivities, setAllActivities] = useState<Activity[]>([]);
+  const [allActivitiesRaw, setAllActivitiesRaw] = useState<Activity[]>([]);
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<any>(null);
   // Track when the first meaningful activities load (after initial Firestore fetch)
   const [initialActivitiesLoaded, setInitialActivitiesLoaded] = useState(false);
+  
+  // Blocked users state
+  const [blockedUsers, setBlockedUsers] = useState<string[]>([]);
   
   // Location state - centralized for splash screen coordination
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
@@ -175,7 +182,7 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     try {
       // Avoid fetching before auth; rules require request.auth != null
       if (!auth.currentUser) {
-        setAllActivities([]);
+        setAllActivitiesRaw([]);
         setInitialActivitiesLoaded(false);
         return;
       }
@@ -192,12 +199,12 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           // Merge cached data - filter out duplicates
           const allIds = new Set(cached.map((a: any) => a.id));
           const uniqueHistorical = historicalCached.filter((a: any) => !allIds.has(a.id));
-          setAllActivities([...cached, ...uniqueHistorical] as Activity[]);
+          setAllActivitiesRaw([...cached, ...uniqueHistorical] as Activity[]);
           if (!initialActivitiesLoaded) setInitialActivitiesLoaded(true);
           return; // Cache is valid - skip Firestore read to save costs!
         } else if (cached) {
           console.log('📦 Loaded activities from cache (skipping Firestore read)');
-          setAllActivities(cached as Activity[]);
+          setAllActivitiesRaw(cached as Activity[]);
           if (!initialActivitiesLoaded) setInitialActivitiesLoaded(true);
           return; // Cache is valid - skip Firestore read to save costs!
         }
@@ -261,7 +268,7 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         return now > end.getTime();
       });
       
-      setAllActivities(activitiesWithUsernames);
+      setAllActivitiesRaw(activitiesWithUsernames);
   // Mark initial load complete after first successful Firestore fetch
   if (!initialActivitiesLoaded) setInitialActivitiesLoaded(true);
       
@@ -276,23 +283,51 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
     } catch (e) {
       console.error('Error loading activities:', e);
-      setAllActivities([]);
+      setAllActivitiesRaw([]);
       // Fail-safe: don't block splash forever if fetch fails
       if (!initialActivitiesLoaded) setInitialActivitiesLoaded(true);
     }
   }, [initialActivitiesLoaded]); // depend so we can set flag once
 
+  // Load blocked users list
+  const reloadBlockedUsers = useCallback(async () => {
+    if (!auth.currentUser) {
+      setBlockedUsers([]);
+      return;
+    }
+    try {
+      clearBlockedUsersCache(); // Clear cache to get fresh data
+      const blocked = await getBlockedUsers();
+      setBlockedUsers(blocked);
+      console.log('🚫 Loaded blocked users:', blocked.length);
+    } catch (error) {
+      console.error('Error loading blocked users:', error);
+      setBlockedUsers([]);
+    }
+  }, []);
+
+  // Helper function to check if a user is blocked
+  const isUserBlockedById = useCallback((userId: string) => {
+    return blockedUsers.includes(userId);
+  }, [blockedUsers]);
+
+  // Don't filter activities - just expose raw activities
+  // Blocked user names will be masked in the UI instead
+  const allActivities = allActivitiesRaw;
+
   // Only load activities after user is authenticated
   useEffect(() => {
     if (user) {
       reloadAllActivities();
+      reloadBlockedUsers();
     } else {
       // clear activities and cache when signed out
-      setAllActivities([]);
+      setAllActivitiesRaw([]);
       clearActivityCache();
       setInitialActivitiesLoaded(false);
+      setBlockedUsers([]);
     }
-  }, [user, reloadAllActivities]);
+  }, [user, reloadAllActivities, reloadBlockedUsers]);
 
   // REMOVED EXPENSIVE REAL-TIME SUBSCRIPTION
   // Now using: Cache + Manual Pull-to-Refresh + Optimistic Updates
@@ -376,8 +411,8 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         // Immediately remove from joined activities
         setJoinedActivities(prev => prev.filter(id => id !== activity.id));
         
-        // Update allActivities state immediately (preserves creatorUsername!)
-        setAllActivities(prev => prev.map(a => 
+        // Update allActivitiesRaw state immediately (preserves creatorUsername!)
+        setAllActivitiesRaw(prev => prev.map(a => 
           a.id === activity.id 
             ? {
                 ...a,
@@ -396,8 +431,8 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         // Immediately add to joined activities
         setJoinedActivities(prev => [...prev, activity.id]);
         
-        // Update allActivities state immediately (preserves creatorUsername!)
-        setAllActivities(prev => prev.map(a => 
+        // Update allActivitiesRaw state immediately (preserves creatorUsername!)
+        setAllActivitiesRaw(prev => prev.map(a => 
           a.id === activity.id 
             ? {
                 ...a,
@@ -434,7 +469,7 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         console.error('❌ Failed to sync with Firestore, rolling back:', error);
         if (isJoined) {
           setJoinedActivities(prev => [...prev, activity.id]);
-          setAllActivities(prev => prev.map(a => 
+          setAllActivitiesRaw(prev => prev.map(a => 
             a.id === activity.id 
               ? {
                   ...a,
@@ -449,7 +484,7 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           });
         } else {
           setJoinedActivities(prev => prev.filter(id => id !== activity.id));
-          setAllActivities(prev => prev.map(a => 
+          setAllActivitiesRaw(prev => prev.map(a => 
             a.id === activity.id 
               ? {
                   ...a,
@@ -491,6 +526,9 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         userLocation,
         discoveryRange,
         initialLocationLoaded,
+        blockedUsers,
+        reloadBlockedUsers,
+        isUserBlockedById,
       }}
     >
       {children}

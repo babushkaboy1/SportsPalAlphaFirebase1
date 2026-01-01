@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useTheme } from '../context/ThemeContext';
+import { useActivityContext } from '../context/ActivityContext';
 import UserAvatar from '../components/UserAvatar';
 import { getBlockedUsers, unblockUser } from '../utils/firestoreBlocks';
 import { doc, getDoc } from 'firebase/firestore';
@@ -20,6 +21,7 @@ interface BlockedUserProfile {
 const BlockedUsersScreen: React.FC = () => {
   const navigation = useNavigation();
   const { theme } = useTheme();
+  const { reloadBlockedUsers: reloadContextBlockedUsers } = useActivityContext();
   const styles = React.useMemo(() => createStyles(theme), [theme]);
   
   const [blockedUsers, setBlockedUsers] = useState<BlockedUserProfile[]>([]);
@@ -86,6 +88,8 @@ const BlockedUsersScreen: React.FC = () => {
               await unblockUser(user.uid);
               await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
               setBlockedUsers(prev => prev.filter(u => u.uid !== user.uid));
+              // Reload blocked users in context to update filtering across the app
+              await reloadContextBlockedUsers();
             } catch (error) {
               console.error('Error unblocking user:', error);
               Alert.alert('Error', 'Failed to unblock user');

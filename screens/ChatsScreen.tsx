@@ -208,6 +208,12 @@ const ChatsScreen = ({ navigation }: any) => {
   const [mutedChats, setMutedChats] = useState<string[]>([]);
   const [displayedChatsCount, setDisplayedChatsCount] = useState(9);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  
+  // Report modal states
+  const [reportModalVisible, setReportModalVisible] = useState(false);
+  const [selectedReportReason, setSelectedReportReason] = useState<string | null>(null);
+  const [isSubmittingReport, setIsSubmittingReport] = useState(false);
+  const [isBlockedByPeer, setIsBlockedByPeer] = useState(false);
 
   // Rating reminders for past activities
   const [ratingReminders, setRatingReminders] = useState<any[]>([]);
@@ -226,7 +232,7 @@ const ChatsScreen = ({ navigation }: any) => {
   const route = useRoute<any>();
   const nav = useNavigation<any>();
   const { unreadNotifications, unreadChatMessages, markNotificationsRead } = useInboxBadge();
-  const { toggleJoinActivity, allActivities, joinedActivities } = useActivityContext();
+  const { toggleJoinActivity, allActivities, joinedActivities, blockedUsers, isUserBlockedById } = useActivityContext();
 
   /** ========= Helper: Fetch profile with caching (5 min cache) ========= */
   const fetchProfileCached = async (uid: string): Promise<{ username: string; photo?: string }> => {
@@ -765,18 +771,88 @@ const ChatsScreen = ({ navigation }: any) => {
     }
   };
 
+  // Report reasons for the modal
+  const reportReasons = [
+    { id: 'harassment', label: 'Harassment or bullying', icon: 'warning-outline' as const },
+    { id: 'spam', label: 'Spam or scam', icon: 'mail-unread-outline' as const },
+    { id: 'inappropriate', label: 'Inappropriate content', icon: 'eye-off-outline' as const },
+    { id: 'impersonation', label: 'Impersonation', icon: 'person-outline' as const },
+    { id: 'threats', label: 'Threats or violence', icon: 'alert-circle-outline' as const },
+    { id: 'other', label: 'Other', icon: 'ellipsis-horizontal-outline' as const },
+  ];
+
   const handleReportChat = () => {
     setChatMenuVisible(false);
+    setSelectedReportReason(null);
+    setReportModalVisible(true);
+  };
+
+  const submitReport = async () => {
+    if (!selectedReportReason || !selectedChat) return;
+    
+    setIsSubmittingReport(true);
+    try {
+      // Here you would send the report to your backend/Firestore
+      // For now, we'll just simulate success
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      setReportModalVisible(false);
+      setSelectedReportReason(null);
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert(
+        'Report Submitted',
+        'Thank you for your report. We will review it and take appropriate action.',
+        [{ text: 'OK' }]
+      );
+    } catch (error) {
+      console.error('Error submitting report:', error);
+      Alert.alert('Error', 'Failed to submit report. Please try again.');
+    } finally {
+      setIsSubmittingReport(false);
+    }
+  };
+
+  const handleBlockFromChat = () => {
+    if (!selectedChat) return;
+    
+    setChatMenuVisible(false);
+    
     Alert.alert(
-      'Report',
-      'Why are you reporting this chat?',
+      'Block User',
+      'To block this user, visit their profile and tap the menu icon (⋮) in the top right corner.',
       [
-        { text: 'Inappropriate content', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
-        { text: 'Spam or harassment', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
-        { text: 'Suspicious activity', onPress: () => Alert.alert('Reported', 'Thank you for your report.') },
-        { text: 'Cancel', style: 'cancel' },
+        { text: 'OK', style: 'default' },
+        {
+          text: 'Go to Profile',
+          onPress: () => {
+            const me = auth.currentUser?.uid;
+            const otherUserId = selectedChat.participants?.find((uid: string) => uid !== me);
+            if (otherUserId) {
+              navigation.navigate('UserProfile', { userId: otherUserId });
+            }
+          },
+        },
       ]
     );
+  };
+
+  const handleViewProfile = () => {
+    if (!selectedChat) return;
+    
+    const me = auth.currentUser?.uid;
+    const otherUserId = selectedChat.participants?.find((uid: string) => uid !== me);
+    
+    if (!otherUserId) return;
+    
+    setChatMenuVisible(false);
+    navigation.navigate('UserProfile', { userId: otherUserId });
+  };
+
+  const handleViewActivity = () => {
+    if (!selectedChat?.activityId) return;
+    
+    setChatMenuVisible(false);
+    navigation.navigate('ActivityDetails', { activityId: selectedChat.activityId });
   };
 
   const handleMuteToggle = async () => {
@@ -870,6 +946,7 @@ const ChatsScreen = ({ navigation }: any) => {
   }, [showActivity]);
 
   /** ========= Search / filter ========= */
+  // Don't hide DMs with blocked users - just show "Blocked User" in the UI
   const filteredChats = useMemo(() => 
     chats.filter((chat) =>
       (chat.name || '').toLowerCase().includes(searchQuery.toLowerCase())
@@ -898,6 +975,14 @@ const ChatsScreen = ({ navigation }: any) => {
     const me = auth.currentUser?.uid;
     const isDm = item.type === 'dm';
     const showTyping = !!item.typingLabel;
+    
+    // Check if this is a DM with a blocked user
+    const otherUserId = isDm ? item.participants?.find((uid: string) => uid !== me) : null;
+    const isDmWithBlockedUser = isDm && otherUserId && isUserBlockedById(otherUserId);
+    
+    // Masked name and image for blocked users
+    const displayName = isDmWithBlockedUser ? 'Blocked User' : item.name;
+    const displayImage = isDmWithBlockedUser ? undefined : item.image;
 
     let preview: React.ReactNode = null;
     if (showTyping) {
@@ -924,12 +1009,18 @@ const ChatsScreen = ({ navigation }: any) => {
 
     const avatarEl =
       isDm ? (
+        isDmWithBlockedUser ? (
+          <View style={[styles.dmAvatar, { backgroundColor: theme.muted, justifyContent: 'center', alignItems: 'center' }]}>
+            <Ionicons name="ban" size={24} color={theme.text} />
+          </View>
+        ) : (
         <UserAvatar
-          photoUrl={item.image}
-          username={item.name || 'User'}
+          photoUrl={displayImage}
+          username={displayName || 'User'}
           size={50}
           style={styles.dmAvatar}
         />
+        )
       ) : item.activityId ? (
           <View style={styles.groupAvatar}>
             {sportIconFor(item.activityType?.toLowerCase?.(), theme.primary) || <ActivityIcon activity={item.activityType} size={28} color={theme.primary} />}
@@ -950,8 +1041,8 @@ const ChatsScreen = ({ navigation }: any) => {
           navigation.navigate('ChatDetail', {
             chatId: item.id,
             initialHeader: {
-              name: item.name,
-              image: item.image,
+              name: displayName,
+              image: displayImage,
               activityId: item.activityId || null,
               activityType: item.activityType,
               date: item.date,
@@ -975,7 +1066,7 @@ const ChatsScreen = ({ navigation }: any) => {
         <View style={styles.chatRowRight}>
           <View style={styles.chatInfo}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Text style={styles.chatTitle} numberOfLines={1}>{item.name}</Text>
+              <Text style={[styles.chatTitle, isDmWithBlockedUser && { color: theme.muted }]} numberOfLines={1}>{displayName}</Text>
               {mutedChats.includes(item.id) && (
                 <Ionicons name="notifications-off" size={16} color={theme.muted} style={{ marginLeft: 6 }} />
               )}
@@ -1560,41 +1651,300 @@ const ChatsScreen = ({ navigation }: any) => {
         </View>
       </Modal>
 
-      {/* Chat Options Menu */}
+      {/* Chat Options Menu - Enhanced by chat type */}
       <Modal visible={chatMenuVisible} transparent animationType="fade">
         <Pressable style={styles.modalOverlay} onPress={() => setChatMenuVisible(false)}>
-          <View style={{ backgroundColor: theme.card, borderRadius: 16, borderWidth: 1, borderColor: theme.border, maxWidth: 280, width: '80%' }}>
-            <TouchableOpacity
-              style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
-              onPress={handleMuteToggle}
-            >
-              <Ionicons 
-                name={selectedChat && mutedChats.includes(selectedChat.id) ? "notifications" : "notifications-off"} 
-                size={22} 
-                color={theme.primary} 
-              />
-              <Text style={{ color: theme.text, fontSize: 16, fontWeight: '600' }}>
-                {selectedChat && mutedChats.includes(selectedChat.id) ? 'Unmute' : 'Mute'}
+          <View style={{ backgroundColor: theme.card, borderRadius: 16, borderWidth: 1, borderColor: theme.border, maxWidth: 300, width: '85%' }}>
+            {/* Header with chat info */}
+            <View style={{ padding: 16, borderBottomWidth: 1, borderBottomColor: theme.border, alignItems: 'center', position: 'relative' }}>
+              {/* Close button */}
+              <TouchableOpacity
+                style={{
+                  position: 'absolute',
+                  top: 12,
+                  right: 12,
+                  width: 28,
+                  height: 28,
+                  borderRadius: 14,
+                  backgroundColor: theme.background,
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                }}
+                onPress={() => setChatMenuVisible(false)}
+              >
+                <Ionicons name="close" size={18} color={theme.muted} />
+              </TouchableOpacity>
+              
+              <Text style={{ color: theme.text, fontSize: 16, fontWeight: '700', textAlign: 'center' }} numberOfLines={1}>
+                {selectedChat?.name || 'Chat Options'}
               </Text>
-            </TouchableOpacity>
-            <View style={{ height: 1, backgroundColor: theme.border }} />
-            <TouchableOpacity
-              style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
-              onPress={handleDeleteChat}
-            >
-              <Ionicons name="trash-outline" size={22} color={theme.danger} />
-              <Text style={{ color: theme.danger, fontSize: 16, fontWeight: '600' }}>Delete Chat</Text>
-            </TouchableOpacity>
-            <View style={{ height: 1, backgroundColor: theme.border }} />
-            <TouchableOpacity
-              style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
-              onPress={handleReportChat}
-            >
-              <Ionicons name="flag-outline" size={22} color={theme.danger} />
-              <Text style={{ color: theme.danger, fontSize: 16, fontWeight: '600' }}>Report</Text>
-            </TouchableOpacity>
+              <Text style={{ color: theme.muted, fontSize: 12, marginTop: 2 }}>
+                {selectedChat?.type === 'dm' ? 'Direct Message' : 
+                 selectedChat?.activityId ? 'Activity Group' : 'Group Chat'}
+              </Text>
+            </View>
+            
+            {(() => {
+              const me = auth.currentUser?.uid;
+              const isDm = selectedChat?.type === 'dm';
+              const isActivityGroup = !!selectedChat?.activityId;
+              const otherUserId = isDm ? selectedChat?.participants?.find((uid: string) => uid !== me) : null;
+              const isDmBlocked = isDm && otherUserId && isUserBlockedById(otherUserId);
+              
+              // For blocked DM users - only show minimal options
+              if (isDm && isDmBlocked) {
+                return (
+                  <>
+                    <View style={{ padding: 12, alignItems: 'center', backgroundColor: theme.background }}>
+                      <Ionicons name="ban" size={24} color={theme.muted} />
+                      <Text style={{ color: theme.muted, fontSize: 14, marginTop: 4 }}>Blocked User</Text>
+                    </View>
+                    <View style={{ height: 1, backgroundColor: theme.border }} />
+                    <TouchableOpacity
+                      style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
+                      onPress={handleDeleteChat}
+                    >
+                      <Ionicons name="trash-outline" size={22} color={theme.danger} />
+                      <Text style={{ color: theme.danger, fontSize: 16, fontWeight: '600' }}>Delete Chat</Text>
+                    </TouchableOpacity>
+                  </>
+                );
+              }
+              
+              // DM Chat Options
+              if (isDm) {
+                return (
+                  <>
+                    <TouchableOpacity
+                      style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
+                      onPress={handleViewProfile}
+                    >
+                      <Ionicons name="person-outline" size={22} color={theme.primary} />
+                      <Text style={{ color: theme.text, fontSize: 16, fontWeight: '600' }}>View Profile</Text>
+                    </TouchableOpacity>
+                    <View style={{ height: 1, backgroundColor: theme.border }} />
+                    <TouchableOpacity
+                      style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
+                      onPress={handleMuteToggle}
+                    >
+                      <Ionicons 
+                        name={selectedChat && mutedChats.includes(selectedChat.id) ? "notifications" : "notifications-off"} 
+                        size={22} 
+                        color={theme.primary} 
+                      />
+                      <Text style={{ color: theme.text, fontSize: 16, fontWeight: '600' }}>
+                        {selectedChat && mutedChats.includes(selectedChat.id) ? 'Unmute' : 'Mute'}
+                      </Text>
+                    </TouchableOpacity>
+                    <View style={{ height: 1, backgroundColor: theme.border }} />
+                    <TouchableOpacity
+                      style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
+                      onPress={handleDeleteChat}
+                    >
+                      <Ionicons name="trash-outline" size={22} color={theme.text} />
+                      <Text style={{ color: theme.text, fontSize: 16, fontWeight: '600' }}>Delete Chat</Text>
+                    </TouchableOpacity>
+                    <View style={{ height: 1, backgroundColor: theme.border, marginTop: 8 }} />
+                    <Text style={{ color: theme.muted, fontSize: 12, fontWeight: '600', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4 }}>DANGER ZONE</Text>
+                    <TouchableOpacity
+                      style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
+                      onPress={handleBlockFromChat}
+                    >
+                      <Ionicons name="ban" size={22} color={theme.danger} />
+                      <Text style={{ color: theme.danger, fontSize: 16, fontWeight: '600' }}>Block User</Text>
+                    </TouchableOpacity>
+                    <View style={{ height: 1, backgroundColor: theme.border }} />
+                    <TouchableOpacity
+                      style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
+                      onPress={handleReportChat}
+                    >
+                      <Ionicons name="flag-outline" size={22} color={theme.danger} />
+                      <Text style={{ color: theme.danger, fontSize: 16, fontWeight: '600' }}>Report User</Text>
+                    </TouchableOpacity>
+                  </>
+                );
+              }
+              
+              // Activity Group Chat Options
+              if (isActivityGroup) {
+                return (
+                  <>
+                    <TouchableOpacity
+                      style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
+                      onPress={handleViewActivity}
+                    >
+                      <Ionicons name="calendar-outline" size={22} color={theme.primary} />
+                      <Text style={{ color: theme.text, fontSize: 16, fontWeight: '600' }}>View Activity</Text>
+                    </TouchableOpacity>
+                    <View style={{ height: 1, backgroundColor: theme.border }} />
+                    <TouchableOpacity
+                      style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
+                      onPress={handleMuteToggle}
+                    >
+                      <Ionicons 
+                        name={selectedChat && mutedChats.includes(selectedChat.id) ? "notifications" : "notifications-off"} 
+                        size={22} 
+                        color={theme.primary} 
+                      />
+                      <Text style={{ color: theme.text, fontSize: 16, fontWeight: '600' }}>
+                        {selectedChat && mutedChats.includes(selectedChat.id) ? 'Unmute' : 'Mute'}
+                      </Text>
+                    </TouchableOpacity>
+                    <View style={{ height: 1, backgroundColor: theme.border }} />
+                    <TouchableOpacity
+                      style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
+                      onPress={handleDeleteChat}
+                    >
+                      <Ionicons name="eye-off-outline" size={22} color={theme.text} />
+                      <Text style={{ color: theme.text, fontSize: 16, fontWeight: '600' }}>Hide Chat</Text>
+                    </TouchableOpacity>
+                    <View style={{ height: 1, backgroundColor: theme.border, marginTop: 8 }} />
+                    <Text style={{ color: theme.muted, fontSize: 12, fontWeight: '600', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4 }}>DANGER ZONE</Text>
+                    <TouchableOpacity
+                      style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
+                      onPress={handleReportChat}
+                    >
+                      <Ionicons name="flag-outline" size={22} color={theme.danger} />
+                      <Text style={{ color: theme.danger, fontSize: 16, fontWeight: '600' }}>Report Chat</Text>
+                    </TouchableOpacity>
+                  </>
+                );
+              }
+              
+              // Custom Group Chat Options
+              return (
+                <>
+                  <TouchableOpacity
+                    style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
+                    onPress={handleMuteToggle}
+                  >
+                    <Ionicons 
+                      name={selectedChat && mutedChats.includes(selectedChat.id) ? "notifications" : "notifications-off"} 
+                      size={22} 
+                      color={theme.primary} 
+                    />
+                    <Text style={{ color: theme.text, fontSize: 16, fontWeight: '600' }}>
+                      {selectedChat && mutedChats.includes(selectedChat.id) ? 'Unmute' : 'Mute'}
+                    </Text>
+                  </TouchableOpacity>
+                  <View style={{ height: 1, backgroundColor: theme.border }} />
+                  <TouchableOpacity
+                    style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
+                    onPress={handleDeleteChat}
+                  >
+                    <Ionicons name="exit-outline" size={22} color={theme.text} />
+                    <Text style={{ color: theme.text, fontSize: 16, fontWeight: '600' }}>Leave Group</Text>
+                  </TouchableOpacity>
+                  <View style={{ height: 1, backgroundColor: theme.border, marginTop: 8 }} />
+                  <Text style={{ color: theme.muted, fontSize: 12, fontWeight: '600', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4 }}>DANGER ZONE</Text>
+                  <TouchableOpacity
+                    style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}
+                    onPress={handleReportChat}
+                  >
+                    <Ionicons name="flag-outline" size={22} color={theme.danger} />
+                    <Text style={{ color: theme.danger, fontSize: 16, fontWeight: '600' }}>Report Group</Text>
+                  </TouchableOpacity>
+                </>
+              );
+            })()}
           </View>
         </Pressable>
+      </Modal>
+
+      {/* Report Modal with Reasons */}
+      <Modal visible={reportModalVisible} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={{ backgroundColor: theme.card, borderRadius: 20, maxWidth: 340, width: '90%', maxHeight: '70%' }}>
+            {/* Header */}
+            <View style={{ padding: 20, borderBottomWidth: 1, borderBottomColor: theme.border, alignItems: 'center' }}>
+              <View style={{ width: 50, height: 50, borderRadius: 25, backgroundColor: theme.danger + '20', alignItems: 'center', justifyContent: 'center', marginBottom: 12 }}>
+                <Ionicons name="flag" size={24} color={theme.danger} />
+              </View>
+              <Text style={{ color: theme.text, fontSize: 20, fontWeight: '700' }}>Report</Text>
+              <Text style={{ color: theme.muted, fontSize: 14, textAlign: 'center', marginTop: 4 }}>
+                Why are you reporting this {selectedChat?.type === 'dm' ? 'user' : 'chat'}?
+              </Text>
+            </View>
+            
+            {/* Report Reasons */}
+            <View style={{ padding: 12 }}>
+              {reportReasons.map((reason) => (
+                <TouchableOpacity
+                  key={reason.id}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    paddingVertical: 14,
+                    paddingHorizontal: 16,
+                    borderRadius: 12,
+                    marginBottom: 8,
+                    backgroundColor: selectedReportReason === reason.id ? theme.primary + '20' : theme.background,
+                    borderWidth: selectedReportReason === reason.id ? 2 : 1,
+                    borderColor: selectedReportReason === reason.id ? theme.primary : theme.border,
+                  }}
+                  onPress={() => setSelectedReportReason(reason.id)}
+                >
+                  <Ionicons 
+                    name={reason.icon} 
+                    size={20} 
+                    color={selectedReportReason === reason.id ? theme.primary : theme.muted} 
+                  />
+                  <Text style={{ 
+                    color: selectedReportReason === reason.id ? theme.primary : theme.text, 
+                    fontSize: 15, 
+                    fontWeight: selectedReportReason === reason.id ? '600' : '500',
+                    marginLeft: 12,
+                    flex: 1
+                  }}>
+                    {reason.label}
+                  </Text>
+                  {selectedReportReason === reason.id && (
+                    <Ionicons name="checkmark-circle" size={20} color={theme.primary} />
+                  )}
+                </TouchableOpacity>
+              ))}
+            </View>
+            
+            {/* Actions */}
+            <View style={{ flexDirection: 'row', padding: 16, gap: 12, borderTopWidth: 1, borderTopColor: theme.border }}>
+              <TouchableOpacity
+                style={{
+                  flex: 1,
+                  paddingVertical: 14,
+                  borderRadius: 12,
+                  backgroundColor: theme.background,
+                  borderWidth: 1,
+                  borderColor: theme.border,
+                  alignItems: 'center',
+                }}
+                onPress={() => {
+                  setReportModalVisible(false);
+                  setSelectedReportReason(null);
+                }}
+              >
+                <Text style={{ color: theme.text, fontSize: 16, fontWeight: '600' }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={{
+                  flex: 1,
+                  paddingVertical: 14,
+                  borderRadius: 12,
+                  backgroundColor: selectedReportReason ? theme.danger : theme.muted,
+                  alignItems: 'center',
+                  opacity: selectedReportReason ? 1 : 0.5,
+                }}
+                onPress={submitReport}
+                disabled={!selectedReportReason || isSubmittingReport}
+              >
+                {isSubmittingReport ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={{ color: '#fff', fontSize: 16, fontWeight: '600' }}>Submit Report</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
       </Modal>
     </View>
   );
