@@ -49,6 +49,9 @@ import { activities as fakeActivities, Activity } from '../data/activitiesData';
 import { useActivityContext } from '../context/ActivityContext';
 import { getDisplayCreatorUsername } from '../utils/getDisplayCreatorUsername';
 import { shareActivity } from '../utils/deepLinking';
+import { db } from '../firebaseConfig';
+import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
+import UserAvatar from '../components/UserAvatar';
 
 // Default discovery radius ≈45-min drive at 80–100 km/h
 const DEFAULT_RADIUS_KM = 70;
@@ -120,11 +123,11 @@ type DiscoverNav = NavigationProp<RootStackParamList, 'ActivityDetails'>;
 const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation }) => {
   const { theme } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
-  const { allActivities, isActivityJoined, toggleJoinActivity, profile, reloadAllActivities } = useActivityContext();
+  const { allActivities, isActivityJoined, toggleJoinActivity, profile, reloadAllActivities, userLocation, discoveryRange: contextDiscoveryRange } = useActivityContext();
   const insets = useSafeAreaInsets();
 
-  // Discovery range from settings (default 70 km)
-  const [discoveryRange, setDiscoveryRange] = useState(DEFAULT_RADIUS_KM);
+  // Discovery range from context (loaded from AsyncStorage in ActivityContext)
+  const [discoveryRange, setDiscoveryRange] = useState(contextDiscoveryRange);
 
   // rawSearch holds immediate input, debouncedSearch is used for filtering (debounced)
   const [rawSearchQuery, setRawSearchQuery] = useState('');
@@ -137,12 +140,11 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
   const [isIOSDatePickerVisible, setIOSDatePickerVisible] = useState(false);
   const [tempDate, setTempDate] = useState<Date | null>(null);
   const [isSortingByDistance, setIsSortingByDistance] = useState(false);
-  const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  // userLocation comes from context (loaded before splash hides)
   const [showMap, setShowMap] = useState(false);
   const [mapRegion, setMapRegion] = useState<Region | null>(null);
   const [mapActivities, setMapActivities] = useState<Activity[]>([]);
   const [mapLoading, setMapLoading] = useState(false);
-  const [regionDirty, setRegionDirty] = useState(false);
   const [selectedMapActivity, setSelectedMapActivity] = useState<Activity | null>(null);
   const [mapSelectedFilter, setMapSelectedFilter] = useState('All');
   const [mapSelectedDate, setMapSelectedDate] = useState<Date | null>(null);
@@ -154,23 +156,19 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
   const [locationSuggestions, setLocationSuggestions] = useState<Array<{ name: string; lat: number; lon: number }>>([]);
   const [isSearchingLocation, setIsSearchingLocation] = useState(false);
   const locationSearchDebounceRef = useRef<number | null>(null);
-  const [displayedActivitiesCount, setDisplayedActivitiesCount] = useState(10);
+  const [displayedActivitiesCount, setDisplayedActivitiesCount] = useState(8);
   const [isLoadingMoreActivities, setIsLoadingMoreActivities] = useState(false);
+  const [searchedUsers, setSearchedUsers] = useState<Array<{ uid: string; username: string; photo?: string; bio?: string; sportsPreferences?: string[] }>>([]);
+  const [isSearchingUsers, setIsSearchingUsers] = useState(false);
+  const userSearchDebounceRef = useRef<number | null>(null);
+  const [selectedClusterActivities, setSelectedClusterActivities] = useState<Activity[] | null>(null);
+  const [clusterPanelIndex, setClusterPanelIndex] = useState(0);
+  const mapFilterDebounceRef = useRef<number | null>(null);
 
-  // Load discovery range from AsyncStorage on mount and on screen focus
+  // Sync discovery range when context changes (e.g., on settings update)
   useEffect(() => {
-    const loadDiscoveryRange = async () => {
-      try {
-        const saved = await AsyncStorage.getItem('discoveryRange');
-        if (saved) {
-          setDiscoveryRange(parseInt(saved, 10));
-        }
-      } catch (error) {
-        console.error('Failed to load discovery range:', error);
-      }
-    };
-    loadDiscoveryRange();
-  }, []);
+    setDiscoveryRange(contextDiscoveryRange);
+  }, [contextDiscoveryRange]);
 
   // Reload discovery range when screen comes into focus (instant updates from Settings)
   useFocusEffect(
@@ -199,7 +197,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
     if (isLoadingMoreActivities) return;
     setIsLoadingMoreActivities(true);
     setTimeout(() => {
-      setDisplayedActivitiesCount(prev => prev + 10);
+      setDisplayedActivitiesCount(prev => prev + 8);
       setIsLoadingMoreActivities(false);
     }, 300);
   };
@@ -235,27 +233,19 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
     }
   }, [reloadAllActivities]);
 
+  // Initial load - location is already loaded from context before splash hides
   useEffect(() => {
     loadActivities();
-    (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status === 'granted') {
-        let location = await Location.getLastKnownPositionAsync({});
-        if (!location) location = await Location.getCurrentPositionAsync({});
-        if (location) {
-          setUserLocation(location.coords);
-          if (!mapRegion) {
-            setMapRegion({
-              latitude: location.coords.latitude,
-              longitude: location.coords.longitude,
-              latitudeDelta: 0.25,
-              longitudeDelta: 0.25,
-            });
-          }
-        }
-      }
-    })();
-  }, [loadActivities]);
+    // Set initial map region from context location
+    if (userLocation && !mapRegion) {
+      setMapRegion({
+        latitude: userLocation.latitude,
+        longitude: userLocation.longitude,
+        latitudeDelta: 0.25,
+        longitudeDelta: 0.25,
+      });
+    }
+  }, [loadActivities, userLocation, mapRegion]);
 
   // Fade in
   useEffect(() => {
@@ -291,10 +281,16 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
 
     if (debouncedSearchQuery.trim()) {
       const q = debouncedSearchQuery.toLowerCase();
+      // Get UIDs of searched users to include their activities
+      const searchedUserIds = searchedUsers.map(u => u.uid);
+      
       list = list.filter(a =>
         a.activity.toLowerCase().includes(q) ||
         a.creator.toLowerCase().includes(q) ||
-        (a.location && a.location.toLowerCase().includes(q))
+        (a.creatorUsername && a.creatorUsername.toLowerCase().includes(q)) ||
+        (a.location && a.location.toLowerCase().includes(q)) ||
+        // Include activities created by matched users
+        (a.creatorId && searchedUserIds.includes(a.creatorId))
       );
     }
 
@@ -445,7 +441,17 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
     discoveryRange,
     calculateDistance,
     profile?.sportsPreferences,
+    searchedUsers,
   ]);
+
+  // Count activities per searched user (for display in user cards)
+  const activitiesPerUser = useMemo(() => {
+    const counts: Record<string, number> = {};
+    searchedUsers.forEach(user => {
+      counts[user.uid] = filteredActivities.filter(a => a.creatorId === user.uid).length;
+    });
+    return counts;
+  }, [searchedUsers, filteredActivities]);
 
   // Filter currently loaded activities for visible map region (only upcoming/current within 2 hours)
   // No distance limit on map - can see activities worldwide
@@ -557,12 +563,59 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
     return filtered;
   }, [allActivities, mapSelectedFilter, mapSelectedDate, showJoinedOnly, isActivityJoined, mapSearchQuery]);
 
+  // Group activities by location for clustering (activities at same lat/lng)
+  const groupedMapActivities = useMemo(() => {
+    const groups: { key: string; lat: number; lng: number; activities: Activity[] }[] = [];
+    const locationMap = new Map<string, Activity[]>();
+    
+    mapActivities.forEach(act => {
+      // Round to 5 decimal places (~1m precision) to group nearby activities
+      const lat = Math.round(act.latitude * 100000) / 100000;
+      const lng = Math.round(act.longitude * 100000) / 100000;
+      const key = `${lat},${lng}`;
+      
+      if (!locationMap.has(key)) {
+        locationMap.set(key, []);
+      }
+      locationMap.get(key)!.push(act);
+    });
+    
+    locationMap.forEach((activities, key) => {
+      const [lat, lng] = key.split(',').map(Number);
+      groups.push({ key, lat, lng, activities });
+    });
+    
+    return groups;
+  }, [mapActivities]);
+
   // Refresh map activities when activities list changes or region/filters change (if map open)
-  // Only update if not currently loading to prevent infinite refresh loop
+  // Debounced to prevent race conditions when spamming filters
   useEffect(() => {
-    if (showMap && mapRegion && !mapLoading) {
-      setMapActivities(filterForRegion(mapRegion));
+    if (!showMap || !mapRegion) return;
+
+    // Clear any pending debounce
+    if (mapFilterDebounceRef.current) {
+      clearTimeout(mapFilterDebounceRef.current);
     }
+
+    // Capture current filter values
+    const currentFilter = mapSelectedFilter;
+    const currentDate = mapSelectedDate;
+    const currentJoined = showJoinedOnly;
+    const currentSearch = mapSearchQuery;
+    const currentRegion = mapRegion;
+
+    // Debounce the filter update
+    mapFilterDebounceRef.current = setTimeout(() => {
+      // Apply filters with captured values
+      setMapActivities(filterForRegion(currentRegion));
+    }, 100) as unknown as number;
+
+    return () => {
+      if (mapFilterDebounceRef.current) {
+        clearTimeout(mapFilterDebounceRef.current);
+      }
+    };
   }, [showMap, mapRegion, filterForRegion, mapSelectedFilter, mapSelectedDate, showJoinedOnly, mapSearchQuery]);
   
   // Separate effect for initial load when opening map
@@ -575,12 +628,10 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
   const handleLoadRegionActivities = useCallback(async () => {
     if (!mapRegion || mapLoading) return;
     setMapLoading(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     try {
       // Filter activities for the current map region from existing data
       const filtered = filterForRegion(mapRegion);
       setMapActivities(filtered);
-      setRegionDirty(false);
     } catch (e) {
       console.error('Error loading region activities:', e);
     } finally {
@@ -605,6 +656,67 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
       }
     };
   }, [rawSearchQuery]);
+
+  // User search with debouncing - search profiles by username_lower
+  useEffect(() => {
+    if (userSearchDebounceRef.current) {
+      clearTimeout(userSearchDebounceRef.current as any);
+      userSearchDebounceRef.current = null;
+    }
+
+    if (!debouncedSearchQuery.trim() || debouncedSearchQuery.trim().length < 2) {
+      setSearchedUsers([]);
+      return;
+    }
+
+    // @ts-ignore - window.setTimeout returns number in RN env
+    userSearchDebounceRef.current = setTimeout(async () => {
+      setIsSearchingUsers(true);
+      try {
+        const searchLower = debouncedSearchQuery.toLowerCase().trim();
+        const profilesRef = collection(db, 'profiles');
+        
+        // Search for usernames that start with the search query
+        const q = query(
+          profilesRef,
+          where('username_lower', '>=', searchLower),
+          where('username_lower', '<=', searchLower + '\uf8ff'),
+          limit(5)
+        );
+        
+        const snapshot = await getDocs(q);
+        const users: Array<{ uid: string; username: string; photo?: string; bio?: string; sportsPreferences?: string[] }> = [];
+        
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          // Don't show current user in search results
+          if (doc.id !== auth.currentUser?.uid) {
+            users.push({
+              uid: doc.id,
+              username: data.username || 'User',
+              photo: data.photo || data.photoURL,
+              bio: data.bio,
+              sportsPreferences: data.sportsPreferences || data.selectedSports,
+            });
+          }
+        });
+        
+        setSearchedUsers(users);
+      } catch (error) {
+        console.error('User search error:', error);
+        setSearchedUsers([]);
+      } finally {
+        setIsSearchingUsers(false);
+      }
+    }, DEBOUNCE_MS) as unknown as number;
+
+    return () => {
+      if (userSearchDebounceRef.current) {
+        clearTimeout(userSearchDebounceRef.current as any);
+        userSearchDebounceRef.current = null;
+      }
+    };
+  }, [debouncedSearchQuery]);
 
   // Location search with debouncing
   useEffect(() => {
@@ -774,6 +886,62 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
     );
   });
 
+  // User profile card for search results
+  const UserProfileCard = React.memo(({ user, activitiesCount }: { 
+    user: { uid: string; username: string; photo?: string; bio?: string; sportsPreferences?: string[] };
+    activitiesCount: number;
+  }) => {
+    return (
+      <TouchableOpacity
+        style={[styles.card, { borderLeftWidth: 4, borderLeftColor: theme.primary }]}
+        onPress={() => {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          (navigation as any).navigate('UserProfile', { userId: user.uid });
+        }}
+        activeOpacity={0.9}
+      >
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <UserAvatar
+            photoUrl={user.photo}
+            username={user.username}
+            size={56}
+            borderColor={theme.primary}
+            borderWidth={2}
+          />
+          <View style={{ flex: 1, marginLeft: 14 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Text style={{ fontSize: 18, fontWeight: '700', color: theme.text }}>{user.username}</Text>
+              <View style={{ backgroundColor: `${theme.primary}20`, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 }}>
+                <Text style={{ fontSize: 11, fontWeight: '600', color: theme.primary }}>USER</Text>
+              </View>
+            </View>
+            {user.bio ? (
+              <Text style={{ fontSize: 13, color: theme.muted, marginTop: 4 }} numberOfLines={1}>{user.bio}</Text>
+            ) : null}
+            {user.sportsPreferences && user.sportsPreferences.length > 0 && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6, gap: 6 }}>
+                {user.sportsPreferences.slice(0, 4).map((sport, idx) => (
+                  <View key={idx} style={{ backgroundColor: `${theme.primary}12`, padding: 4, borderRadius: 6 }}>
+                    <ActivityIcon activity={sport} size={16} color={theme.primary} />
+                  </View>
+                ))}
+                {user.sportsPreferences.length > 4 && (
+                  <Text style={{ fontSize: 12, color: theme.muted, fontWeight: '500' }}>+{user.sportsPreferences.length - 4}</Text>
+                )}
+              </View>
+            )}
+          </View>
+          <View style={{ alignItems: 'center' }}>
+            <Ionicons name="chevron-forward" size={22} color={theme.muted} />
+            {activitiesCount > 0 && (
+              <Text style={{ fontSize: 11, color: theme.muted, marginTop: 2 }}>{activitiesCount} {activitiesCount === 1 ? 'activity' : 'activities'}</Text>
+            )}
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  });
+
   const toggleSortByDistance = useCallback(
     () => {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -834,7 +1002,7 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
             <Ionicons name="search" size={18} color={theme.primary} />
             <TextInput
               style={styles.searchInput}
-              placeholder="Search by activity or host..."
+              placeholder="Search activities or users..."
               placeholderTextColor={theme.muted}
               value={rawSearchQuery}
               onChangeText={setRawSearchQuery}
@@ -1102,25 +1270,54 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
                 showsIndoors={true}
                 onRegionChangeComplete={(region) => {
                   setMapRegion(region);
-                  setRegionDirty(true);
                 }}
               >
-                {mapActivities.map(act => (
+                {groupedMapActivities.map(group => (
                   <Marker
-                    key={act.id}
-                    coordinate={{ latitude: act.latitude, longitude: act.longitude }}
-                    onPress={() => setSelectedMapActivity(act)}
-                    // On Android keep tracking initially so vector icons render, then stop for perf
+                    key={group.key}
+                    coordinate={{ latitude: group.lat, longitude: group.lng }}
+                    onPress={() => {
+                      if (group.activities.length === 1) {
+                        setSelectedMapActivity(group.activities[0]);
+                        setSelectedClusterActivities(null);
+                      } else {
+                        setSelectedClusterActivities(group.activities);
+                        setClusterPanelIndex(0);
+                        setSelectedMapActivity(null);
+                      }
+                    }}
                     tracksViewChanges={Platform.OS === 'android'}
                   >
-                    <View style={styles.markerInner}>
-                      <ActivityIcon activity={act.activity} size={20} color={theme.primary} />
-                      {isActivityJoined(act.id) && (
-                        <View style={styles.markerBadge}>
-                          <Ionicons name="checkmark" size={10} color={theme.isDark ? '#000' : '#fff'} />
-                        </View>
-                      )}
-                    </View>
+                    {group.activities.length === 1 ? (
+                      <View style={styles.markerInner}>
+                        <ActivityIcon activity={group.activities[0].activity} size={20} color={theme.primary} />
+                        {isActivityJoined(group.activities[0].id) && (
+                          <View style={styles.markerBadge}>
+                            <Ionicons name="checkmark" size={10} color={theme.isDark ? '#000' : '#fff'} />
+                          </View>
+                        )}
+                      </View>
+                    ) : (
+                      <View style={{
+                        width: 36,
+                        height: 36,
+                        borderRadius: 18,
+                        backgroundColor: theme.primary,
+                        borderWidth: 2,
+                        borderColor: theme.card,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        shadowColor: '#000',
+                        shadowOffset: { width: 0, height: 2 },
+                        shadowOpacity: 0.25,
+                        shadowRadius: 3,
+                        elevation: 4,
+                      }}>
+                        <Text style={{ color: '#fff', fontWeight: '700', fontSize: 15 }}>
+                          {group.activities.length}
+                        </Text>
+                      </View>
+                    )}
                   </Marker>
                 ))}
               </MapView>
@@ -1148,26 +1345,6 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
               <Ionicons name="locate" size={24} color={theme.primary} />
             </TouchableOpacity>
             
-            {regionDirty && (
-              <TouchableOpacity
-                style={styles.mapLoadButton}
-                onPress={handleLoadRegionActivities}
-                disabled={mapLoading}
-                activeOpacity={0.8}
-              >
-                {mapLoading ? (
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <ActivityIndicator size="small" color="#fff" />
-                    <Text style={styles.mapLoadButtonText}>Loading...</Text>
-                  </View>
-                ) : (
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <Ionicons name="refresh" size={18} color="#fff" />
-                    <Text style={styles.mapLoadButtonText}>Load activities</Text>
-                  </View>
-                )}
-              </TouchableOpacity>
-            )}
             {selectedMapActivity && (
               <View style={styles.mapActivityPanel}>
                 <View style={styles.mapPanelHeader}>
@@ -1264,6 +1441,185 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
                 </View>
               </View>
             )}
+
+            {/* Cluster Panel - shows when multiple activities at same location */}
+            {selectedClusterActivities && selectedClusterActivities.length > 0 && (
+              <View style={styles.mapActivityPanel}>
+                {/* Header with count badge */}
+                <View style={styles.mapPanelHeader}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                    <View style={{ 
+                      width: 32, 
+                      height: 32, 
+                      borderRadius: 16, 
+                      backgroundColor: theme.primary, 
+                      alignItems: 'center', 
+                      justifyContent: 'center',
+                    }}>
+                      <Text style={{ color: '#fff', fontWeight: '700', fontSize: 15 }}>
+                        {selectedClusterActivities.length}
+                      </Text>
+                    </View>
+                    <Text style={styles.mapActivityPanelTitle}>Activities here</Text>
+                  </View>
+                  <TouchableOpacity onPress={() => setSelectedClusterActivities(null)} style={styles.mapActivityPanelClose}>
+                    <Ionicons name="close" size={22} color={theme.text} />
+                  </TouchableOpacity>
+                </View>
+
+                {/* Navigation with dots indicator */}
+                <View style={{ 
+                  flexDirection: 'row', 
+                  alignItems: 'center', 
+                  justifyContent: 'center',
+                  marginBottom: 16,
+                  gap: 16,
+                }}>
+                  <TouchableOpacity
+                    onPress={() => setClusterPanelIndex(prev => Math.max(0, prev - 1))}
+                    disabled={clusterPanelIndex === 0}
+                    style={{ 
+                      opacity: clusterPanelIndex === 0 ? 0.3 : 1, 
+                      padding: 8,
+                      backgroundColor: theme.background,
+                      borderRadius: 20,
+                    }}
+                  >
+                    <Ionicons name="chevron-back" size={20} color={theme.primary} />
+                  </TouchableOpacity>
+                  
+                  {/* Dots indicator */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    {selectedClusterActivities.map((_, idx) => (
+                      <TouchableOpacity 
+                        key={idx}
+                        onPress={() => setClusterPanelIndex(idx)}
+                      >
+                        <View style={{
+                          width: idx === clusterPanelIndex ? 20 : 8,
+                          height: 8,
+                          borderRadius: 4,
+                          backgroundColor: idx === clusterPanelIndex ? theme.primary : `${theme.primary}40`,
+                        }} />
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  
+                  <TouchableOpacity
+                    onPress={() => setClusterPanelIndex(prev => Math.min(selectedClusterActivities.length - 1, prev + 1))}
+                    disabled={clusterPanelIndex === selectedClusterActivities.length - 1}
+                    style={{ 
+                      opacity: clusterPanelIndex === selectedClusterActivities.length - 1 ? 0.3 : 1, 
+                      padding: 8,
+                      backgroundColor: theme.background,
+                      borderRadius: 20,
+                    }}
+                  >
+                    <Ionicons name="chevron-forward" size={20} color={theme.primary} />
+                  </TouchableOpacity>
+                </View>
+
+                {/* Current activity card */}
+                {(() => {
+                  const currentActivity = selectedClusterActivities[clusterPanelIndex];
+                  return (
+                    <View style={{
+                      backgroundColor: theme.background,
+                      borderRadius: 10,
+                      padding: 14,
+                      borderWidth: 1,
+                      borderColor: theme.border,
+                    }}>
+                      {/* Activity header with icon and title */}
+                      <View style={styles.cardHeader}>
+                        <View style={styles.cardHeaderLeft}>
+                          <ActivityIcon activity={currentActivity.activity} size={32} color={theme.primary} />
+                          <Text style={styles.cardTitle}>{currentActivity.activity}</Text>
+                        </View>
+                        {isActivityJoined(currentActivity.id) && (
+                          <View style={{ 
+                            backgroundColor: `${theme.primary}20`, 
+                            paddingHorizontal: 8, 
+                            paddingVertical: 4, 
+                            borderRadius: 12,
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            gap: 4,
+                          }}>
+                            <Ionicons name="checkmark-circle" size={14} color={theme.primary} />
+                            <Text style={{ color: theme.primary, fontSize: 12, fontWeight: '600' }}>Joined</Text>
+                          </View>
+                        )}
+                      </View>
+
+                      {/* Info rows matching card style */}
+                      <View style={styles.infoRow}>
+                        <Ionicons name="person" size={16} color={theme.primary} style={styles.infoIcon} />
+                        <Text style={styles.cardInfoLabel}>Host:</Text>
+                        <HostUsername activity={currentActivity} />
+                      </View>
+
+                      <View style={styles.infoRow}>
+                        <Ionicons name="calendar" size={16} color={theme.primary} style={styles.infoIcon} />
+                        <Text style={styles.cardInfoLabel}>Date:</Text>
+                        <Text style={styles.cardInfo}>{currentActivity.date}</Text>
+                      </View>
+
+                      <View style={styles.infoRow}>
+                        <Ionicons name="time" size={16} color={theme.primary} style={styles.infoIcon} />
+                        <Text style={styles.cardInfoLabel}>Time:</Text>
+                        <Text style={styles.cardInfo}>{currentActivity.time}</Text>
+                      </View>
+
+                      <View style={styles.infoRow}>
+                        <Ionicons name="people" size={16} color={theme.primary} style={styles.infoIcon} />
+                        <Text style={styles.cardInfoLabel}>Participants:</Text>
+                        <Text style={styles.cardInfo}>
+                          {currentActivity.joinedUserIds ? currentActivity.joinedUserIds.length : currentActivity.joinedCount} / {currentActivity.maxParticipants}
+                        </Text>
+                      </View>
+
+                      {/* Action buttons matching card style */}
+                      <View style={styles.cardActions}>
+                        <TouchableOpacity
+                          style={[
+                            styles.joinButton,
+                            { flex: 1, alignItems: 'center' },
+                            isActivityJoined(currentActivity.id) && {
+                              backgroundColor: theme.isDark ? '#007E84' : darkenHex(theme.primary, 0.12),
+                            },
+                          ]}
+                          onPress={async () => {
+                            try {
+                              await toggleJoinActivity(currentActivity);
+                            } catch (err) {
+                              console.error('Error toggling join:', err);
+                            }
+                          }}
+                          activeOpacity={0.85}
+                        >
+                          <Text style={styles.joinButtonText}>
+                            {isActivityJoined(currentActivity.id) ? 'Leave' : 'Join'}
+                          </Text>
+                        </TouchableOpacity>
+                        
+                        <TouchableOpacity
+                          onPress={() => {
+                            navigation.navigate('ActivityDetails', { activityId: currentActivity.id });
+                            setSelectedClusterActivities(null);
+                          }}
+                          style={[styles.shareButton, { flex: 1, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 }]}
+                          activeOpacity={0.85}
+                        >
+                          <Ionicons name="open-outline" size={16} color={theme.text} />
+                          <Text style={{ color: theme.text, fontWeight: '600', fontSize: 14 }}>Details</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  );
+                })()}
+              </View>
+            )}
           </View>
         )}
 
@@ -1277,6 +1633,26 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
           getItemLayout={(_, index) => ({ length: ITEM_HEIGHT, offset: ITEM_HEIGHT * index, index })}
           onEndReached={displayedActivitiesCount < filteredActivities.length ? handleLoadMoreActivities : null}
           onEndReachedThreshold={0.5}
+          ListHeaderComponent={
+            searchedUsers.length > 0 ? (
+              <View style={{ marginBottom: 8 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12, gap: 8 }}>
+                  <Ionicons name="people" size={18} color={theme.primary} />
+                  <Text style={{ fontSize: 15, fontWeight: '700', color: theme.primary }}>Users Found</Text>
+                  {isSearchingUsers && <ActivityIndicator size="small" color={theme.primary} style={{ marginLeft: 8 }} />}
+                </View>
+                {searchedUsers.map((user) => (
+                  <UserProfileCard key={user.uid} user={user} activitiesCount={activitiesPerUser[user.uid] || 0} />
+                ))}
+                {filteredActivities.length > 0 && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 16, marginBottom: 8, gap: 8 }}>
+                    <Ionicons name="fitness" size={18} color={theme.primary} />
+                    <Text style={{ fontSize: 15, fontWeight: '700', color: theme.primary }}>Activities</Text>
+                  </View>
+                )}
+              </View>
+            ) : null
+          }
           ListFooterComponent={
             isLoadingMoreActivities ? (
               <View style={{ paddingVertical: 20, alignItems: 'center' }}>
@@ -1285,123 +1661,233 @@ const DiscoverGamesScreen: React.FC<{ navigation: DiscoverNav }> = ({ navigation
             ) : null
           }
           ListEmptyComponent={
-            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'flex-start', paddingTop: 100, minHeight: 600 }}>
+            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'flex-start', paddingTop: 60, minHeight: 600 }}>
               
-              {/* Background Icons - Scattered more widely and colorfully */}
+              {/* Background Icons - Scattered colorfully */}
               <View pointerEvents="none" style={StyleSheet.absoluteFill}>
                  {/* Top Left - Soccer */}
-                 <View style={{ position: 'absolute', top: '12%', left: '8%', transform: [{ rotate: '-15deg' }], opacity: 0.65 }}>
-                    <ActivityIcon activity="Soccer" size={52} color="#10B981" />
+                 <View style={{ position: 'absolute', top: '8%', left: '6%', transform: [{ rotate: '-15deg' }], opacity: 0.6 }}>
+                    <ActivityIcon activity="Soccer" size={48} color="#10B981" />
                  </View>
                  {/* Top Right - Basketball */}
-                 <View style={{ position: 'absolute', top: '15%', right: '10%', transform: [{ rotate: '18deg' }], opacity: 0.65 }}>
-                    <ActivityIcon activity="Basketball" size={50} color="#F59E0B" />
+                 <View style={{ position: 'absolute', top: '10%', right: '8%', transform: [{ rotate: '18deg' }], opacity: 0.6 }}>
+                    <ActivityIcon activity="Basketball" size={46} color="#F59E0B" />
                  </View>
                  {/* Middle Left - Tennis */}
-                 <View style={{ position: 'absolute', top: '35%', left: '3%', transform: [{ rotate: '-12deg' }], opacity: 0.6 }}>
-                    <ActivityIcon activity="Tennis" size={46} color="#EF4444" />
+                 <View style={{ position: 'absolute', top: '32%', left: '2%', transform: [{ rotate: '-12deg' }], opacity: 0.55 }}>
+                    <ActivityIcon activity="Tennis" size={42} color="#EF4444" />
                  </View>
                  {/* Middle Center Left - Cycling */}
-                 <View style={{ position: 'absolute', top: '50%', left: '12%', transform: [{ rotate: '8deg' }], opacity: 0.55 }}>
-                    <ActivityIcon activity="Cycling" size={44} color="#06B6D4" />
+                 <View style={{ position: 'absolute', top: '48%', left: '10%', transform: [{ rotate: '8deg' }], opacity: 0.5 }}>
+                    <ActivityIcon activity="Cycling" size={40} color="#06B6D4" />
                  </View>
                  {/* Middle Right - Volleyball */}
-                 <View style={{ position: 'absolute', top: '38%', right: '5%', transform: [{ rotate: '22deg' }], opacity: 0.6 }}>
-                    <ActivityIcon activity="Volleyball" size={48} color="#8B5CF6" />
+                 <View style={{ position: 'absolute', top: '35%', right: '4%', transform: [{ rotate: '22deg' }], opacity: 0.55 }}>
+                    <ActivityIcon activity="Volleyball" size={44} color="#8B5CF6" />
                  </View>
                  {/* Middle Center Right - Running */}
-                 <View style={{ position: 'absolute', top: '52%', right: '15%', transform: [{ rotate: '-18deg' }], opacity: 0.55 }}>
-                    <ActivityIcon activity="Running" size={42} color="#EC4899" />
+                 <View style={{ position: 'absolute', top: '50%', right: '12%', transform: [{ rotate: '-18deg' }], opacity: 0.5 }}>
+                    <ActivityIcon activity="Running" size={38} color="#EC4899" />
                  </View>
                  {/* Bottom Left - Gym */}
-                 <View style={{ position: 'absolute', bottom: '28%', left: '10%', transform: [{ rotate: '-25deg' }], opacity: 0.6 }}>
-                    <ActivityIcon activity="Gym" size={50} color="#6366F1" />
+                 <View style={{ position: 'absolute', bottom: '25%', left: '8%', transform: [{ rotate: '-25deg' }], opacity: 0.55 }}>
+                    <ActivityIcon activity="Gym" size={46} color="#6366F1" />
                  </View>
                  {/* Bottom Center Left - Swimming */}
-                 <View style={{ position: 'absolute', bottom: '15%', left: '20%', transform: [{ rotate: '15deg' }], opacity: 0.55 }}>
-                    <ActivityIcon activity="Swimming" size={40} color="#14B8A6" />
+                 <View style={{ position: 'absolute', bottom: '12%', left: '18%', transform: [{ rotate: '15deg' }], opacity: 0.5 }}>
+                    <ActivityIcon activity="Swimming" size={36} color="#14B8A6" />
                  </View>
                  {/* Bottom Right - Hiking */}
-                 <View style={{ position: 'absolute', bottom: '22%', right: '12%', transform: [{ rotate: '12deg' }], opacity: 0.6 }}>
-                    <ActivityIcon activity="Hiking" size={46} color="#F97316" />
+                 <View style={{ position: 'absolute', bottom: '20%', right: '10%', transform: [{ rotate: '12deg' }], opacity: 0.55 }}>
+                    <ActivityIcon activity="Hiking" size={42} color="#F97316" />
                  </View>
                  {/* Bottom Center Right - Yoga */}
-                 <View style={{ position: 'absolute', bottom: '10%', right: '25%', transform: [{ rotate: '-8deg' }], opacity: 0.55 }}>
-                    <ActivityIcon activity="Yoga" size={38} color="#A855F7" />
+                 <View style={{ position: 'absolute', bottom: '8%', right: '22%', transform: [{ rotate: '-8deg' }], opacity: 0.5 }}>
+                    <ActivityIcon activity="Yoga" size={34} color="#A855F7" />
                  </View>
                  {/* Top Center - Baseball */}
-                 <View style={{ position: 'absolute', top: '8%', left: '45%', transform: [{ rotate: '25deg' }], opacity: 0.5 }}>
-                    <ActivityIcon activity="Baseball" size={36} color="#3B82F6" />
+                 <View style={{ position: 'absolute', top: '5%', left: '42%', transform: [{ rotate: '25deg' }], opacity: 0.45 }}>
+                    <ActivityIcon activity="Baseball" size={32} color="#3B82F6" />
                  </View>
                  {/* Middle Far Right - Padel */}
-                 <View style={{ position: 'absolute', top: '60%', right: '3%', transform: [{ rotate: '-20deg' }], opacity: 0.5 }}>
-                    <ActivityIcon activity="Padel" size={38} color="#FBBF24" />
+                 <View style={{ position: 'absolute', top: '58%', right: '2%', transform: [{ rotate: '-20deg' }], opacity: 0.45 }}>
+                    <ActivityIcon activity="Padel" size={34} color="#FBBF24" />
                  </View>
               </View>
 
               {/* Central Content */}
-              <View style={{ alignItems: 'center', paddingHorizontal: 32, zIndex: 10 }}>
+              <View style={{ alignItems: 'center', paddingHorizontal: 28, zIndex: 10 }}>
+                {/* Glowing Icon */}
                 <View style={{ 
-                  width: 80, 
-                  height: 80, 
-                  borderRadius: 40, 
-                  backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+                  width: 100, 
+                  height: 100, 
+                  borderRadius: 50, 
+                  backgroundColor: `${theme.primary}15`,
                   alignItems: 'center', 
                   justifyContent: 'center',
                   marginBottom: 24,
+                  borderWidth: 2,
+                  borderColor: `${theme.primary}30`,
                   shadowColor: theme.primary,
-                  shadowOpacity: 0.3,
-                  shadowRadius: 15,
-                  elevation: 5
+                  shadowOpacity: 0.5,
+                  shadowRadius: 25,
+                  shadowOffset: { width: 0, height: 4 },
+                  elevation: 10
                 }}>
-                  <Ionicons name="flame" size={40} color={theme.primary} />
+                  <Ionicons 
+                    name={selectedFilter !== 'All' || selectedDate || debouncedSearchQuery ? "search" : "rocket"} 
+                    size={48} 
+                    color={theme.primary} 
+                  />
                 </View>
 
+                {/* Context Badge - shows active filters */}
+                {(selectedFilter !== 'All' || selectedDate || debouncedSearchQuery) && (
+                  <View
+                    style={{
+                      backgroundColor: `${theme.primary}20`,
+                      paddingHorizontal: 16,
+                      paddingVertical: 8,
+                      borderRadius: 20,
+                      marginBottom: 16,
+                      borderWidth: 1,
+                      borderColor: `${theme.primary}40`,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 6,
+                    }}
+                  >
+                    <Ionicons name="filter" size={14} color={theme.primary} />
+                    <Text
+                      style={{
+                        color: theme.primary,
+                        fontSize: 13,
+                        fontWeight: '600',
+                      }}
+                    >
+                      {selectedFilter !== 'All' ? selectedFilter : ''}
+                      {selectedFilter !== 'All' && selectedDate ? ' • ' : ''}
+                      {selectedDate ? selectedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}
+                      {(selectedFilter !== 'All' || selectedDate) && debouncedSearchQuery ? ' • ' : ''}
+                      {debouncedSearchQuery ? `"${debouncedSearchQuery}"` : ''}
+                    </Text>
+                  </View>
+                )}
+
+                {/* Main Message */}
                 <Text style={{ 
                   fontSize: 26, 
                   fontWeight: '800', 
                   color: theme.text, 
                   textAlign: 'center', 
                   marginBottom: 12,
-                  letterSpacing: 0.5
+                  letterSpacing: 0.3
                 }}>
-                  Be the Spark
+                  {selectedFilter !== 'All' || selectedDate || debouncedSearchQuery 
+                    ? 'No Matches Found' 
+                    : 'Be the Spark'}
                 </Text>
                 
+                {/* Sub Message */}
                 <Text style={{ 
-                  fontSize: 16, 
+                  fontSize: 15, 
                   color: theme.muted, 
                   textAlign: 'center', 
-                  lineHeight: 24, 
-                  marginBottom: 32,
-                  fontWeight: '500'
+                  lineHeight: 23, 
+                  marginBottom: 28,
+                  fontWeight: '500',
+                  paddingHorizontal: 8
                 }}>
-                  Others might be hesitating. Be the one to make it happen—create an activity and bring the community together.
+                  {selectedFilter !== 'All' || selectedDate || debouncedSearchQuery 
+                    ? `No activities match your current filters within ${discoveryRange}km. Try adjusting your search or be the first to create one!`
+                    : 'No activities nearby yet, others might be waiting for someone to take the lead.\n\nCreate an activity and bring the community together!'}
                 </Text>
 
-                <TouchableOpacity
-                  onPress={() => navigation.navigate('CreateGame')}
+                {/* Action Buttons */}
+                <View style={{ flexDirection: 'row', gap: 12, flexWrap: 'wrap', justifyContent: 'center' }}>
+                  {/* Clear Filters button - only show when filters are active */}
+                  {(selectedFilter !== 'All' || selectedDate || debouncedSearchQuery) && (
+                    <TouchableOpacity
+                      onPress={() => {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        setSelectedFilter('All');
+                        setSelectedDate(null);
+                        setRawSearchQuery('');
+                        setDebouncedSearchQuery('');
+                      }}
+                      style={{
+                        backgroundColor: theme.card,
+                        paddingVertical: 14,
+                        paddingHorizontal: 24,
+                        borderRadius: 25,
+                        borderWidth: 1.5,
+                        borderColor: theme.primary,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 8
+                      }}
+                      activeOpacity={0.85}
+                    >
+                      <Ionicons name="close-circle" size={20} color={theme.primary} />
+                      <Text style={{ color: theme.primary, fontSize: 15, fontWeight: '700' }}>
+                        Clear Filters
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+
+                  {/* Create Activity button */}
+                  <TouchableOpacity
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                      navigation.navigate('CreateGame');
+                    }}
+                    style={{
+                      backgroundColor: theme.primary,
+                      paddingVertical: 14,
+                      paddingHorizontal: 24,
+                      borderRadius: 25,
+                      shadowColor: theme.primary,
+                      shadowOpacity: 0.4,
+                      shadowRadius: 12,
+                      shadowOffset: { width: 0, height: 5 },
+                      elevation: 8,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 8
+                    }}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="add-circle" size={20} color="#fff" />
+                    <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700' }}>
+                      Create Activity
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Distance hint */}
+                <View
                   style={{
-                    backgroundColor: theme.primary,
-                    paddingVertical: 16,
-                    paddingHorizontal: 32,
-                    borderRadius: 30,
-                    shadowColor: theme.primary,
-                    shadowOpacity: 0.4,
-                    shadowRadius: 12,
-                    shadowOffset: { width: 0, height: 6 },
-                    elevation: 8,
                     flexDirection: 'row',
                     alignItems: 'center',
-                    gap: 8
+                    marginTop: 24,
+                    backgroundColor: `${theme.muted}12`,
+                    paddingVertical: 10,
+                    paddingHorizontal: 16,
+                    borderRadius: 12,
+                    gap: 8,
                   }}
-                  activeOpacity={0.85}
                 >
-                  <Ionicons name="add-circle" size={24} color="#fff" />
-                  <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
-                    Create Activity
+                  <Ionicons name="navigate-circle-outline" size={18} color={theme.muted} />
+                  <Text
+                    style={{
+                      color: theme.muted,
+                      fontSize: 13,
+                      fontWeight: '500',
+                    }}
+                  >
+                    Searching within {discoveryRange}km • Adjust in Settings
                   </Text>
-                </TouchableOpacity>
+                </View>
               </View>
             </View>
           }
@@ -1568,7 +2054,7 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
     alignItems: 'center',
     justifyContent: 'center',
   },
-  mapContainer: { flex: 1, borderRadius: 0, overflow: 'hidden', marginBottom: 10 },
+  mapContainer: { flex: 1, borderRadius: 0, overflow: 'hidden' },
   mapFiltersContainer: {
     position: 'absolute',
     top: 0,

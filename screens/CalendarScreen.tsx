@@ -2,6 +2,278 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+// Empty state component for when no activities on selected date
+const EmptyDayState = ({ 
+  currentDate, 
+  navigation, 
+  theme 
+}: { 
+  currentDate: string; 
+  navigation: any; 
+  theme: any;
+}) => {
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const scaleAnim = useRef(new Animated.Value(0.8)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 400,
+        useNativeDriver: true,
+      }),
+      Animated.spring(scaleAnim, {
+        toValue: 1,
+        tension: 50,
+        friction: 7,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, []);
+
+  // Format date nicely
+  const formatDate = (dateStr: string) => {
+    try {
+      const [dd, mm, yyyy] = dateStr.split('-');
+      const date = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      
+      if (date.getTime() === today.getTime()) return 'Today';
+      if (date.getTime() === tomorrow.getTime()) return 'Tomorrow';
+      
+      return date.toLocaleDateString('en-US', { 
+        weekday: 'long', 
+        month: 'short', 
+        day: 'numeric' 
+      });
+    } catch {
+      return dateStr;
+    }
+  };
+
+  const isFuture = () => {
+    try {
+      const [dd, mm, yyyy] = currentDate.split('-');
+      const date = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      date.setHours(0, 0, 0, 0);
+      return date.getTime() >= today.getTime();
+    } catch {
+      return true;
+    }
+  };
+
+  return (
+    <Animated.View
+      style={{
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'flex-start',
+        paddingTop: 40,
+        minHeight: 400,
+        opacity: fadeAnim,
+        transform: [{ scale: scaleAnim }],
+      }}
+    >
+      {/* Background Activity Icons - Scattered colorfully */}
+      <View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
+        {/* Top Left - Soccer */}
+        <View style={{ position: 'absolute', top: '5%', left: '5%', transform: [{ rotate: '-15deg' }], opacity: 0.6 }}>
+          <ActivityIcon activity="Soccer" size={44} color="#10B981" />
+        </View>
+        {/* Top Right - Basketball */}
+        <View style={{ position: 'absolute', top: '8%', right: '8%', transform: [{ rotate: '18deg' }], opacity: 0.6 }}>
+          <ActivityIcon activity="Basketball" size={42} color="#F59E0B" />
+        </View>
+        {/* Middle Left - Tennis */}
+        <View style={{ position: 'absolute', top: '30%', left: '2%', transform: [{ rotate: '-12deg' }], opacity: 0.55 }}>
+          <ActivityIcon activity="Tennis" size={38} color="#EF4444" />
+        </View>
+        {/* Middle Right - Volleyball */}
+        <View style={{ position: 'absolute', top: '28%', right: '3%', transform: [{ rotate: '22deg' }], opacity: 0.55 }}>
+          <ActivityIcon activity="Volleyball" size={40} color="#8B5CF6" />
+        </View>
+        {/* Bottom Left - Cycling */}
+        <View style={{ position: 'absolute', bottom: '25%', left: '8%', transform: [{ rotate: '8deg' }], opacity: 0.5 }}>
+          <ActivityIcon activity="Cycling" size={36} color="#06B6D4" />
+        </View>
+        {/* Bottom Right - Running */}
+        <View style={{ position: 'absolute', bottom: '22%', right: '10%', transform: [{ rotate: '-18deg' }], opacity: 0.5 }}>
+          <ActivityIcon activity="Running" size={38} color="#EC4899" />
+        </View>
+        {/* Bottom Center Left - Yoga */}
+        <View style={{ position: 'absolute', bottom: '8%', left: '25%', transform: [{ rotate: '15deg' }], opacity: 0.45 }}>
+          <ActivityIcon activity="Yoga" size={32} color="#A855F7" />
+        </View>
+        {/* Bottom Center Right - Hiking */}
+        <View style={{ position: 'absolute', bottom: '12%', right: '22%', transform: [{ rotate: '-8deg' }], opacity: 0.45 }}>
+          <ActivityIcon activity="Hiking" size={34} color="#F97316" />
+        </View>
+      </View>
+
+      {/* Central Content */}
+      <View style={{ alignItems: 'center', paddingHorizontal: 32, zIndex: 10 }}>
+        {/* Date Badge - Main Focus */}
+        <View
+          style={{
+            backgroundColor: `${theme.primary}15`,
+            paddingHorizontal: 28,
+            paddingVertical: 14,
+            borderRadius: 30,
+            marginBottom: 16,
+            borderWidth: 2,
+            borderColor: `${theme.primary}35`,
+            shadowColor: theme.primary,
+            shadowOpacity: 0.3,
+            shadowRadius: 15,
+            shadowOffset: { width: 0, height: 4 },
+            elevation: 6,
+          }}
+        >
+          <Text
+            style={{
+              color: theme.primary,
+              fontSize: 22,
+              fontWeight: '800',
+              letterSpacing: 0.5,
+            }}
+          >
+            {formatDate(currentDate)}
+          </Text>
+        </View>
+
+        {/* Main Message */}
+        <Text
+          style={{
+            fontSize: 24,
+            fontWeight: '800',
+            color: theme.text,
+            textAlign: 'center',
+            marginBottom: 10,
+            letterSpacing: 0.3,
+          }}
+        >
+          {isFuture() ? 'Free & Clear' : 'Nothing Here'}
+        </Text>
+
+        {/* Sub Message */}
+        <Text
+          style={{
+            fontSize: 15,
+            color: theme.muted,
+            textAlign: 'center',
+            lineHeight: 22,
+            marginBottom: 24,
+            fontWeight: '500',
+            paddingHorizontal: 10,
+          }}
+        >
+          {isFuture() 
+            ? 'This day awaits your plans. Create something or explore what others are organizing.'
+            : 'This day has passed without any scheduled activities.'
+          }
+        </Text>
+
+        {/* Action Buttons - only for future dates */}
+        {isFuture() && (
+          <View style={{ flexDirection: 'row', gap: 12 }}>
+            <TouchableOpacity
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: theme.card,
+                paddingVertical: 14,
+                paddingHorizontal: 22,
+                borderRadius: 25,
+                borderWidth: 1.5,
+                borderColor: theme.primary,
+                gap: 8,
+              }}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                navigation.navigate('MainTabs', { screen: 'Discover' });
+              }}
+            >
+              <Ionicons name="search" size={20} color={theme.primary} />
+              <Text
+                style={{
+                  color: theme.primary,
+                  fontSize: 15,
+                  fontWeight: '700',
+                }}
+              >
+                Discover
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: theme.primary,
+                paddingVertical: 14,
+                paddingHorizontal: 22,
+                borderRadius: 25,
+                gap: 8,
+                shadowColor: theme.primary,
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.35,
+                shadowRadius: 10,
+                elevation: 6,
+              }}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                navigation.navigate('MainTabs', { screen: 'CreateGame' });
+              }}
+            >
+              <Ionicons name="add-circle" size={20} color="#fff" />
+              <Text
+                style={{
+                  color: '#fff',
+                  fontSize: 15,
+                  fontWeight: '700',
+                }}
+              >
+                Create
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Past date hint */}
+        {!isFuture() && (
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              backgroundColor: `${theme.muted}15`,
+              paddingVertical: 12,
+              paddingHorizontal: 18,
+              borderRadius: 12,
+              gap: 10,
+            }}
+          >
+            <Ionicons name="arrow-forward-circle" size={20} color={theme.muted} />
+            <Text
+              style={{
+                color: theme.muted,
+                fontSize: 14,
+                fontWeight: '600',
+              }}
+            >
+              Tap a future date to plan ahead
+            </Text>
+          </View>
+        )}
+      </View>
+    </Animated.View>
+  );
+};
+
 // ...existing code...
 
 function HostUsername({ activity }: { activity: any }) {
@@ -40,6 +312,7 @@ import {
   ActivityIndicator,
   Animated,
   Alert,
+  Modal,
 } from 'react-native';
 import * as Location from 'expo-location';
 import * as Haptics from 'expo-haptics';
@@ -335,7 +608,7 @@ const CalendarScreen = ({ navigation, route }: any) => {
 
       return {
         text: `${accountType} - ${cal.title}`,
-        onPress: async () => await createCalendarEvent(cal.id, activity),
+        onPress: async () => await createCalendarEventWithAlert(cal.id, activity),
       };
     });
 
@@ -367,16 +640,111 @@ const CalendarScreen = ({ navigation, route }: any) => {
       // Update local state and persist to AsyncStorage
       await updateCalendarStatus(activity.id, true);
 
+      return true;
+    } catch (error) {
+      console.error('Error creating calendar event:', error);
+      return false;
+    }
+  };
+
+  // Single activity add (with success alert)
+  const createCalendarEventWithAlert = async (calendarId: string, activity: any) => {
+    const success = await createCalendarEvent(calendarId, activity);
+    if (success) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Alert.alert(
         'Added to Calendar! 📅',
         `${activity.activity} has been added to your calendar with reminders at 6 hours and 30 minutes before the event.`,
         [{ text: 'OK' }]
       );
-    } catch (error) {
-      console.error('Error creating calendar event:', error);
+    } else {
       Alert.alert('Error', 'Failed to create calendar event.');
     }
+  };
+
+  /* ---------- Activities List Modal ---------- */
+
+  const [showActivitiesModal, setShowActivitiesModal] = useState(false);
+  const [displayCount, setDisplayCount] = useState(12);
+  const PAGE_SIZE = 12;
+
+  // Reset display count when modal opens
+  useEffect(() => {
+    if (showActivitiesModal) {
+      setDisplayCount(PAGE_SIZE);
+    }
+  }, [showActivitiesModal]);
+
+  // Get sorted activities (future first, then past)
+  const sortedJoinedActivities = useMemo(() => {
+    const userJoined = allActivities.filter((a) => joinedActivities.includes(a.id));
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+
+    return userJoined.sort((a, b) => {
+      const getDate = (activity: any) => {
+        try {
+          const [dd, mm, yyyy] = activity.date.split('-');
+          return new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+        } catch {
+          return new Date(0);
+        }
+      };
+
+      const dateA = getDate(a);
+      const dateB = getDate(b);
+      const aIsFuture = dateA >= now;
+      const bIsFuture = dateB >= now;
+
+      // Future activities first
+      if (aIsFuture && !bIsFuture) return -1;
+      if (!aIsFuture && bIsFuture) return 1;
+
+      // Within same category, sort by date (ascending for future, descending for past)
+      if (aIsFuture) {
+        return dateA.getTime() - dateB.getTime();
+      } else {
+        return dateB.getTime() - dateA.getTime();
+      }
+    });
+  }, [allActivities, joinedActivities]);
+
+  // Paginated activities
+  const displayedActivities = useMemo(() => {
+    return sortedJoinedActivities.slice(0, displayCount);
+  }, [sortedJoinedActivities, displayCount]);
+
+  const hasMoreActivities = displayCount < sortedJoinedActivities.length;
+
+  const loadMoreActivities = () => {
+    setDisplayCount(prev => prev + PAGE_SIZE);
+  };
+
+  // Handle scroll to bottom for pagination
+  const handleModalScroll = (event: any) => {
+    const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
+    const paddingToBottom = 50;
+    if (layoutMeasurement.height + contentOffset.y >= contentSize.height - paddingToBottom) {
+      if (hasMoreActivities) {
+        loadMoreActivities();
+      }
+    }
+  };
+
+  const isActivityFuture = (activity: any) => {
+    try {
+      const [dd, mm, yyyy] = activity.date.split('-');
+      const date = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+      const now = new Date();
+      now.setHours(0, 0, 0, 0);
+      return date >= now;
+    } catch {
+      return true;
+    }
+  };
+
+  const handleModalAddToCalendar = async (activity: any) => {
+    await handleAddToCalendar(activity);
   };
 
   /* ---------- UI ---------- */
@@ -423,7 +791,236 @@ const CalendarScreen = ({ navigation, route }: any) => {
   return (
     <View style={[styles.safeArea, { paddingTop: insets.top }]}> 
       <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
-        <Text style={styles.headerTitle}>Calendar</Text>
+        {/* Header with activities list button */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 10, marginBottom: 18, paddingHorizontal: 16 }}>
+          <View style={{ width: 44 }} />
+          <Text style={[styles.headerTitle, { flex: 1, marginTop: 0, marginBottom: 0 }]}>Calendar</Text>
+          {/* Activities List Button - only show if user has joined activities */}
+          {userJoinedActivities.length > 0 ? (
+            <TouchableOpacity
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setShowActivitiesModal(true);
+              }}
+              style={{
+                width: 44,
+                height: 44,
+                borderRadius: 22,
+                backgroundColor: `${theme.primary}10`,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+              activeOpacity={0.7}
+            >
+              <Ionicons 
+                name="download-outline" 
+                size={22} 
+                color={theme.primary} 
+              />
+            </TouchableOpacity>
+          ) : (
+            <View style={{ width: 44 }} />
+          )}
+        </View>
+
+        {/* Activities List Modal */}
+        <Modal
+          visible={showActivitiesModal}
+          animationType="slide"
+          transparent={true}
+          onRequestClose={() => setShowActivitiesModal(false)}
+        >
+          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}>
+            <View style={{ 
+              backgroundColor: theme.background, 
+              borderTopLeftRadius: 24, 
+              borderTopRightRadius: 24,
+              maxHeight: '80%',
+              paddingBottom: insets.bottom + 20,
+            }}>
+              {/* Modal Header */}
+              <View style={{ 
+                flexDirection: 'row', 
+                alignItems: 'center', 
+                justifyContent: 'space-between',
+                paddingHorizontal: 20,
+                paddingVertical: 16,
+                borderBottomWidth: 1,
+                borderBottomColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)',
+              }}>
+                <Text style={{ fontSize: 20, fontWeight: '700', color: theme.text }}>
+                  My Activities
+                </Text>
+                <TouchableOpacity
+                  onPress={() => setShowActivitiesModal(false)}
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 18,
+                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Ionicons name="close" size={22} color={theme.text} />
+                </TouchableOpacity>
+              </View>
+
+              {/* Activities List */}
+              <ScrollView 
+                style={{ paddingHorizontal: 16 }} 
+                showsVerticalScrollIndicator={false}
+                onScroll={handleModalScroll}
+                scrollEventThrottle={400}
+              >
+                {sortedJoinedActivities.length === 0 ? (
+                  <View style={{ padding: 40, alignItems: 'center' }}>
+                    <Ionicons name="calendar-outline" size={48} color={theme.muted} />
+                    <Text style={{ color: theme.muted, fontSize: 16, marginTop: 12, textAlign: 'center' }}>
+                      No activities joined yet
+                    </Text>
+                  </View>
+                ) : (
+                  <>
+                    {/* Future Activities Section */}
+                    {displayedActivities.some(a => isActivityFuture(a)) && (
+                      <Text style={{ 
+                        fontSize: 13, 
+                        fontWeight: '600', 
+                        color: theme.primary, 
+                        marginTop: 16, 
+                        marginBottom: 8,
+                        marginLeft: 4,
+                      }}>
+                        UPCOMING
+                      </Text>
+                    )}
+                    {displayedActivities.filter(a => isActivityFuture(a)).map((activity) => (
+                      <View
+                        key={activity.id}
+                        style={{
+                          backgroundColor: theme.card,
+                          borderRadius: 14,
+                          padding: 14,
+                          marginBottom: 10,
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                        }}
+                      >
+                        <ActivityIcon activity={activity.activity} size={36} color={theme.primary} />
+                        <View style={{ flex: 1, marginLeft: 12 }}>
+                          <Text style={{ fontSize: 16, fontWeight: '600', color: theme.text }}>
+                            {activity.activity}
+                          </Text>
+                          <Text style={{ fontSize: 13, color: theme.muted, marginTop: 2 }}>
+                            {activity.date} • {activity.time}
+                          </Text>
+                        </View>
+                        <TouchableOpacity
+                          onPress={() => handleModalAddToCalendar(activity)}
+                          style={{
+                            backgroundColor: calendarStatus[activity.id] ? `${theme.primary}20` : theme.primary,
+                            paddingVertical: 8,
+                            paddingHorizontal: 12,
+                            borderRadius: 20,
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            gap: 4,
+                          }}
+                        >
+                          <Ionicons 
+                            name={calendarStatus[activity.id] ? "checkmark-circle" : "calendar-outline"} 
+                            size={16} 
+                            color={calendarStatus[activity.id] ? theme.primary : '#fff'} 
+                          />
+                          <Text style={{ 
+                            fontSize: 12, 
+                            fontWeight: '600', 
+                            color: calendarStatus[activity.id] ? theme.primary : '#fff' 
+                          }}>
+                            {calendarStatus[activity.id] ? 'Added' : 'Add'}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+
+                    {/* Past Activities Section */}
+                    {displayedActivities.some(a => !isActivityFuture(a)) && (
+                      <Text style={{ 
+                        fontSize: 13, 
+                        fontWeight: '600', 
+                        color: theme.muted, 
+                        marginTop: 20, 
+                        marginBottom: 8,
+                        marginLeft: 4,
+                      }}>
+                        PAST
+                      </Text>
+                    )}
+                    {displayedActivities.filter(a => !isActivityFuture(a)).map((activity) => (
+                      <View
+                        key={activity.id}
+                        style={{
+                          backgroundColor: theme.card,
+                          borderRadius: 14,
+                          padding: 14,
+                          marginBottom: 10,
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          opacity: 0.7,
+                        }}
+                      >
+                        <ActivityIcon activity={activity.activity} size={36} color={theme.muted} />
+                        <View style={{ flex: 1, marginLeft: 12 }}>
+                          <Text style={{ fontSize: 16, fontWeight: '600', color: theme.text }}>
+                            {activity.activity}
+                          </Text>
+                          <Text style={{ fontSize: 13, color: theme.muted, marginTop: 2 }}>
+                            {activity.date} • {activity.time}
+                          </Text>
+                        </View>
+                        <TouchableOpacity
+                          onPress={() => handleModalAddToCalendar(activity)}
+                          style={{
+                            backgroundColor: calendarStatus[activity.id] ? `${theme.muted}20` : `${theme.muted}40`,
+                            paddingVertical: 8,
+                            paddingHorizontal: 12,
+                            borderRadius: 20,
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            gap: 4,
+                          }}
+                        >
+                          <Ionicons 
+                            name={calendarStatus[activity.id] ? "checkmark-circle" : "calendar-outline"} 
+                            size={16} 
+                            color={theme.muted} 
+                          />
+                          <Text style={{ fontSize: 12, fontWeight: '600', color: theme.muted }}>
+                            {calendarStatus[activity.id] ? 'Added' : 'Add'}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+
+                    {/* Load more indicator */}
+                    {hasMoreActivities && (
+                      <View style={{ alignItems: 'center', paddingVertical: 16 }}>
+                        <ActivityIndicator size="small" color={theme.muted} />
+                        <Text style={{ color: theme.muted, fontSize: 12, marginTop: 6 }}>
+                          Scroll for more...
+                        </Text>
+                      </View>
+                    )}
+
+                    <View style={{ height: 20 }} />
+                  </>
+                )}
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
+
         <ScrollView
           refreshControl={
             <RefreshControl
@@ -583,7 +1180,11 @@ const CalendarScreen = ({ navigation, route }: any) => {
                 );
               })
             ) : (
-              <Text style={styles.noActivitiesText}>No activities scheduled for this day.</Text>
+              <EmptyDayState 
+                currentDate={currentDate} 
+                navigation={navigation} 
+                theme={theme} 
+              />
             )}
           </View>
         </ScrollView>

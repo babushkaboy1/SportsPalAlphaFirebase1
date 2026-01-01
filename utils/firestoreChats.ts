@@ -59,7 +59,7 @@ export interface ChatMessage {
  * Profile cache (5 min TTL)
  * ------------------------------ */
 const profileCache = new Map<string, { data: any; timestamp: number }>();
-const PROFILE_CACHE_TTL = 5 * 60 * 1000;
+const PROFILE_CACHE_TTL = 10 * 60 * 1000; // 10 minutes - profiles rarely change
 
 export async function getCachedProfile(userId: string) {
   const cached = profileCache.get(userId);

@@ -3,7 +3,8 @@
 // Memoized to prevent unnecessary re-renders in VirtualizedList
 
 import React, { useRef } from 'react';
-import { View, Text, TouchableOpacity, Image, Pressable, Animated, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, Pressable, Animated, StyleSheet } from 'react-native';
+import { Image } from 'expo-image';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { PanGestureHandler, State as GHState } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
@@ -294,6 +295,7 @@ const ChatMessage = React.memo<ChatMessageProps>(
                           <Image
                             source={{ uri: imageUri }}
                             style={[styles.media, bubbleCorners(isOwn, isFirst, isLast)]}
+                            cachePolicy="memory-disk"
                           />
                         </TouchableOpacity>
                       );

@@ -1226,25 +1226,38 @@
     </script>
     
     <script>
-        // Detect deep link and redirect to app
+        // Detect deep link and redirect to app (fallback if rewrite rules don't work)
         const path = window.location.pathname;
         const isDeepLink = path.startsWith('/activity/') || 
                           path.startsWith('/profile/') || 
                           path.startsWith('/chat/');
         
         if (isDeepLink) {
-            // Try to open in app
-            const appScheme = `sportspal:/${path}`;
+            const userAgent = navigator.userAgent.toLowerCase();
+            const isIOS = /iphone|ipad|ipod/.test(userAgent);
+            const isAndroid = /android/.test(userAgent);
             
-            // Try app scheme first
-            window.location.href = appScheme;
+            // Build URLs
+            const appScheme = `sportspal:/${path}`;
+            const intentUrl = `intent:/${path}#Intent;scheme=sportspal;package=com.sportspal.app;end`;
+            
+            console.log('[Deep Link] Attempting to open app:', { path, appScheme, intentUrl });
+            
+            // Try appropriate scheme based on platform
+            if (isAndroid) {
+                window.location.href = intentUrl;
+            } else if (isIOS) {
+                window.location.href = appScheme;
+            } else {
+                // Desktop - redirect to app page
+                window.location.href = 'https://sportspal-1b468.web.app';
+            }
             
             // If app doesn't open in 2.5 seconds, redirect to stores
             setTimeout(() => {
-                const userAgent = navigator.userAgent.toLowerCase();
-                if (userAgent.includes('iphone') || userAgent.includes('ipad')) {
+                if (isIOS) {
                     window.location.href = 'https://apps.apple.com/us/app/sportspal-local-activities/id6747342752';
-                } else if (userAgent.includes('android')) {
+                } else if (isAndroid) {
                     window.location.href = 'https://play.google.com/store/apps/details?id=com.sportspal.app';
                 }
             }, 2500);

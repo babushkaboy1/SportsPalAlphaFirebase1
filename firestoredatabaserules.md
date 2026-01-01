@@ -58,6 +58,7 @@ service cloud.firestore {
 
       allow update: if isSignedIn() && (
         resource.data.creatorId == request.auth.uid ||
+        // Join/Leave
         (
           request.resource.data.diff(resource.data).changedKeys().hasOnly(['joinedUserIds']) &&
           ('joinedUserIds' in request.resource.data) &&
@@ -75,6 +76,12 @@ service cloud.firestore {
             (request.auth.uid in resource.data.joinedUserIds) &&
             !(request.auth.uid in request.resource.data.joinedUserIds)
           )
+        ) ||
+        // Rating: participants can add/update their rating
+        (
+          request.resource.data.diff(resource.data).changedKeys().hasOnly(['ratings']) &&
+          ('joinedUserIds' in resource.data) &&
+          (request.auth.uid in resource.data.joinedUserIds)
         )
       );
 

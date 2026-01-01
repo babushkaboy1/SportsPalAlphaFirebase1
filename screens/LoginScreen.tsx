@@ -63,21 +63,48 @@ const LoginScreen = ({ navigation }: any) => {
 
   // Build platform-specific redirect URI for Google auth
   const iosClientId = GOOGLE_IOS_CLIENT_ID || '797980453879-ceat11cgpq7o6svdfpia6tu70rl1o5at.apps.googleusercontent.com';
+  const androidClientId = GOOGLE_ANDROID_CLIENT_ID || '797980453879-2s8joa3gkv6n5a70ekuv1jtgmt916hig.apps.googleusercontent.com';
   const reversedIosClientId = `com.googleusercontent.apps.${iosClientId.replace('.apps.googleusercontent.com', '')}`;
+  // Android uses reversed client ID scheme just like iOS for native OAuth
+  const reversedAndroidClientId = `com.googleusercontent.apps.${androidClientId.replace('.apps.googleusercontent.com', '')}`;
+  const scheme = 'sportspal';
   const redirectUri = Platform.select({
     ios: makeRedirectUri({ native: `${reversedIosClientId}:/oauthredirect` }),
-    android: makeRedirectUri({ scheme: 'sportspal' }),
-    default: makeRedirectUri({ scheme: 'sportspal' }),
+    // Android standalone builds use the Android OAuth client with reversed client ID scheme
+    android: `${reversedAndroidClientId}:/oauthredirect`,
+    default: makeRedirectUri({ scheme }),
   });
 
-  const [request, response, promptAsync] = Google.useAuthRequest({
-    androidClientId: GOOGLE_ANDROID_CLIENT_ID || '797980453879-2s8joa3gkv6n5a70ekuv1jtgmt916hig.apps.googleusercontent.com',
-    iosClientId: GOOGLE_IOS_CLIENT_ID || '797980453879-ceat11cgpq7o6svdfpia6tu70rl1o5at.apps.googleusercontent.com',
-    webClientId: GOOGLE_WEB_CLIENT_ID || '797980453879-us77gkeq4najb1bno3ftbounlqjc5vdn.apps.googleusercontent.com',
-    redirectUri,
-    // Default responseType = code; auto-exchange will give us an id_token in authentication.idToken
-    scopes: ['openid', 'profile', 'email'],
+  const googleAuthConfig = Platform.select({
+    ios: {
+      iosClientId: GOOGLE_IOS_CLIENT_ID || '797980453879-ceat11cgpq7o6svdfpia6tu70rl1o5at.apps.googleusercontent.com',
+      redirectUri,
+      scopes: ['openid', 'profile', 'email'],
+    },
+    android: {
+      // For standalone Android builds, use androidClientId with native redirect
+      androidClientId: GOOGLE_ANDROID_CLIENT_ID || '797980453879-2s8joa3gkv6n5a70ekuv1jtgmt916hig.apps.googleusercontent.com',
+      redirectUri,
+      scopes: ['openid', 'profile', 'email'],
+    },
+    default: {
+      webClientId: GOOGLE_WEB_CLIENT_ID || '797980453879-us77gkeq4najb1bno3ftbounlqjc5vdn.apps.googleusercontent.com',
+      redirectUri,
+      scopes: ['openid', 'profile', 'email'],
+    },
   });
+  const [request, response, promptAsync] = Google.useAuthRequest(googleAuthConfig as any);
+  
+  // Log redirect URI for debugging (remove in production)
+  useEffect(() => {
+    console.log('[Google Sign-In] Redirect URI:', redirectUri);
+    console.log('[Google Sign-In] Platform:', Platform.OS);
+    console.log('[Google Sign-In] Client IDs:', {
+      iosClientId: GOOGLE_IOS_CLIENT_ID,
+      androidClientId: GOOGLE_ANDROID_CLIENT_ID,
+      webClientId: GOOGLE_WEB_CLIENT_ID,
+    });
+  }, [redirectUri]);
   const [fbRequest, fbResponse, fbPromptAsync] = Facebook.useAuthRequest({
     clientId: FACEBOOK_APP_ID || '',
     scopes: ['public_profile', 'email'],
@@ -108,15 +135,29 @@ const LoginScreen = ({ navigation }: any) => {
   // Handle Google auth response
   useEffect(() => {
     (async () => {
+      console.log('[Google Sign-In] Response received:', response?.type);
+      
       if (response?.type === 'success') {
         const params: any = response.params || {};
         const idToken = params.id_token || (response as any)?.authentication?.idToken;
+        console.log('[Google Sign-In] ID Token present:', !!idToken);
+        
         if (!idToken) {
           console.warn('Google auth response missing id_token');
           Alert.alert('Google Sign-In', 'Google sign-in did not return an ID token. Please try again.');
           flowRef.current = { mode: null, forLink: false };
           return;
         }
+        
+        // Ensure browser closes properly on Android
+        if (Platform.OS === 'android') {
+          try {
+            await WebBrowser.dismissBrowser();
+          } catch (e) {
+            console.log('[Google Sign-In] Browser already closed or error dismissing:', e);
+          }
+        }
+        
         const googleCred = GoogleAuthProvider.credential(idToken);
         if (flowRef.current.forLink) {
           // Sign in with existing method (Google), then link pending

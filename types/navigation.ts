@@ -25,6 +25,7 @@ export type RootStackParamList = {
     activityId: string;
     showSuccessModal?: boolean;
     activitySport?: string;
+    fromProfile?: boolean; // When user taps past activity from their profile
   };
   ChatDetail: { chatId: string };
   CreateGame: {

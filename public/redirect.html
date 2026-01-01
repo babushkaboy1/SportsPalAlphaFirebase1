@@ -314,16 +314,24 @@
         const isIOS = /iphone|ipad|ipod/.test(userAgent);
         const isAndroid = /android/.test(userAgent);
         
-        // Build app scheme URL
+        // Build app scheme URL - path already starts with / so sportspal:/ + /activity/123 = sportspal://activity/123
+        // Alternative formats for better compatibility:
         const appScheme = `sportspal:/${path}`;
+        const appSchemeAlt = `sportspal://open${path}`; // Alternative with host
         
-        // Build universal link
+        // Build universal link (iOS Universal Links / Android App Links)
         const universalLink = `https://sportspal-1b468.web.app${path}`;
+        
+        // Intent URL for Android (more reliable than custom scheme)
+        // Added S.browser_fallback_url to prevent redirect loop
+        const intentUrl = `intent:/${path}#Intent;scheme=sportspal;package=com.sportspal.app;S.browser_fallback_url=https%3A%2F%2Fplay.google.com%2Fstore%2Fapps%2Fdetails%3Fid%3Dcom.sportspal.app;end`;
         
         // Extract activity ID from path
         const pathParts = path.split('/').filter(Boolean);
         const linkType = pathParts[0]; // activity, profile, or chat
         const itemId = pathParts[1];
+        
+        console.log('[Deep Link Debug]', { path, appScheme, universalLink, intentUrl, linkType, itemId });
         
         // Fetch activity data if it's an activity link
         async function fetchActivityData() {
@@ -396,11 +404,15 @@
                         } catch {}
             
             if (isIOS) {
-                // Use custom scheme first to avoid Firebase rewrite causing a reload loop
+                // iOS: Use custom scheme - Universal Links should have already opened the app
+                // if they're working, so this is a fallback
+                console.log('[Deep Link] iOS: Trying custom scheme:', appScheme);
                 window.location.href = appScheme;
             } else if (isAndroid) {
-                // Try custom scheme for Android
-                window.location.href = appScheme;
+                // Android: Use Intent URL for more reliable app opening
+                // Falls back to Play Store if app not installed
+                console.log('[Deep Link] Android: Trying intent URL:', intentUrl);
+                window.location.href = intentUrl;
             } else {
                 // Desktop - show fallback immediately
                 document.getElementById('statusText').textContent = 'SportsPal is a mobile app';
@@ -415,8 +427,14 @@
             const openAppBtn = document.getElementById('openAppBtn');
             const spinner = document.querySelector('.spinner');
             
-            // Direct open button should always use the app scheme (avoids universal link reloads)
-            openAppBtn.href = isIOS || isAndroid ? appScheme : 'https://sportspal-1b468.web.app';
+            // Use intent URL for Android (more reliable), custom scheme for iOS
+            if (isAndroid) {
+                openAppBtn.href = intentUrl;
+            } else if (isIOS) {
+                openAppBtn.href = appScheme;
+            } else {
+                openAppBtn.href = 'https://sportspal-1b468.web.app';
+            }
             
             spinner.style.display = 'none';
             fallbackButtons.classList.add('show');

@@ -17,6 +17,11 @@ import {
   loadHistoricalActivitiesFromCache
 } from '../utils/activityCache';
 import { ActivityJoinLeaveModal } from '../components/ActivityJoinLeaveModal';
+import * as Location from 'expo-location';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// Default discovery radius
+const DEFAULT_RADIUS_KM = 70;
 
 type ActivityContextType = {
   joinedActivities: string[];
@@ -27,6 +32,9 @@ type ActivityContextType = {
   reloadAllActivities: (forceRefresh?: boolean) => Promise<void>;
   profile: any;
   initialActivitiesLoaded: boolean;
+  userLocation: { latitude: number; longitude: number } | null;
+  discoveryRange: number;
+  initialLocationLoaded: boolean;
 };
 
 const ActivityContext = createContext<ActivityContextType | undefined>(undefined);
@@ -46,6 +54,11 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [profile, setProfile] = useState<any>(null);
   // Track when the first meaningful activities load (after initial Firestore fetch)
   const [initialActivitiesLoaded, setInitialActivitiesLoaded] = useState(false);
+  
+  // Location state - centralized for splash screen coordination
+  const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [discoveryRange, setDiscoveryRange] = useState(DEFAULT_RADIUS_KM);
+  const [initialLocationLoaded, setInitialLocationLoaded] = useState(false);
 
   // Modal state
   const [modalVisible, setModalVisible] = useState(false);
@@ -81,18 +94,65 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return unsubscribe;
   }, []);
 
-  // Fetch user profile
-  const fetchUserProfile = async (uid: string) => {
-    const userRef = doc(db, 'profiles', uid);
-    const docSnap = await getDoc(userRef);
-    return docSnap.exists() ? docSnap.data() : null;
-  };
-
-  // Load user profile after login
+  // Load user location and discovery range on app start
+  // This runs early so splash screen can wait for it
   useEffect(() => {
-    if (user) {
-      fetchUserProfile(user.uid).then(profile => setProfile(profile));
+    const loadLocationAndRange = async () => {
+      try {
+        // Load discovery range from AsyncStorage
+        const savedRange = await AsyncStorage.getItem('discoveryRange');
+        if (savedRange) {
+          setDiscoveryRange(parseInt(savedRange, 10));
+        }
+
+        // Request location permission and get location
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          // Try last known location first (instant)
+          let location = await Location.getLastKnownPositionAsync({});
+          if (!location) {
+            // Fallback to current position
+            location = await Location.getCurrentPositionAsync({});
+          }
+          if (location) {
+            setUserLocation(location.coords);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to load location:', error);
+      } finally {
+        // Mark location as loaded even if it failed (so app doesn't hang)
+        setInitialLocationLoaded(true);
+      }
+    };
+    loadLocationAndRange();
+  }, []);
+
+  // Fetch user profile
+  // Real-time listener for user profile (updates when profile is edited)
+  useEffect(() => {
+    if (!user) {
+      setProfile(null);
+      return;
     }
+    const userRef = doc(db, 'profiles', user.uid);
+    const unsubscribe = onSnapshot(
+      userRef,
+      (docSnap) => {
+        if (docSnap.exists()) {
+          setProfile(docSnap.data());
+        } else {
+          setProfile(null);
+        }
+      },
+      (error) => {
+        if ((error as any)?.code !== 'permission-denied') {
+          console.error('Profile subscription error:', error);
+        }
+        setProfile(null);
+      }
+    );
+    return unsubscribe;
   }, [user]);
 
   // Load joined activities only after user is set
@@ -128,17 +188,20 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         ]);
         
         if (cached && historicalCached) {
-          console.log('📦 Loaded activities and historical from cache');
+          console.log('📦 Loaded activities and historical from cache (skipping Firestore read)');
           // Merge cached data - filter out duplicates
           const allIds = new Set(cached.map((a: any) => a.id));
           const uniqueHistorical = historicalCached.filter((a: any) => !allIds.has(a.id));
           setAllActivities([...cached, ...uniqueHistorical] as Activity[]);
-          // Don't return - continue to fetch fresh data in background
+          if (!initialActivitiesLoaded) setInitialActivitiesLoaded(true);
+          return; // Cache is valid - skip Firestore read to save costs!
         } else if (cached) {
-          console.log('📦 Loaded activities from cache');
+          console.log('📦 Loaded activities from cache (skipping Firestore read)');
           setAllActivities(cached as Activity[]);
-          // Don't return - continue to fetch fresh data in background
+          if (!initialActivitiesLoaded) setInitialActivitiesLoaded(true);
+          return; // Cache is valid - skip Firestore read to save costs!
         }
+        // Cache expired or empty - continue to fetch from Firestore
       }
 
       // Fetch fresh data from Firestore
@@ -425,6 +488,9 @@ export const ActivityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         reloadAllActivities,
         profile,
         initialActivitiesLoaded,
+        userLocation,
+        discoveryRange,
+        initialLocationLoaded,
       }}
     >
       {children}

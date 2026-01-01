@@ -23,7 +23,7 @@ export default ({ config }: { config: any }) => ({
   ios: {
     supportsTablet: true,
     bundleIdentifier: "com.sportspal",
-    buildNumber: "48",
+    buildNumber: "49",
     googleServicesFile: "./GoogleService-Info.plist",
     associatedDomains: ["applinks:sportspal-1b468.web.app"],
     // iOS splash configuration - ensures splash shows immediately, not app icon
@@ -91,6 +91,25 @@ export default ({ config }: { config: any }) => ({
         data: [
           {
             scheme: "sportspal"
+          }
+        ],
+        category: ["BROWSABLE", "DEFAULT"]
+      },
+      {
+        action: "VIEW",
+        data: [
+          {
+            scheme: "com.sportspal.app"
+          }
+        ],
+        category: ["BROWSABLE", "DEFAULT"]
+      },
+      {
+        // Google OAuth redirect for Android - reversed client ID scheme
+        action: "VIEW",
+        data: [
+          {
+            scheme: "com.googleusercontent.apps.797980453879-2s8joa3gkv6n5a70ekuv1jtgmt916hig"
           }
         ],
         category: ["BROWSABLE", "DEFAULT"]

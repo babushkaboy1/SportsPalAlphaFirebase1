@@ -15,6 +15,9 @@ const ENV_PATH = path.join(ROOT, '.env.local');
 // Keep in sync with generate-env.js required/optional plus Google OAuth IDs
 const KEYS_TO_PUSH = [
   'FIREBASE_API_KEY',
+  'FIREBASE_API_KEY_WEB',
+  'FIREBASE_API_KEY_IOS',
+  'FIREBASE_API_KEY_ANDROID',
   'FIREBASE_AUTH_DOMAIN',
   'FIREBASE_PROJECT_ID',
   'FIREBASE_STORAGE_BUCKET',
@@ -28,6 +31,7 @@ const KEYS_TO_PUSH = [
   'GOOGLE_ANDROID_CLIENT_ID',
   'GOOGLE_IOS_CLIENT_ID',
   'GOOGLE_WEB_CLIENT_ID',
+  'FACEBOOK_APP_ID',
 ];
 
 function parseEnvFile(filePath) {

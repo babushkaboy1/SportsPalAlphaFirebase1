@@ -25,6 +25,8 @@ import * as Calendar from 'expo-calendar';
 import MapView, { Marker, PROVIDER_DEFAULT, Polyline, UrlTile, Callout } from 'react-native-maps';
 import { useActivityContext } from '../context/ActivityContext';
 import UserAvatar from '../components/UserAvatar';
+import { ActivitySuccessModal } from '../components/ActivitySuccessModal';
+import { ActivityRatingModal } from '../components/ActivityRatingModal';
 import { fetchUsersByIds } from '../utils/firestoreActivities';
 import { getOrCreateChatForActivity } from '../utils/firestoreChats';
 import { auth, db, storage } from '../firebaseConfig';
@@ -34,7 +36,7 @@ import { normalizeDateFormat } from '../utils/storage';
 import { ActivityIcon } from '../components/ActivityIcons';
 import { sendActivityInvites } from '../utils/firestoreInvites';
 import { useTheme } from '../context/ThemeContext';
-import { shareActivity } from '../utils/deepLinking';
+import { shareActivity, generateActivityLink, copyLinkToClipboard } from '../utils/deepLinking';
 import { useFocusEffect } from '@react-navigation/native';
 
 // Slight darken helper for hex colors (fallback to original on parse failure)
@@ -66,7 +68,7 @@ function darkenHex(color: string, amount = 0.12): string {
 }
 
 const ActivityDetailsScreen = ({ route, navigation }: any) => {
-  const { activityId } = route.params;
+  const { activityId, fromProfile } = route.params;
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
   const styles = useMemo(() => createStyles(theme), [theme]);
@@ -86,6 +88,12 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
   const progressAnim = useRef(new Animated.Value(0)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const sparkleAnims = useRef([...Array(6)].map(() => new Animated.Value(0))).current;
+  
+  // Rating modal state (for past activities from profile)
+  const [showRatingModal, setShowRatingModal] = useState(false);
+  const [hasUserRated, setHasUserRated] = useState(false);
+  const [userExistingRating, setUserExistingRating] = useState<number | null>(null);
+  const ratingCardAnim = useRef(new Animated.Value(0)).current;
   
   // Load calendar status from AsyncStorage on mount and when screen comes into focus
   const loadCalendarStatus = async () => {
@@ -125,6 +133,9 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
     descent?: string;
     maxElevation?: string;
   }>({});
+  
+  // Main map route display state (auto-loaded for hiking/running/cycling)
+  const [mainMapRouteCoords, setMainMapRouteCoords] = useState<Array<{ latitude: number; longitude: number }>>([]);
   const gpxMapRef = useRef<MapView | null>(null);
 
   // Invite friends modal state
@@ -137,11 +148,9 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
   // Success modal state (for newly created activities)
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [invitedFriendIds, setInvitedFriendIds] = useState<string[]>([]);
-  const overlayOpacity = useRef(new Animated.Value(0)).current;
-  const scaleAnim = useRef(new Animated.Value(0.7)).current;
-  const slideAnim = useRef(new Animated.Value(50)).current;
-  const iconScale = useRef(new Animated.Value(0)).current;
-  const iconRotate = useRef(new Animated.Value(0)).current;
+  
+  // Direct fetch fallback for newly created activities not yet in context
+  const [directFetchedActivity, setDirectFetchedActivity] = useState<any>(null);
 
   // Menu modal state
   const [menuVisible, setMenuVisible] = useState(false);
@@ -149,9 +158,163 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const mapRef = useRef<MapView>(null);
 
-  const activity = allActivities.find(a => a.id === activityId);
+  // First try to find in context, then use direct fetch fallback
+  const activityFromContext = allActivities.find(a => a.id === activityId);
+  const activity = activityFromContext || directFetchedActivity;
   const gpxSupported = activity ? ['hiking', 'running', 'cycling'].includes(String((activity as any).activity || '').toLowerCase()) : false;
   
+  // Auto-load route data for hiking/running/cycling activities to show on main map
+  useEffect(() => {
+    // Early exit - no activity or not a supported type
+    if (!activity || !gpxSupported) return;
+    
+    // Check if there's actually any route data to load
+    const hasDrawnRoute = (activity as any).drawnRoute && (activity as any).drawnRoute.length > 0;
+    const hasGpx = !!(activity as any).gpx;
+    
+    // No route data at all - exit
+    if (!hasDrawnRoute && !hasGpx) return;
+    
+    const loadRouteForMainMap = async () => {
+      // Handle drawn routes first (instant)
+      if (hasDrawnRoute) {
+        setMainMapRouteCoords((activity as any).drawnRoute);
+        return;
+      }
+      
+      // Handle GPX files
+      if (!hasGpx) return;
+      
+      try {
+        // Prefer an explicit downloadUrl, otherwise try to derive one from storagePath
+        let url: string | null = (activity as any).gpx?.downloadUrl || null;
+        const storagePath: string | null = (activity as any).gpx?.storagePath || null;
+        
+        try {
+          if (!url && storagePath) {
+            if (storagePath.startsWith('http') || storagePath.startsWith('gs://')) {
+              try {
+                const r = storageRef(storage, storagePath);
+                url = await getDownloadURL(r);
+              } catch (e) {
+                if (storagePath.startsWith('http')) {
+                  url = storagePath;
+                } else {
+                  url = null;
+                }
+              }
+            } else {
+              const r = storageRef(storage, storagePath);
+              url = await getDownloadURL(r);
+            }
+          }
+        } catch (e) {
+          console.warn('Could not resolve GPX download URL for main map', e);
+          url = null;
+        }
+        
+        if (!url) {
+          return;
+        }
+        
+        const resp = await fetch(url, {
+          headers: { Accept: 'application/gpx+xml, text/xml, text/plain, */*' },
+        });
+        
+        let text: string | null = null;
+        try {
+          text = await resp.text();
+        } catch (e) {
+          console.warn('resp.text() failed for main map GPX:', e);
+        }
+        
+        if (!text || !/<(trkpt|rtept|wpt)\b/i.test(text)) {
+          try {
+            let ab: ArrayBuffer | null = null;
+            if (typeof (resp as any).clone === 'function') {
+              try {
+                const resp2 = (resp as any).clone();
+                ab = await resp2.arrayBuffer();
+              } catch (e) {
+                // Refetch if clone fails
+              }
+            }
+            if (!ab) {
+              const resp3 = await fetch(url);
+              ab = await resp3.arrayBuffer();
+            }
+            // Decode
+            let decoded = '';
+            try {
+              // @ts-ignore
+              decoded = typeof TextDecoder !== 'undefined' ? new TextDecoder('utf-8').decode(ab) : '';
+            } catch {}
+            if (!decoded) {
+              const bytes = new Uint8Array(ab);
+              let s = '';
+              for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+              decoded = s;
+            }
+            text = decoded;
+          } catch (e) {
+            console.warn('binary decode path failed for main map GPX', e);
+          }
+        }
+        
+        const pts: Array<{ latitude: number; longitude: number }> = [];
+        const xml = typeof text === 'string' ? text : '';
+        
+        // Extract track/route points
+        const extractPoints = (tag: 'trkpt' | 'rtept') => {
+          const regex = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'gi');
+          let m: RegExpExecArray | null;
+          while ((m = regex.exec(xml)) !== null) {
+            const tagStr = m[0];
+            const latMatch = /lat=\"([^\"]+)\"/i.exec(tagStr);
+            const lonMatch = /lon=\"([^\"]+)\"/i.exec(tagStr);
+            if (latMatch && lonMatch) {
+              const lat = parseFloat(latMatch[1].replace(',', '.'));
+              const lon = parseFloat(lonMatch[1].replace(',', '.'));
+              if (!Number.isNaN(lat) && !Number.isNaN(lon)) {
+                pts.push({ latitude: lat, longitude: lon });
+              }
+            }
+          }
+        };
+        
+        extractPoints('trkpt');
+        if (pts.length === 0) extractPoints('rtept');
+        
+        if (pts.length > 0) {
+          setMainMapRouteCoords(pts);
+        }
+      } catch (e) {
+        console.warn('Error loading route for main map:', e);
+      }
+    };
+    
+    loadRouteForMainMap();
+  }, [activity?.id, gpxSupported]);
+  
+  // Direct fetch activity if not found in context (race condition fix for newly created activities)
+  // This MUST be before any conditional returns to maintain hook order
+  useEffect(() => {
+    if (!activityFromContext && activityId) {
+      const fetchActivity = async () => {
+        try {
+          const activityRef = doc(db, 'activities', activityId);
+          const activitySnap = await getDoc(activityRef);
+          if (activitySnap.exists()) {
+            setDirectFetchedActivity({ id: activitySnap.id, ...activitySnap.data() });
+          }
+        } catch (error) {
+          console.warn('Error direct-fetching activity:', error);
+        }
+      };
+      fetchActivity();
+    }
+  }, [activityFromContext, activityId]);
+
   // Fade in on mount
   useEffect(() => {
     Animated.timing(fadeAnim, {
@@ -315,56 +478,77 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
       // Show modal with slight delay for smooth entrance
       setTimeout(() => {
         setShowSuccessModal(true);
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }, 400);
     }
   }, [route.params?.showSuccessModal, profile]);
-  
-  // Success modal animations
+
+  // Load friends for invite modal (MUST be before early return)
+  const myFriendIdsForEffect: string[] = Array.isArray(profile?.friends) ? profile.friends : [];
   useEffect(() => {
-    if (showSuccessModal) {
-      Animated.parallel([
-        Animated.timing(overlayOpacity, {
-          toValue: 1,
-          duration: 200,
-          useNativeDriver: true,
-        }),
-        Animated.spring(scaleAnim, {
+    const loadFriends = async () => {
+      try {
+        if (myFriendIdsForEffect.length) {
+          const users = await fetchUsersByIds(myFriendIdsForEffect);
+          const currentUserId = auth.currentUser?.uid;
+          const filteredUsers = currentUserId ? users.filter((u: any) => u.uid !== currentUserId) : users;
+          setFriendProfiles(filteredUsers);
+        } else {
+          setFriendProfiles([]);
+        }
+      } catch {
+        setFriendProfiles([]);
+      }
+    };
+    loadFriends();
+  }, [JSON.stringify(myFriendIdsForEffect)]);
+
+  // Check if user has already rated this activity (for past activities from profile)
+  useEffect(() => {
+    const checkRatingStatus = async () => {
+      if (!activityId || !fromProfile) return;
+      
+      const uid = auth.currentUser?.uid;
+      if (!uid) return;
+      
+      try {
+        const activityRef = doc(db, 'activities', activityId);
+        const activitySnap = await getDoc(activityRef);
+        
+        if (activitySnap.exists()) {
+          const data = activitySnap.data();
+          const ratings = data.ratings || [];
+          const userRating = ratings.find((r: any) => r.raterId === uid);
+          
+          if (userRating) {
+            setHasUserRated(true);
+            setUserExistingRating(userRating.overall || null);
+          } else {
+            setHasUserRated(false);
+            setUserExistingRating(null);
+          }
+        }
+      } catch (error) {
+        console.warn('Error checking rating status:', error);
+      }
+    };
+    
+    checkRatingStatus();
+  }, [activityId, fromProfile]);
+
+  // Animate rating card appearance for past activities from profile
+  useEffect(() => {
+    if (fromProfile && activity) {
+      // Delay animation for smooth entrance
+      setTimeout(() => {
+        Animated.spring(ratingCardAnim, {
           toValue: 1,
           tension: 50,
-          friction: 7,
+          friction: 8,
           useNativeDriver: true,
-        }),
-        Animated.timing(slideAnim, {
-          toValue: 0,
-          duration: 300,
-          useNativeDriver: true,
-        }),
-      ]).start();
-
-      setTimeout(() => {
-        Animated.parallel([
-          Animated.spring(iconScale, {
-            toValue: 1,
-            tension: 100,
-            friction: 5,
-            useNativeDriver: true,
-          }),
-          Animated.timing(iconRotate, {
-            toValue: 1,
-            duration: 600,
-            useNativeDriver: true,
-          }),
-        ]).start();
-      }, 200);
-    } else {
-      overlayOpacity.setValue(0);
-      scaleAnim.setValue(0.7);
-      slideAnim.setValue(50);
-      iconScale.setValue(0);
-      iconRotate.setValue(0);
+        }).start();
+      }, 500);
     }
-  }, [showSuccessModal]);
+  }, [fromProfile, activity]);
 
   // Early return with loading state if activity is null to prevent rendering errors
   if (!activity) {
@@ -411,25 +595,6 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
     ? ((activity as any).joinedUserIds as string[])
     : (joinedUsers?.map((u: any) => u.uid) || []);
   const myFriendIds: string[] = Array.isArray(profile?.friends) ? profile.friends : [];
-
-  useEffect(() => {
-    const loadFriends = async () => {
-      try {
-        if (myFriendIds.length) {
-          const users = await fetchUsersByIds(myFriendIds);
-          // Filter out current user from friends list
-          const currentUserId = auth.currentUser?.uid;
-          const filteredUsers = currentUserId ? users.filter((u: any) => u.uid !== currentUserId) : users;
-          setFriendProfiles(filteredUsers);
-        } else {
-          setFriendProfiles([]);
-        }
-      } catch {
-        setFriendProfiles([]);
-      }
-    };
-    loadFriends();
-  }, [JSON.stringify(myFriendIds)]);
 
   const openInviteFriends = () => {
     setSelectedFriendIds({});
@@ -541,7 +706,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
           const currentUserProfile = {
             uid: currentUserId,
             username: profile?.username || 'You',
-            photo: profile?.photo || profile?.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(profile?.username || 'User')}`,
+            photo: profile?.photo || profile?.photoURL || null,
           };
           setJoinedUsers(prev => [...prev, currentUserProfile]);
         }
@@ -849,7 +1014,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                 onPress={() => setMenuVisible(true)}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               >
-                <Ionicons name="ellipsis-horizontal" size={28} color={theme.primary} />
+                <Ionicons name="ellipsis-vertical" size={24} color={theme.primary} />
               </TouchableOpacity>
               <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 44 }}>
                 <ActivityIcon activity={activity.activity} size={28} color={theme.primary} />
@@ -872,7 +1037,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
               onPress={() => setMenuVisible(true)}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             >
-              <Ionicons name="ellipsis-horizontal" size={28} color={theme.primary} />
+              <Ionicons name="ellipsis-vertical" size={24} color={theme.primary} />
             </TouchableOpacity>
             <View style={styles.headerTitleContainer}>
               <ActivityIcon activity={activity.activity} size={28} color={theme.primary} />
@@ -903,19 +1068,153 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
               initialRegion={{
                 latitude: activity.latitude,
                 longitude: activity.longitude,
-                latitudeDelta: 0.01,
-                longitudeDelta: 0.01,
+                latitudeDelta: mainMapRouteCoords.length > 0 ? 0.05 : 0.01,
+                longitudeDelta: mainMapRouteCoords.length > 0 ? 0.05 : 0.01,
+              }}
+              onMapReady={() => {
+                // Fit map to show entire route when route data is available
+                if (mainMapRouteCoords.length > 1 && mapRef.current) {
+                  const allCoords = [
+                    ...mainMapRouteCoords,
+                    { latitude: activity.latitude, longitude: activity.longitude }
+                  ];
+                  mapRef.current.fitToCoordinates(allCoords, {
+                    edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
+                    animated: false,
+                  });
+                }
               }}
               showsUserLocation={!!userLocation}
               showsMyLocationButton={false}
+              toolbarEnabled={false}
               userInterfaceStyle={theme.isDark ? 'dark' : 'light'}
             >
-              <Marker
-                coordinate={{ latitude: activity.latitude, longitude: activity.longitude }}
-                title={activity.activity}
-                description={activity.location}
-              />
+              {/* Show route polyline when available */}
+              {mainMapRouteCoords.length > 0 && (
+                <>
+                  {/* Triple-layer polyline for better visibility when lines overlap */}
+                  {/* Outer shadow/border - makes crossings visible */}
+                  <Polyline 
+                    coordinates={mainMapRouteCoords} 
+                    strokeWidth={10} 
+                    strokeColor="rgba(0,0,0,0.2)" 
+                  />
+                  {/* White border layer - creates contrast at crossings */}
+                  <Polyline 
+                    coordinates={mainMapRouteCoords} 
+                    strokeWidth={6} 
+                    strokeColor={theme.isDark ? '#333' : '#fff'} 
+                  />
+                  {/* Main route color */}
+                  <Polyline 
+                    coordinates={mainMapRouteCoords} 
+                    strokeWidth={4} 
+                    strokeColor={theme.primary}
+                  />
+                  
+                  {/* Route start marker - green circle with play icon */}
+                  <Marker 
+                    coordinate={mainMapRouteCoords[0]} 
+                    anchor={{ x: 0.5, y: 0.5 }}
+                    title="Start"
+                  >
+                    <View style={{ 
+                      width: 28, 
+                      height: 28, 
+                      borderRadius: 14, 
+                      backgroundColor: '#22c55e', 
+                      borderWidth: 3, 
+                      borderColor: '#fff',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      shadowColor: '#000',
+                      shadowOffset: { width: 0, height: 2 },
+                      shadowOpacity: 0.3,
+                      shadowRadius: 3,
+                      elevation: 4,
+                    }}>
+                      <Ionicons name="play" size={14} color="#fff" style={{ marginLeft: 2 }} />
+                    </View>
+                  </Marker>
+                  
+                  {/* Only show finish marker if NOT a loop (start and end are far apart) */}
+                  {(() => {
+                    const start = mainMapRouteCoords[0];
+                    const end = mainMapRouteCoords[mainMapRouteCoords.length - 1];
+                    const dist = Math.sqrt(
+                      Math.pow(end.latitude - start.latitude, 2) + 
+                      Math.pow(end.longitude - start.longitude, 2)
+                    );
+                    // If distance > ~50m (rough estimate in degrees), show end marker
+                    if (dist > 0.0005) {
+                      return (
+                        <Marker 
+                          coordinate={end} 
+                          anchor={{ x: 0.5, y: 0.5 }}
+                          title="Finish"
+                        >
+                          <View style={{ 
+                            width: 28, 
+                            height: 28, 
+                            borderRadius: 14, 
+                            backgroundColor: '#ef4444', 
+                            borderWidth: 3, 
+                            borderColor: '#fff',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            shadowColor: '#000',
+                            shadowOffset: { width: 0, height: 2 },
+                            shadowOpacity: 0.3,
+                            shadowRadius: 3,
+                            elevation: 4,
+                          }}>
+                            <Ionicons name="flag" size={14} color="#fff" />
+                          </View>
+                        </Marker>
+                      );
+                    }
+                    return null;
+                  })()}
+                </>
+              )}
+              
+              {/* Meeting point marker - custom circle for route activities, default pin for others */}
+              {['Hiking', 'Running', 'Cycling'].includes(activity.activity) ? (
+                <Marker
+                  coordinate={{ latitude: activity.latitude, longitude: activity.longitude }}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                  title="Meet Here"
+                  description={activity.location}
+                  zIndex={999}
+                >
+                  <View style={{ 
+                    width: 32, 
+                    height: 32, 
+                    borderRadius: 16, 
+                    backgroundColor: '#f59e0b', 
+                    borderWidth: 3, 
+                    borderColor: '#fff',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    shadowColor: '#000',
+                    shadowOffset: { width: 0, height: 2 },
+                    shadowOpacity: 0.3,
+                    shadowRadius: 3,
+                    elevation: 4,
+                  }}>
+                    <Ionicons name="people" size={16} color="#fff" />
+                  </View>
+                </Marker>
+              ) : (
+                <Marker
+                  coordinate={{ latitude: activity.latitude, longitude: activity.longitude }}
+                  title="Meet Here"
+                  description={activity.location}
+                  zIndex={999}
+                />
+              )}
             </MapView>
+            
             {userLocation && (
               <>
                 <TouchableOpacity
@@ -935,12 +1234,24 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                 <TouchableOpacity
                   style={[styles.activityLocationButton, { position: 'absolute', bottom: 70, right: 16 }]}
                   onPress={() => {
-                    mapRef.current?.animateToRegion({
-                      latitude: activity.latitude,
-                      longitude: activity.longitude,
-                      latitudeDelta: 0.01,
-                      longitudeDelta: 0.01,
-                    });
+                    // If route exists, fit to route bounds; otherwise just show activity location
+                    if (mainMapRouteCoords.length > 1) {
+                      const allCoords = [
+                        ...mainMapRouteCoords,
+                        { latitude: activity.latitude, longitude: activity.longitude }
+                      ];
+                      mapRef.current?.fitToCoordinates(allCoords, {
+                        edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
+                        animated: true,
+                      });
+                    } else {
+                      mapRef.current?.animateToRegion({
+                        latitude: activity.latitude,
+                        longitude: activity.longitude,
+                        latitudeDelta: 0.01,
+                        longitudeDelta: 0.01,
+                      });
+                    }
                   }}
                   activeOpacity={0.7}
                 >
@@ -949,6 +1260,160 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
               </>
             )}
           </View>
+          
+          {/* Compact route stats below map - for GPX routes with stats OR drawn routes */}
+          {mainMapRouteCoords.length > 0 && ((activity as any).gpx?.stats || (activity as any).drawnRoute) && (
+            <View style={{ backgroundColor: theme.card, marginHorizontal: 16, marginTop: 8, paddingVertical: 10, paddingHorizontal: 8, borderRadius: 10, borderWidth: 1, borderColor: theme.border }}>
+              {(() => {
+                const s: any = (activity as any).gpx?.stats || {};
+                
+                // For drawn routes, calculate distance from mainMapRouteCoords
+                let calculatedDistance = s.distance || '';
+                if (!calculatedDistance && mainMapRouteCoords.length > 1) {
+                  let totalDist = 0;
+                  for (let i = 1; i < mainMapRouteCoords.length; i++) {
+                    const p1 = mainMapRouteCoords[i - 1];
+                    const p2 = mainMapRouteCoords[i];
+                    const R = 6371; // Earth's radius in km
+                    const dLat = (p2.latitude - p1.latitude) * Math.PI / 180;
+                    const dLon = (p2.longitude - p1.longitude) * Math.PI / 180;
+                    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                             Math.cos(p1.latitude * Math.PI / 180) * Math.cos(p2.latitude * Math.PI / 180) *
+                             Math.sin(dLon / 2) * Math.sin(dLon / 2);
+                    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                    totalDist += R * c;
+                  }
+                  calculatedDistance = totalDist >= 1 
+                    ? `${totalDist.toFixed(2)} km` 
+                    : `${(totalDist * 1000).toFixed(0)} m`;
+                }
+                
+                const row1 = [
+                  { icon: 'trail-sign', label: 'Dist', value: calculatedDistance || '—' },
+                  { icon: 'trending-up', label: 'Up', value: s.ascent || '—' },
+                  { icon: 'trending-down', label: 'Down', value: s.descent || '—' },
+                ];
+                const row2 = [
+                  { icon: 'arrow-up-circle', label: 'Max', value: s.maxElevation || '—' },
+                  { icon: 'speedometer', label: 'Diff', value: s.difficulty || '—' },
+                  { icon: 'git-branch', label: 'Type', value: s.routeType || '—' },
+                ];
+                return (
+                  <>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-around', marginBottom: 6 }}>
+                      {row1.map((item) => (
+                        <View key={item.label} style={{ alignItems: 'center', flex: 1 }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 2 }}>
+                            <Ionicons name={item.icon as any} size={11} color={theme.primary} style={{ marginRight: 3 }} />
+                            <Text style={{ fontSize: 10, color: theme.muted, fontWeight: '600' }}>{item.label}</Text>
+                          </View>
+                          <Text style={{ fontSize: 11, color: theme.text, fontWeight: '700' }} numberOfLines={1}>{item.value}</Text>
+                        </View>
+                      ))}
+                    </View>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-around' }}>
+                      {row2.map((item) => (
+                        <View key={item.label} style={{ alignItems: 'center', flex: 1 }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 2 }}>
+                            <Ionicons name={item.icon as any} size={11} color={theme.primary} style={{ marginRight: 3 }} />
+                            <Text style={{ fontSize: 10, color: theme.muted, fontWeight: '600' }}>{item.label}</Text>
+                          </View>
+                          <Text style={{ fontSize: 11, color: theme.text, fontWeight: '700' }} numberOfLines={1}>{item.value}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  </>
+                );
+              })()}
+            </View>
+          )}
+
+          {/* Rating Card for Past Activities (placed under map) */}
+          {isHistorical && fromProfile && (
+            <Animated.View
+              style={[
+                styles.ratingCard,
+                {
+                  opacity: ratingCardAnim,
+                  transform: [
+                    {
+                      translateY: ratingCardAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [20, 0],
+                      }),
+                    },
+                    {
+                      scale: ratingCardAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0.95, 1],
+                      }),
+                    },
+                  ],
+                },
+              ]}
+            >
+              <View style={styles.ratingCardHeader}>
+                <View style={styles.ratingCardIconContainer}>
+                  {hasUserRated ? (
+                    <Ionicons name="star" size={28} color="#FFD700" />
+                  ) : (
+                    <Ionicons name="star-outline" size={28} color={theme.primary} />
+                  )}
+                </View>
+                <View style={styles.ratingCardTextContainer}>
+                  <Text style={styles.ratingCardTitle}>
+                    {hasUserRated ? 'You rated this activity' : 'How was this activity?'}
+                  </Text>
+                  <Text style={styles.ratingCardSubtitle}>
+                    {hasUserRated 
+                      ? `You gave it ${userExistingRating} star${userExistingRating !== 1 ? 's' : ''}`
+                      : 'Your feedback helps the community'}
+                  </Text>
+                </View>
+              </View>
+              
+              {!hasUserRated && (
+                <View style={styles.ratingPreviewStars}>
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <TouchableOpacity
+                      key={star}
+                      onPress={() => {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        setShowRatingModal(true);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="star-outline" size={32} color={theme.border} />
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+              
+              <TouchableOpacity
+                style={[
+                  styles.ratingCardButton,
+                  hasUserRated && styles.ratingCardButtonSecondary,
+                ]}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                  setShowRatingModal(true);
+                }}
+                activeOpacity={0.8}
+              >
+                <Ionicons 
+                  name={hasUserRated ? 'eye-outline' : 'star'} 
+                  size={18} 
+                  color={hasUserRated ? theme.primary : '#fff'} 
+                />
+                <Text style={[
+                  styles.ratingCardButtonText,
+                  hasUserRated && styles.ratingCardButtonTextSecondary,
+                ]}>
+                  {hasUserRated ? 'View Rating' : 'Rate Now'}
+                </Text>
+              </TouchableOpacity>
+            </Animated.View>
+          )}
 
           {/* Info */}
           <View style={styles.infoContainer}>
@@ -985,328 +1450,6 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                 <Text style={styles.descriptionTitle}>Activity Description</Text>
                 <Text style={styles.description}>{(activity as any).description}</Text>
               </View>
-            )}
-            {/* GPX / Route statistics (if present) only for Hiking/Running/Cycling */}
-            {gpxSupported && ((activity as any).gpx || (activity as any).drawnRoute) && (
-              <>
-                <View style={{ marginBottom: 8 }}>
-                  <TouchableOpacity
-                    style={[styles.actionButton, { alignSelf: 'center', justifyContent: 'center' }]}
-                    onPress={async () => {
-                      // Handle both GPX and drawn routes
-                      if ((activity as any).drawnRoute && (activity as any).drawnRoute.length > 0) {
-                        // Show drawn route directly
-                        setShowGpxModal(true);
-                        setGpxError(null);
-                        setGpxCoords((activity as any).drawnRoute);
-                        setGpxWaypoints([]);
-                        setGpxLoading(false);
-                        return;
-                      }
-                      
-                      // Original GPX handling code
-                      // Diagnostic logs to help identify why "No GPX URL available" appears
-                      console.log('Opening GPX viewer for activity id:', activity.id);
-                      console.log('activity.gpx payload:', (activity as any).gpx);
-
-                      setShowGpxModal(true);
-                      setGpxError(null);
-                      setGpxCoords([]);
-                      setGpxWaypoints([]);
-
-                      try {
-                        setGpxLoading(true);
-
-                        // Prefer an explicit downloadUrl, otherwise try to derive one from storagePath
-                        let url: string | null = (activity as any).gpx?.downloadUrl || null;
-                        const storagePath: string | null = (activity as any).gpx?.storagePath || null;
-
-                        console.log('Initial GPX url:', url, 'storagePath:', storagePath);
-
-                        try {
-                          if (!url && storagePath) {
-                            // If storagePath looks like a full url, try to use or resolve it; otherwise resolve via getDownloadURL
-                            if (storagePath.startsWith('http') || storagePath.startsWith('gs://')) {
-                              console.log('storagePath looks like HTTP/GS URI. Attempting to resolve via Storage.getDownloadURL if necessary.');
-                              try {
-                                const r = storageRef(storage, storagePath);
-                                url = await getDownloadURL(r);
-                                console.log('getDownloadURL resolved to:', url);
-                              } catch (e) {
-                                console.warn('getDownloadURL failed for storagePath:', storagePath, e);
-                                // fallback: if it's an http url, use it directly
-                                if (storagePath.startsWith('http')) {
-                                  url = storagePath;
-                                  console.log('Using storagePath directly as URL:', url);
-                                } else {
-                                  url = null;
-                                  console.log('storagePath not usable as direct URL');
-                                }
-                              }
-                            } else {
-                              console.log('storagePath looks like a path (not http/gs). Attempting to create ref and getDownloadURL.');
-                              const r = storageRef(storage, storagePath);
-                              url = await getDownloadURL(r);
-                              console.log('getDownloadURL resolved to:', url);
-                            }
-                          }
-                        } catch (e) {
-                          console.warn('Could not resolve GPX download URL from storagePath', storagePath, e);
-                          url = null;
-                        }
-
-                        if (!url) {
-                          console.warn('No GPX URL available after resolution attempts. downloadUrl:', (activity as any).gpx?.downloadUrl, 'storagePath:', storagePath);
-                          setGpxError('No GPX URL available');
-                          setGpxLoading(false);
-                          return;
-                        }
-
-                        console.log('Fetching GPX from URL:', url);
-                        const resp = await fetch(url, {
-                          headers: {
-                            Accept: 'application/gpx+xml, text/xml, text/plain, */*',
-                          },
-                        });
-                        const ct = resp.headers?.get?.('content-type');
-                        console.log('GPX fetch status:', resp.status, resp.statusText, 'content-type:', ct || '(unknown)');
-
-                        // Read as text; if unusable, try a cloned response (or a re-fetch) as arrayBuffer and decode
-                        let text: string | null = null;
-                        try {
-                          text = await resp.text();
-                        } catch (e) {
-                          console.warn('resp.text() failed (will try binary decode):', e);
-                        }
-                        if (!text || !/<(trkpt|rtept|wpt)\b/i.test(text)) {
-                          try {
-                            let ab: ArrayBuffer | null = null;
-                            if (typeof (resp as any).clone === 'function') {
-                              try {
-                                const resp2 = (resp as any).clone();
-                                ab = await resp2.arrayBuffer();
-                              } catch (e) {
-                                console.warn('clone().arrayBuffer() failed, refetching URL', e);
-                              }
-                            }
-                            if (!ab) {
-                              const resp3 = await fetch(url);
-                              ab = await resp3.arrayBuffer();
-                            }
-                            // Decode
-                            let decoded = '';
-                            try {
-                              // @ts-ignore
-                              decoded = typeof TextDecoder !== 'undefined' ? new TextDecoder('utf-8').decode(ab) : '';
-                            } catch {}
-                            if (!decoded) {
-                              const bytes = new Uint8Array(ab);
-                              let s = '';
-                              for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
-                              decoded = s;
-                            }
-                            text = decoded;
-                          } catch (e) {
-                            console.warn('binary decode path failed', e);
-                          }
-                        }
-                        console.log('GPX text length:', typeof text === 'string' ? text.length : '(non-string)');
-
-                        const pts: Array<{ latitude: number; longitude: number; elevation?: number }> = [];
-                        const wpts: Array<{ latitude: number; longitude: number; title?: string }> = [];
-                        const xml = typeof text === 'string' ? text : '';
-
-                        // Extract track/route points only (polylines)
-                        const extractPoints = (tag: 'trkpt' | 'rtept') => {
-                          const regex = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'gi');
-                          let count = 0;
-                          let m: RegExpExecArray | null;
-                          while ((m = regex.exec(xml)) !== null) {
-                            count++;
-                            const tagStr = m[0];
-                            const inner = m[1] || '';
-                            const latMatch = /lat=\"([^\"]+)\"/i.exec(tagStr);
-                            const lonMatch = /lon=\"([^\"]+)\"/i.exec(tagStr);
-                            if (latMatch && lonMatch) {
-                              const lat = parseFloat(latMatch[1].replace(',', '.'));
-                              const lon = parseFloat(lonMatch[1].replace(',', '.'));
-                              if (!Number.isNaN(lat) && !Number.isNaN(lon)) {
-                                // Try to extract elevation from <ele> tag
-                                let elevation: number | undefined;
-                                const eleMatch = /<ele>([\d\.\-]+)<\/ele>/i.exec(inner);
-                                if (eleMatch) {
-                                  const ele = parseFloat(eleMatch[1].replace(',', '.'));
-                                  if (!Number.isNaN(ele)) elevation = ele;
-                                }
-                                pts.push({ latitude: lat, longitude: lon, elevation });
-                              }
-                            }
-                          }
-                          return count;
-                        };
-
-                        // Extract waypoints as separate markers with optional name
-                        const extractWpts = () => {
-                          const regex = /<wpt\b([^>]*)>([\s\S]*?)<\/wpt>/gi;
-                          let count = 0;
-                          let m: RegExpExecArray | null;
-                          while ((m = regex.exec(xml)) !== null) {
-                            count++;
-                            const attrs = m[1] || '';
-                            const inner = m[2] || '';
-                            const latMatch = /lat=\"([^\"]+)\"/i.exec(attrs);
-                            const lonMatch = /lon=\"([^\"]+)\"/i.exec(attrs);
-                            if (latMatch && lonMatch) {
-                              const lat = parseFloat(latMatch[1].replace(',', '.'));
-                              const lon = parseFloat(lonMatch[1].replace(',', '.'));
-                              if (!Number.isNaN(lat) && !Number.isNaN(lon)) {
-                                let title: string | undefined = undefined;
-                                const nameMatch = /<name>([\s\S]*?)<\/name>/i.exec(inner);
-                                const descMatch = /<desc>([\s\S]*?)<\/desc>/i.exec(inner) || /<cmt>([\s\S]*?)<\/cmt>/i.exec(inner);
-                                if (nameMatch && nameMatch[1]) title = nameMatch[1].trim();
-                                else if (descMatch && descMatch[1]) title = descMatch[1].trim();
-                                wpts.push({ latitude: lat, longitude: lon, title });
-                              }
-                            }
-                          }
-                          return count;
-                        };
-
-                        const trkCount = extractPoints('trkpt');
-                        const rteCountBefore = pts.length;
-                        const rteCount = trkCount === 0 ? extractPoints('rtept') : 0;
-                        // Extract waypoints as separate markers
-                        const wptCount = extractWpts();
-
-                        console.log('GPX point summary -> trkpt:', trkCount, 'rtept:', rteCount === 0 ? 0 : (pts.length - rteCountBefore), 'wpt:', wptCount);
-
-                        if (pts.length === 0 && wpts.length === 0) {
-                          setGpxError('No track/route/waypoint points found in GPX');
-                        } else {
-                          setGpxCoords(pts);
-                          setGpxWaypoints(wpts);
-                          
-                          // Calculate route statistics
-                          if (pts.length > 1) {
-                            let totalDistance = 0;
-                            let totalAscent = 0;
-                            let totalDescent = 0;
-                            let maxEle = -Infinity;
-                            
-                            for (let i = 0; i < pts.length; i++) {
-                              // Track max elevation
-                              if (pts[i].elevation !== undefined && pts[i].elevation! > maxEle) {
-                                maxEle = pts[i].elevation!;
-                              }
-                              
-                              // Calculate distance and elevation changes between consecutive points
-                              if (i > 0) {
-                                const p1 = pts[i - 1];
-                                const p2 = pts[i];
-                                
-                                // Haversine formula for distance
-                                const R = 6371; // Earth's radius in km
-                                const dLat = (p2.latitude - p1.latitude) * Math.PI / 180;
-                                const dLon = (p2.longitude - p1.longitude) * Math.PI / 180;
-                                const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-                                         Math.cos(p1.latitude * Math.PI / 180) * Math.cos(p2.latitude * Math.PI / 180) *
-                                         Math.sin(dLon / 2) * Math.sin(dLon / 2);
-                                const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-                                const dist = R * c;
-                                totalDistance += dist;
-                                
-                                // Elevation gain/loss
-                                if (p1.elevation !== undefined && p2.elevation !== undefined) {
-                                  const elevDiff = p2.elevation - p1.elevation;
-                                  if (elevDiff > 0) totalAscent += elevDiff;
-                                  else totalDescent += Math.abs(elevDiff);
-                                }
-                              }
-                            }
-                            
-                            // Format stats
-                            const stats: {
-                              distance?: string;
-                              ascent?: string;
-                              descent?: string;
-                              maxElevation?: string;
-                            } = {};
-                            
-                            if (totalDistance > 0) {
-                              stats.distance = totalDistance >= 1 
-                                ? `${totalDistance.toFixed(2)} km` 
-                                : `${(totalDistance * 1000).toFixed(0)} m`;
-                            }
-                            if (totalAscent > 0) stats.ascent = `${totalAscent.toFixed(0)} m`;
-                            if (totalDescent > 0) stats.descent = `${totalDescent.toFixed(0)} m`;
-                            if (maxEle > -Infinity) stats.maxElevation = `${maxEle.toFixed(0)} m`;
-                            
-                            setGpxStats(stats);
-                          }
-                          
-                          const fitPts = pts.length > 0 ? pts : wpts;
-                          setTimeout(() => {
-                            try {
-                              if (gpxMapRef.current && fitPts.length > 0) {
-                                gpxMapRef.current.fitToCoordinates(fitPts, { edgePadding: { top: 60, right: 60, bottom: 60, left: 60 }, animated: true });
-                              }
-                            } catch (e) {
-                              console.warn('fitToCoordinates failed', e);
-                            }
-                          }, 300);
-                        }
-                      } catch (e: any) {
-                        console.warn('Failed to load GPX', e);
-                        setGpxError('Failed to load GPX file');
-                      } finally {
-                        setGpxLoading(false);
-                      }
-                    }}
-                  >
-                    <Ionicons name="map" size={18} style={[styles.actionIconBold, { marginRight: 8 }]} />
-                    <Text style={styles.actionText}>
-                      View {(activity as any).activity} Route {(activity as any).gpx ? '(GPX)' : '(Drawn)'}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-
-                {(activity as any).gpx && (
-                  <View style={{ marginVertical: 10, backgroundColor: theme.card, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: theme.border }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-                      <Ionicons name="stats-chart" size={20} color={theme.primary} style={{ marginRight: 8 }} />
-                      <Text style={{ color: theme.primary, fontWeight: '700', fontSize: 16 }}>Route Statistics</Text>
-                    </View>
-                    {(() => {
-                      const s: any = (activity as any).gpx.stats || {};
-                      const iconMap: Record<string, string> = {
-                        'Distance': 'trail-sign',
-                        'Ascent': 'trending-up',
-                        'Descent': 'trending-down',
-                        'Max Elevation': 'arrow-up-circle',
-                        'Difficulty': 'speedometer',
-                        'Route Type': 'git-branch',
-                      };
-                      const rows = [
-                        ['Distance', s.distance || '—'],
-                        ['Ascent', s.ascent || '—'],
-                        ['Descent', s.descent || '—'],
-                        ['Max Elevation', s.maxElevation || '—'],
-                        ['Difficulty', s.difficulty || '—'],
-                        ['Route Type', s.routeType || '—'],
-                      ];
-                      return rows.map(([label, val]) => (
-                        <View key={label as string} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, paddingVertical: 4 }}>
-                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                            <Ionicons name={iconMap[label as string] as any} size={16} color={theme.primary} />
-                            <Text style={{ color: theme.muted, fontWeight: '600' }}>{label}:</Text>
-                          </View>
-                          <Text style={{ color: theme.text, fontWeight: '500' }}>{val}</Text>
-                        </View>
-                      ));
-                    })()}
-                  </View>
-                )}
-              </>
             )}
 
             {/* Participants */}
@@ -1524,6 +1667,7 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
                     longitudeDelta: 0.05,
                   }}
                   userInterfaceStyle={theme.isDark ? 'dark' : 'light'}
+                  toolbarEnabled={false}
                   showsCompass={true}
                   showsScale={true}
                 >
@@ -1635,342 +1779,359 @@ const ActivityDetailsScreen = ({ route, navigation }: any) => {
         onRequestClose={() => setInviteFriendsVisible(false)}
       >
         <Pressable style={styles.modalOverlay} onPress={() => setInviteFriendsVisible(false)}>
-          <Pressable style={styles.modalCard} onPress={() => {}}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Invite Friends</Text>
-              <TouchableOpacity onPress={() => setInviteFriendsVisible(false)}>
-                <Ionicons name="close" size={22} color={theme.muted} />
+          <Pressable style={styles.inviteModalCard} onPress={() => {}}>
+            {/* Header with icon */}
+            <View style={styles.inviteModalHeader}>
+              <View style={styles.inviteModalIconWrap}>
+                <Ionicons name="people" size={28} color={theme.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.inviteModalTitle}>Invite Connections</Text>
+                <Text style={styles.inviteModalSubtitle}>
+                  {friendProfiles.length === 0 
+                    ? 'Add connections to invite them'
+                    : `Select who to invite to this ${activity?.activity || 'activity'}`}
+                </Text>
+              </View>
+              <TouchableOpacity 
+                style={styles.inviteModalCloseBtn} 
+                onPress={() => setInviteFriendsVisible(false)}
+              >
+                <Ionicons name="close" size={20} color={theme.muted} />
               </TouchableOpacity>
             </View>
-            <Text style={styles.modalSubtitle}>Select friends to invite to this activity</Text>
-            <ScrollView style={{ maxHeight: 360 }}>
-              {friendProfiles.length === 0 && (
-                <Text style={{ color: theme.muted, textAlign: 'center', marginVertical: 20 }}>No friends yet.</Text>
-              )}
-              {friendProfiles.map((f) => {
-                const alreadyJoined = joinedUserIds.includes(f.uid);
-                const selected = !!selectedFriendIds[f.uid];
-                return (
-                  <TouchableOpacity
-                    key={f.uid}
-                    style={[styles.friendRow, alreadyJoined && { opacity: 0.45 }]}
-                    onPress={() => toggleSelectFriend(f.uid, alreadyJoined)}
-                    disabled={alreadyJoined}
-                    activeOpacity={0.7}
-                  >
-                    <View style={styles.friendLeft}>
-                      <UserAvatar
-                        photoUrl={f.photo || f.photoURL}
-                        username={f.username || 'User'}
-                        size={44}
-                        style={styles.friendAvatar}
-                      />
-                      <View>
-                        <Text style={styles.friendName}>{f.username || 'User'}</Text>
-                        {alreadyJoined && <Text style={styles.friendMeta}>Already joined</Text>}
-                      </View>
+
+            {/* Connection list */}
+            <ScrollView 
+              style={styles.inviteModalList} 
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={{ paddingBottom: 8 }}
+            >
+              {friendProfiles.length === 0 ? (
+                <View style={styles.inviteEmptyState}>
+                  <Ionicons name="person-add-outline" size={48} color={theme.muted} style={{ marginBottom: 12 }} />
+                  <Text style={styles.inviteEmptyTitle}>No connections yet</Text>
+                  <Text style={styles.inviteEmptyText}>
+                    Connect with other users from the Connections tab to invite them to activities.
+                  </Text>
+                </View>
+              ) : (
+                <>
+                  {/* Show invitable friends first */}
+                  {friendProfiles.filter(f => !joinedUserIds.includes(f.uid)).map((f) => {
+                    const selected = !!selectedFriendIds[f.uid];
+                    return (
+                      <TouchableOpacity
+                        key={f.uid}
+                        style={[styles.inviteFriendRow, selected && styles.inviteFriendRowSelected]}
+                        onPress={() => toggleSelectFriend(f.uid, false)}
+                        activeOpacity={0.7}
+                      >
+                        <UserAvatar
+                          photoUrl={f.photo || f.photoURL}
+                          username={f.username || 'User'}
+                          size={46}
+                          style={styles.inviteFriendAvatar}
+                        />
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.inviteFriendName}>{f.username || 'User'}</Text>
+                          <Text style={styles.inviteFriendHint}>Tap to {selected ? 'deselect' : 'select'}</Text>
+                        </View>
+                        <View style={[styles.inviteCheckbox, selected && styles.inviteCheckboxSelected]}>
+                          {selected && <Ionicons name="checkmark" size={16} color={'#fff'} />}
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                  
+                  {/* Show already joined friends at the end */}
+                  {friendProfiles.filter(f => joinedUserIds.includes(f.uid)).length > 0 && (
+                    <View style={styles.inviteJoinedSection}>
+                      <Text style={styles.inviteJoinedLabel}>Already in this activity</Text>
+                      {friendProfiles.filter(f => joinedUserIds.includes(f.uid)).map((f) => (
+                        <View key={f.uid} style={styles.inviteFriendRowJoined}>
+                          <UserAvatar
+                            photoUrl={f.photo || f.photoURL}
+                            username={f.username || 'User'}
+                            size={40}
+                            style={[styles.inviteFriendAvatar, { opacity: 0.7 }]}
+                          />
+                          <View style={{ flex: 1 }}>
+                            <Text style={[styles.inviteFriendName, { opacity: 0.7 }]}>{f.username || 'User'}</Text>
+                          </View>
+                          <View style={styles.inviteJoinedBadge}>
+                            <Ionicons name="checkmark-circle" size={14} color={'#10b981'} />
+                            <Text style={styles.inviteJoinedBadgeText}>Joined</Text>
+                          </View>
+                        </View>
+                      ))}
                     </View>
-                    {!alreadyJoined && (
-                      <View style={[styles.checkbox, selected && styles.checkboxSelected]}>
-                        {selected && <Ionicons name="checkmark" size={16} color={'#fff'} />}
-                      </View>
-                    )}
-                  </TouchableOpacity>
-                );
-              })}
+                  )}
+                  
+                  {/* All friends already joined message */}
+                  {friendProfiles.length > 0 && friendProfiles.every(f => joinedUserIds.includes(f.uid)) && (
+                    <View style={styles.inviteAllJoinedMsg}>
+                      <Ionicons name="checkmark-done-circle" size={24} color={'#10b981'} />
+                      <Text style={styles.inviteAllJoinedText}>
+                        All your connections have already joined this activity!
+                      </Text>
+                    </View>
+                  )}
+                </>
+              )}
             </ScrollView>
-            <View style={styles.modalActions}>
-              <TouchableOpacity style={styles.modalCancel} onPress={() => setInviteFriendsVisible(false)}>
-                <Text style={styles.modalCancelText}>Cancel</Text>
+
+            {/* Footer actions */}
+            <View style={styles.inviteModalFooter}>
+              <TouchableOpacity 
+                style={styles.inviteModalCancelBtn} 
+                onPress={() => setInviteFriendsVisible(false)}
+              >
+                <Text style={styles.inviteModalCancelText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.modalConfirm} onPress={confirmInviteFriends}>
-                <Ionicons name="send" size={18} color={'#fff'} />
-                <Text style={styles.modalConfirmText}>Send Invites</Text>
+              <TouchableOpacity 
+                style={[
+                  styles.inviteModalSendBtn,
+                  Object.values(selectedFriendIds).filter(Boolean).length === 0 && styles.inviteModalSendBtnDisabled
+                ]} 
+                onPress={confirmInviteFriends}
+                disabled={friendProfiles.length === 0}
+              >
+                <Ionicons name="paper-plane" size={18} color={'#fff'} />
+                <Text style={styles.inviteModalSendText}>
+                  {Object.values(selectedFriendIds).filter(Boolean).length > 0
+                    ? `Send (${Object.values(selectedFriendIds).filter(Boolean).length})`
+                    : 'Send Invites'}
+                </Text>
               </TouchableOpacity>
             </View>
           </Pressable>
           {noSelectionHintVisible && (
             <View style={styles.bottomToast} pointerEvents="none">
-              <Text style={styles.bottomToastText}>No friends selected</Text>
+              <Text style={styles.bottomToastText}>Select at least one connection</Text>
             </View>
           )}
         </Pressable>
       </Modal>
 
       {/* Success Modal (for newly created activities) */}
-      <Modal visible={showSuccessModal} transparent animationType="none" onRequestClose={() => setShowSuccessModal(false)}>
-        <Animated.View style={[styles.modalOverlay, { opacity: overlayOpacity }]}>
-          <Animated.View
-            style={[
-              styles.modalCard,
-              {
-                maxWidth: 500,
-                padding: 24,
-                transform: [
-                  { scale: scaleAnim },
-                  { translateY: slideAnim },
-                ],
-              },
-            ]}
-          >
-            {/* Animated Activity Icon */}
-            <Animated.View
-              style={[
-                {
-                  width: 90,
-                  height: 90,
-                  borderRadius: 45,
-                  backgroundColor: theme.background,
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                  alignSelf: 'center',
-                  marginBottom: 20,
-                  borderWidth: 3,
-                  borderColor: theme.primary,
-                  transform: [
-                    { scale: iconScale },
-                    { rotate: iconRotate.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: ['0deg', '360deg'],
-                    }) },
-                  ],
-                },
-              ]}
-            >
-              <Animated.View
-                style={{
-                  transform: [
-                    { rotate: iconRotate.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: ['0deg', '-360deg'],
-                    }) },
-                  ],
-                }}
-              >
-                <ActivityIcon 
-                  activity={route.params?.activitySport || activity.activity} 
-                  size={56} 
-                  color={theme.primary} 
-                />
-              </Animated.View>
-            </Animated.View>
-
-            {/* Title & Subtitle */}
-            <Text style={[styles.modalTitle, { fontSize: 26, textAlign: 'center', marginBottom: 8 }]}>
-              🎉 Activity Created!
-            </Text>
-            <Text style={{ fontSize: 14, color: theme.muted, textAlign: 'center', marginBottom: 20, lineHeight: 20 }}>
-              Your {route.params?.activitySport || activity.activity} activity is live! Friends can now discover and join from their feed.
-            </Text>
-
-            {/* Friends List */}
-            {friendProfiles.length > 0 ? (
-              <>
-                <Text style={{ fontSize: 15, fontWeight: '700', color: theme.text, marginBottom: 12, marginTop: 8 }}>
-                  Invite friends to join this activity:
-                </Text>
-                <ScrollView style={{ maxHeight: 260, marginBottom: 16 }} showsVerticalScrollIndicator={false}>
-                  {friendProfiles.map((friend: any) => {
-                    const isInvited = invitedFriendIds.includes(friend.uid);
-                    const isSelected = selectedFriendIds[friend.uid];
-                    return (
-                      <TouchableOpacity
-                        key={friend.uid}
-                        style={[
-                          {
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            paddingVertical: 12,
-                            paddingHorizontal: 8,
-                            borderRadius: 12,
-                            marginBottom: 8,
-                            backgroundColor: theme.background,
-                          },
-                          isInvited && { opacity: 0.5 },
-                        ]}
-                        onPress={() => {
-                          if (!isInvited) {
-                            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                            setSelectedFriendIds(prev => ({ ...prev, [friend.uid]: !prev[friend.uid] }));
-                          }
-                        }}
-                        disabled={isInvited}
-                      >
-                        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
-                          <UserAvatar
-                            photoUrl={friend.photo}
-                            username={friend.username}
-                            size={44}
-                            borderColor={theme.primary}
-                            borderWidth={2}
-                            style={{ marginRight: 12 }}
-                          />
-                          <View style={{ flex: 1 }}>
-                            <Text style={{ color: theme.text, fontWeight: '600', fontSize: 15 }}>
-                              {friend.username}
-                            </Text>
-                            {friend.bio && (
-                              <Text style={{ color: theme.muted, fontSize: 12, marginTop: 2 }} numberOfLines={1}>
-                                {friend.bio}
-                              </Text>
-                            )}
-                          </View>
-                        </View>
-                        {isInvited ? (
-                          <Text style={{ color: theme.muted, fontSize: 12, fontWeight: '600' }}>Invited</Text>
-                        ) : (
-                          <View
-                            style={[
-                              {
-                                width: 24,
-                                height: 24,
-                                borderRadius: 8,
-                                borderWidth: 2,
-                                borderColor: theme.primary,
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                              },
-                              isSelected && { backgroundColor: theme.primary },
-                            ]}
-                          >
-                            {isSelected && <Ionicons name="checkmark" size={16} color={'#fff'} />}
-                          </View>
-                        )}
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-
-                {/* Invite Button */}
-                <TouchableOpacity
-                  style={[
-                    {
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      paddingVertical: 16,
-                      paddingHorizontal: 20,
-                      borderRadius: 12,
-                      gap: 10,
-                      backgroundColor: theme.primary,
-                    },
-                    !Object.values(selectedFriendIds).some(v => v) && { opacity: 0.45 },
-                  ]}
-                  onPress={async () => {
-                    const selected = Object.keys(selectedFriendIds).filter(id => selectedFriendIds[id] && !invitedFriendIds.includes(id));
-                    if (selected.length === 0) {
-                      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-                      setNoSelectionHintVisible(true);
-                      if (noSelectionTimerRef.current) clearTimeout(noSelectionTimerRef.current);
-                      noSelectionTimerRef.current = setTimeout(() => setNoSelectionHintVisible(false), 1800);
-                      return;
-                    }
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                    let sent = 0;
-                    let skipped = 0;
-                    const newlyInvited: string[] = [];
-                    for (const friendId of selected) {
-                      try {
-                        const res = await sendActivityInvites(friendId, [activityId]);
-                        if ((res?.sentIds || []).length > 0) {
-                          sent += 1;
-                          newlyInvited.push(friendId);
-                        } else {
-                          skipped += 1;
-                        }
-                      } catch {
-                        skipped += 1;
-                      }
-                    }
-                    setInvitedFriendIds(prev => Array.from(new Set([...prev, ...newlyInvited])));
-                    setSelectedFriendIds({});
-                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                    Alert.alert('Invites',
-                      sent > 0
-                        ? `Sent invites to ${sent} friend${sent === 1 ? '' : 's'}${skipped ? ` (skipped ${skipped} already joined)` : ''}.`
-                        : `No invites sent. ${skipped} skipped (already joined).`
-                    );
-                  }}
-                  disabled={!Object.values(selectedFriendIds).some(v => v)}
-                >
-                  <Ionicons name="send" size={20} color="#fff" />
-                  <Text style={{ fontSize: 16, fontWeight: '700', color: '#fff' }}>
-                    {Object.values(selectedFriendIds).filter(v => v).length > 0
-                      ? `Invite ${Object.values(selectedFriendIds).filter(v => v).length} Friend${Object.values(selectedFriendIds).filter(v => v).length === 1 ? '' : 's'}`
-                      : 'Select Friends to Invite'}
-                  </Text>
-                </TouchableOpacity>
-              </>
-            ) : (
-              <Text style={{ fontSize: 14, color: theme.muted, textAlign: 'center', marginVertical: 20 }}>
-                No friends to invite yet. Add friends to invite them to your activities!
-              </Text>
-            )}
-
-            {/* Done Button */}
-            <TouchableOpacity
-              style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'center',
-                paddingVertical: 16,
-                paddingHorizontal: 20,
-                borderRadius: 12,
-                gap: 10,
-                backgroundColor: theme.primary,
-                marginTop: 12,
-              }}
-              onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                setShowSuccessModal(false);
-                setSelectedFriendIds({});
-                setInvitedFriendIds([]);
-              }}
-            >
-              <Ionicons name="checkmark-circle" size={20} color="#fff" />
-              <Text style={{ fontSize: 16, fontWeight: '700', color: '#fff' }}>
-                Done
-              </Text>
-            </TouchableOpacity>
-
-            {/* Toast */}
-            {noSelectionHintVisible && (
-              <View style={{ position: 'absolute', left: 0, right: 0, bottom: 20, alignItems: 'center' }} pointerEvents="none">
-                <Text style={{ backgroundColor: 'rgba(26, 233, 239, 0.2)', color: theme.text, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 16, fontWeight: '600', overflow: 'hidden' }}>
-                  Please select friends to invite
-                </Text>
-              </View>
-            )}
-          </Animated.View>
-        </Animated.View>
-      </Modal>
+      <ActivitySuccessModal
+        visible={showSuccessModal}
+        sport={route.params?.activitySport || activity.activity}
+        friendProfiles={friendProfiles}
+        selectedFriendIds={selectedFriendIds}
+        invitedFriendIds={invitedFriendIds}
+        onSelectFriend={(friendId: string) => {
+          if (!invitedFriendIds.includes(friendId)) {
+            setSelectedFriendIds(prev => ({ ...prev, [friendId]: !prev[friendId] }));
+          }
+        }}
+        onInviteFriends={async () => {
+          const selected = Object.keys(selectedFriendIds).filter(id => selectedFriendIds[id] && !invitedFriendIds.includes(id));
+          if (selected.length === 0) {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+            return;
+          }
+          let sent = 0;
+          let skipped = 0;
+          const newlyInvited: string[] = [];
+          for (const friendId of selected) {
+            try {
+              const res = await sendActivityInvites(friendId, [activityId]);
+              if ((res?.sentIds || []).length > 0) {
+                sent += 1;
+                newlyInvited.push(friendId);
+              } else {
+                skipped += 1;
+              }
+            } catch {
+              skipped += 1;
+            }
+          }
+          setInvitedFriendIds(prev => Array.from(new Set([...prev, ...newlyInvited])));
+          setSelectedFriendIds({});
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          Alert.alert('Invites Sent! 🎉',
+            sent > 0
+              ? `Sent invites to ${sent} friend${sent === 1 ? '' : 's'}${skipped ? ` (skipped ${skipped} already joined)` : ''}.`
+              : `No invites sent. ${skipped} skipped (already joined).`
+          );
+        }}
+        onClose={() => {
+          setShowSuccessModal(false);
+          setSelectedFriendIds({});
+          setInvitedFriendIds([]);
+        }}
+      />
 
       {/* Menu Modal */}
       <Modal visible={menuVisible} transparent animationType="fade" onRequestClose={() => setMenuVisible(false)}>
         <Pressable style={styles.modalOverlay} onPress={() => setMenuVisible(false)}>
-          <Pressable style={[styles.modalCard, { maxWidth: 280, padding: 0 }]}>
-            <TouchableOpacity onPress={() => setMenuVisible(false)} style={{ position: 'absolute', top: 8, right: 8, zIndex: 1, backgroundColor: theme.background, borderRadius: 15, padding: 2 }}>
-              <Ionicons name="close-circle" size={24} color={theme.muted} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.menuItem}
-              onPress={handleShareActivity}
-            >
-              <Ionicons name="share-social-outline" size={22} color={theme.primary} />
-              <Text style={styles.menuItemText}>Share Activity</Text>
-            </TouchableOpacity>
-            <View style={styles.menuDivider} />
-            <TouchableOpacity
-              style={styles.menuItem}
-              onPress={handleReportActivity}
-            >
-              <Ionicons name="flag-outline" size={22} color={theme.danger} />
-              <Text style={[styles.menuItemText, { color: theme.danger }]}>Report Activity</Text>
-            </TouchableOpacity>
+          <Pressable style={styles.menuModalCard}>
+            {/* Header */}
+            <View style={styles.menuModalHeader}>
+              <View style={styles.menuModalIconWrap}>
+                <ActivityIcon activity={activity.activity} size={24} color={theme.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.menuModalTitle} numberOfLines={1}>{activity.activity}</Text>
+                <Text style={styles.menuModalSubtitle}>Activity Options</Text>
+              </View>
+              <TouchableOpacity 
+                onPress={() => setMenuVisible(false)} 
+                style={styles.menuModalCloseBtn}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="close" size={20} color={theme.muted} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Actions */}
+            <View style={styles.menuModalActions}>
+              {/* Share */}
+              <TouchableOpacity
+                style={styles.menuModalItem}
+                onPress={() => {
+                  setMenuVisible(false);
+                  handleShareActivity();
+                }}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.menuModalItemIcon, { backgroundColor: `${theme.primary}15` }]}>
+                  <Ionicons name="share-social-outline" size={20} color={theme.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.menuModalItemText}>Share Activity</Text>
+                  <Text style={styles.menuModalItemHint}>Send to friends or social media</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={theme.muted} />
+              </TouchableOpacity>
+
+              {/* Copy Link */}
+              <TouchableOpacity
+                style={styles.menuModalItem}
+                onPress={async () => {
+                  setMenuVisible(false);
+                  const link = generateActivityLink(activity.id);
+                  await copyLinkToClipboard(link);
+                  await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                  Alert.alert('Link Copied!', 'Activity link copied to clipboard');
+                }}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.menuModalItemIcon, { backgroundColor: `${theme.primary}15` }]}>
+                  <Ionicons name="link-outline" size={20} color={theme.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.menuModalItemText}>Copy Link</Text>
+                  <Text style={styles.menuModalItemHint}>Copy activity link to clipboard</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={theme.muted} />
+              </TouchableOpacity>
+
+              {/* View Host Profile */}
+              {activity.creatorId && activity.creatorId !== auth.currentUser?.uid && (
+                <TouchableOpacity
+                  style={styles.menuModalItem}
+                  onPress={() => {
+                    setMenuVisible(false);
+                    navigation.navigate('UserProfile', { userId: activity.creatorId });
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.menuModalItemIcon, { backgroundColor: `${theme.primary}15` }]}>
+                    <Ionicons name="person-outline" size={20} color={theme.primary} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.menuModalItemText}>View Host Profile</Text>
+                    <Text style={styles.menuModalItemHint}>{creatorUsername || 'Activity creator'}</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color={theme.muted} />
+                </TouchableOpacity>
+              )}
+
+              {/* Invite Friends */}
+              {!isHistorical && (
+                <TouchableOpacity
+                  style={styles.menuModalItem}
+                  onPress={() => {
+                    setMenuVisible(false);
+                    openInviteFriends();
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.menuModalItemIcon, { backgroundColor: `${theme.primary}15` }]}>
+                    <Ionicons name="people-outline" size={20} color={theme.primary} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.menuModalItemText}>Invite Friends</Text>
+                    <Text style={styles.menuModalItemHint}>Send invites to your connections</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color={theme.muted} />
+                </TouchableOpacity>
+              )}
+
+              {/* Get Directions */}
+              <TouchableOpacity
+                style={styles.menuModalItem}
+                onPress={() => {
+                  setMenuVisible(false);
+                  handleGetDirections();
+                }}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.menuModalItemIcon, { backgroundColor: `${theme.primary}15` }]}>
+                  <Ionicons name="navigate-outline" size={20} color={theme.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.menuModalItemText}>Get Directions</Text>
+                  <Text style={styles.menuModalItemHint}>Open in maps app</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={theme.muted} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Danger Zone */}
+            <View style={styles.menuModalDangerSection}>
+              <TouchableOpacity
+                style={styles.menuModalDangerItem}
+                onPress={handleReportActivity}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.menuModalItemIcon, { backgroundColor: `${theme.danger}15` }]}>
+                  <Ionicons name="flag-outline" size={20} color={theme.danger} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.menuModalItemText, { color: theme.danger }]}>Report Activity</Text>
+                  <Text style={styles.menuModalItemHint}>Flag inappropriate content</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
           </Pressable>
         </Pressable>
       </Modal>
+
+      {/* Rating Modal (for past activities from profile) */}
+      <ActivityRatingModal
+        visible={showRatingModal}
+        activity={activity ? {
+          id: activityId,
+          activity: activity.activity,
+          hasRoute: !!(activity as any).gpx,
+          joinedParticipants: joinedUsers.map(u => ({
+            oderId: u.oderId,
+            odername: u.ordername,
+            uid: u.oderId,
+            username: u.ordername,
+            photoURL: u.photoURL,
+          })),
+        } : null}
+        onClose={() => setShowRatingModal(false)}
+        onRatingSubmitted={(_activityId: string, rating: number) => {
+          setHasUserRated(true);
+          setUserExistingRating(rating);
+        }}
+      />
     </View>
   );
 };
@@ -1995,9 +2156,218 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
   modalCancel: { paddingVertical: 12, paddingHorizontal: 16, backgroundColor: t.card, borderRadius: 10, borderWidth: 1, borderColor: t.danger },
   modalCancelText: { color: t.danger, fontWeight: '700' },
   modalConfirm: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: t.primary, paddingVertical: 12, paddingHorizontal: 16, borderRadius: 10 },
-  modalConfirmText: { color: t.isDark ? '#111' : '#fff', fontWeight: '700' },
+  modalConfirmText: { color: '#fff', fontWeight: '700' },
   bottomToast: { position: 'absolute', left: 0, right: 0, bottom: 22, alignItems: 'center' },
   bottomToastText: { backgroundColor: 'rgba(26, 233, 239, 0.18)', color: t.text, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 14, overflow: 'hidden', fontWeight: '600' },
+  
+  // New Invite Modal Styles
+  inviteModalCard: { 
+    width: '100%', 
+    maxWidth: 420, 
+    backgroundColor: t.card, 
+    borderRadius: 20, 
+    padding: 0, 
+    borderWidth: 1, 
+    borderColor: t.border,
+    maxHeight: '80%',
+    overflow: 'hidden',
+  },
+  inviteModalHeader: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    padding: 16, 
+    paddingBottom: 12,
+    borderBottomWidth: 1, 
+    borderBottomColor: t.border,
+    gap: 12,
+  },
+  inviteModalIconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: t.isDark ? 'rgba(26, 233, 239, 0.15)' : 'rgba(26, 233, 239, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  inviteModalTitle: { 
+    color: t.text, 
+    fontSize: 18, 
+    fontWeight: 'bold',
+  },
+  inviteModalSubtitle: { 
+    color: t.muted, 
+    fontSize: 13,
+    marginTop: 2,
+  },
+  inviteModalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: t.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  inviteModalList: { 
+    maxHeight: 320, 
+    paddingHorizontal: 16,
+    paddingTop: 8,
+  },
+  inviteEmptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+    paddingHorizontal: 20,
+  },
+  inviteEmptyTitle: {
+    color: t.text,
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  inviteEmptyText: {
+    color: t.muted,
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  inviteFriendRow: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginVertical: 4,
+    borderRadius: 12,
+    backgroundColor: t.isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+    gap: 12,
+  },
+  inviteFriendRowSelected: {
+    backgroundColor: t.isDark ? 'rgba(26, 233, 239, 0.12)' : 'rgba(26, 233, 239, 0.08)',
+    borderWidth: 1,
+    borderColor: t.primary,
+  },
+  inviteFriendRowJoined: {
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    marginVertical: 2,
+    borderRadius: 10,
+    gap: 10,
+    opacity: 0.7,
+  },
+  inviteFriendAvatar: { 
+    width: 46, 
+    height: 46, 
+    borderRadius: 23, 
+    borderWidth: 2, 
+    borderColor: t.primary,
+  },
+  inviteFriendName: { 
+    color: t.text, 
+    fontWeight: '600',
+    fontSize: 15,
+  },
+  inviteFriendHint: {
+    color: t.muted,
+    fontSize: 12,
+    marginTop: 2,
+  },
+  inviteCheckbox: { 
+    width: 24, 
+    height: 24, 
+    borderRadius: 12, 
+    borderWidth: 2, 
+    borderColor: t.primary, 
+    alignItems: 'center', 
+    justifyContent: 'center',
+  },
+  inviteCheckboxSelected: { 
+    backgroundColor: t.primary,
+  },
+  inviteJoinedSection: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: t.border,
+  },
+  inviteJoinedLabel: {
+    color: t.muted,
+    fontSize: 12,
+    fontWeight: '600',
+    marginBottom: 8,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  inviteJoinedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: t.isDark ? 'rgba(16, 185, 129, 0.15)' : 'rgba(16, 185, 129, 0.1)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+    gap: 4,
+  },
+  inviteJoinedBadgeText: {
+    color: '#10b981',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  inviteAllJoinedMsg: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: t.isDark ? 'rgba(16, 185, 129, 0.12)' : 'rgba(16, 185, 129, 0.08)',
+    padding: 16,
+    borderRadius: 12,
+    marginTop: 16,
+    gap: 10,
+  },
+  inviteAllJoinedText: {
+    color: t.text,
+    fontSize: 13,
+    fontWeight: '500',
+    flex: 1,
+  },
+  inviteModalFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+    borderTopWidth: 1,
+    borderTopColor: t.border,
+    gap: 12,
+  },
+  inviteModalCancelBtn: {
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    backgroundColor: t.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
+  },
+  inviteModalCancelText: {
+    color: t.muted,
+    fontWeight: '600',
+    fontSize: 15,
+  },
+  inviteModalSendBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: t.primary,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    flex: 1,
+    justifyContent: 'center',
+  },
+  inviteModalSendBtnDisabled: {
+    opacity: 0.5,
+  },
+  inviteModalSendText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: t.background, position: 'relative', marginTop: 10, marginBottom: 18 },
   backButton: { padding: 4 },
   headerTitleContainer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
@@ -2036,9 +2406,96 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
   actionIconAddedToCalendar: { color: '#fff' },
   myLocationButton: { position: 'absolute', bottom: 16, right: 16, backgroundColor: t.card, borderRadius: 24, padding: 8, elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 2, zIndex: 10 },
   activityLocationButton: { backgroundColor: t.card, borderRadius: 24, padding: 8, elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 2, marginBottom: 10, zIndex: 10 },
-  menuItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 },
-  menuItemText: { color: t.text, fontSize: 16, fontWeight: '600' },
-  menuDivider: { height: 1, backgroundColor: t.border },
+  
+  // Enhanced Menu Modal Styles
+  menuModalCard: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: t.card,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: t.border,
+    overflow: 'hidden',
+  },
+  menuModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: t.border,
+    gap: 12,
+  },
+  menuModalIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: t.isDark ? 'rgba(26, 233, 239, 0.15)' : 'rgba(26, 233, 239, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  menuModalTitle: {
+    color: t.text,
+    fontSize: 17,
+    fontWeight: 'bold',
+  },
+  menuModalSubtitle: {
+    color: t.muted,
+    fontSize: 12,
+    marginTop: 1,
+  },
+  menuModalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: t.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  menuModalActions: {
+    padding: 8,
+  },
+  menuModalItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    gap: 12,
+  },
+  menuModalItemIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  menuModalItemText: {
+    color: t.text,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  menuModalItemHint: {
+    color: t.muted,
+    fontSize: 12,
+    marginTop: 1,
+  },
+  menuModalDangerSection: {
+    paddingHorizontal: 8,
+    paddingBottom: 8,
+    borderTopWidth: 1,
+    borderTopColor: t.border,
+    marginTop: 4,
+    paddingTop: 8,
+  },
+  menuModalDangerItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    gap: 12,
+  },
   
   // Route modal styles
   routeModalHeader: {
@@ -2102,5 +2559,81 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
     marginTop: 2,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+  },
+
+  // Rating Card Styles (for past activities from profile)
+  ratingCard: {
+    backgroundColor: t.card,
+    borderRadius: 20,
+    padding: 20,
+    marginTop: 20,
+    borderWidth: 2,
+    borderColor: t.isDark ? 'rgba(26, 233, 239, 0.3)' : 'rgba(26, 233, 239, 0.2)',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.15,
+        shadowRadius: 12,
+      },
+      android: {
+        elevation: 6,
+      },
+    }),
+  },
+  ratingCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  ratingCardIconContainer: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: t.isDark ? 'rgba(255, 215, 0, 0.15)' : 'rgba(255, 215, 0, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 14,
+  },
+  ratingCardTextContainer: {
+    flex: 1,
+  },
+  ratingCardTitle: {
+    fontSize: 17,
+    fontWeight: 'bold',
+    color: t.text,
+    marginBottom: 3,
+  },
+  ratingCardSubtitle: {
+    fontSize: 13,
+    color: t.muted,
+  },
+  ratingPreviewStars: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 10,
+    marginBottom: 16,
+  },
+  ratingCardButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: t.primary,
+    paddingVertical: 14,
+    borderRadius: 14,
+    gap: 8,
+  },
+  ratingCardButtonSecondary: {
+    backgroundColor: 'transparent',
+    borderWidth: 2,
+    borderColor: t.primary,
+  },
+  ratingCardButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  ratingCardButtonTextSecondary: {
+    color: t.primary,
   },
 });

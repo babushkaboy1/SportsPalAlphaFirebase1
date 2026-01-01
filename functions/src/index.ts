@@ -162,13 +162,13 @@ async function sendNotificationToUser(
     }
   }
 
-  // Send to FCM tokens (Android)
+  // Priority: Use FCM for Android when available (prevents duplicate notifications)
+  // Only fall back to Expo if no FCM tokens exist
   if (fcmTokens.length > 0) {
+    // Android devices with FCM - send only via FCM
     await sendFcmNotifications(fcmTokens, title, body, stringData);
-  }
-
-  // Send to Expo tokens (iOS and fallback)
-  if (expoTokens.length > 0) {
+  } else if (expoTokens.length > 0) {
+    // iOS devices or Android fallback without FCM
     const messages: ExpoPushMessage[] = expoTokens.map((to) => ({
       to,
       title,
@@ -395,7 +395,6 @@ export const handleDeepLink = onRequest(async (request, response) => {
  */
 export const getAppleWalletPass = onRequest({ 
   timeoutSeconds: 20,
-  secrets: ["APPLE_TEAM_ID", "APPLE_PASS_TYPE_ID", "APPLE_P12_PASSWORD", "APPLE_P12_PATH"]
 }, async (req, res) => {
   try {
     if (req.method !== 'GET') {
@@ -454,9 +453,10 @@ export const getAppleWalletPass = onRequest({
       ? userData.sports
       : Array.isArray(userData.selectedSports)
         ? userData.selectedSports
-        : [];
+        : Array.isArray(userData.sportsPreferences)
+          ? userData.sportsPreferences
+          : [];
     const sportsEmojis = getSportEmojis(sportsArray);
-    const sportsValue = sportsArray.length ? sportsArray.slice(0, 3).join(', ') : 'Active Athlete';
     const createdAt = userData.createdAt?.toDate ? userData.createdAt.toDate() : (userData.createdAt?._seconds ? new Date(userData.createdAt._seconds * 1000) : null);
     const memberSinceYear = createdAt ? String(createdAt.getFullYear()) : '2025';
     const memberSinceFormatted = createdAt 
@@ -472,11 +472,51 @@ export const getAppleWalletPass = onRequest({
       } catch { /* ignore */ }
     }
 
+    // Emoji mapping - matches CalendarScreen exactly
+    const sportEmojiMap: Record<string, string> = {
+      'American Football': '🏈',
+      'Badminton': '🏸',
+      'Baseball': '⚾',
+      'Basketball': '🏀',
+      'Boxing': '🥊',
+      'Calisthenics': '💪',
+      'Cricket': '🏏',
+      'Cycling': '🚴',
+      'Field Hockey': '🏑',
+      'Golf': '⛳',
+      'Gym': '🏋️',
+      'Hiking': '🥾',
+      'Ice Hockey': '🏒',
+      'Martial Arts': '🥋',
+      'Padel': '🎾',
+      'Running': '🏃',
+      'Soccer': '⚽',
+      'Swimming': '🏊',
+      'Table Tennis': '🏓',
+      'Tennis': '🎾',
+      'Volleyball': '🏐',
+      'Yoga': '🧘',
+    };
+
+    // Get sport emoji with case-insensitive matching
+    const getSportEmoji = (sport: string): string => {
+      // Try exact match first
+      if (sportEmojiMap[sport]) return sportEmojiMap[sport];
+      // Try case-insensitive match
+      const normalizedSport = sport.toLowerCase().trim();
+      for (const [key, emoji] of Object.entries(sportEmojiMap)) {
+        if (key.toLowerCase() === normalizedSport) return emoji;
+      }
+      return '⚽'; // Default fallback
+    };
+
+    // Format ALL sports with emojis (no limit)
+    const sportsWithEmojis = sportsArray.length 
+      ? sportsArray.map(getSportEmoji).join(' ')
+      : '🏃';
+
     // Format sports list nicely (capitalize first letter)
     const formatSport = (sport: string) => sport.charAt(0).toUpperCase() + sport.slice(1).toLowerCase();
-    const sportsFormatted = sportsArray.length 
-      ? sportsArray.slice(0, 3).map(formatSport).join(' • ')
-      : 'Active Athlete';
 
     // Extract cert and key from P12 using node-forge
     const p12Buffer = fs.readFileSync(resolvedP12Path);
@@ -515,7 +555,13 @@ export const getAppleWalletPass = onRequest({
     const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : PASS_ICON;
     const iconBuffer = fs.existsSync(iconPath) ? fs.readFileSync(iconPath) : PASS_ICON;
 
+    // Profile URL for QR code
+    const profileUrl = `https://sportspal-1b468.web.app/profile/${userId}`;
+
     // Build the pass.json content - Premium SportsPal Pass
+    // Note: logoText appears next to the logo in turquoise (foregroundColor)
+    // Thumbnail (profile pic) appears on left side beneath logo
+    // Primary field (username) appears on the right
     const passJson = {
       formatVersion: 1,
       passTypeIdentifier: passTypeId,
@@ -524,33 +570,34 @@ export const getAppleWalletPass = onRequest({
       organizationName: 'SportsPal',
       description: 'SportsPal Member Pass',
       backgroundColor: 'rgb(18,18,18)', // Dark theme background #121212
-      foregroundColor: 'rgb(26,233,239)', // Primary cyan #1ae9ef
-      labelColor: 'rgb(160,160,160)', // Subtle gray for labels
-      logoText: 'SportsPal',
+      foregroundColor: 'rgb(26,233,239)', // Primary cyan #1ae9ef - applies to logoText and values
+      labelColor: 'rgb(136,136,136)', // Gray for labels
+      logoText: 'SportsPal', // Turquoise text next to logo (same styling as other values)
       generic: {
-        headerFields: [
-          { key: 'memberSince', label: 'MEMBER SINCE', value: memberSinceFormatted },
-        ],
         primaryFields: [
-          { key: 'username', label: '', value: username },
+          { key: 'username', label: 'MEMBER', value: username },
         ],
         secondaryFields: [
-          { key: 'sports', label: 'SPORTS', value: sportsFormatted },
+          { key: 'memberId', label: 'MEMBER ID', value: userId.slice(0, 12) + '...' },
         ],
-        auxiliaryFields: birthdayDisplay ? [
-          { key: 'birthday', label: 'BIRTHDAY', value: birthdayDisplay },
-        ] : [],
+        auxiliaryFields: [
+          { key: 'sports', label: 'SPORTS', value: sportsWithEmojis },
+          { key: 'memberSince', label: 'SINCE', value: memberSinceYear },
+        ],
         backFields: [
-          { key: 'uid', label: 'Member ID', value: userId },
+          { key: 'fullMemberId', label: 'Full Member ID', value: userId },
+          { key: 'profileLink', label: 'Profile Link', value: profileUrl },
+          { key: 'allSports', label: 'Favourite Sports', value: sportsArray.length ? sportsArray.map(formatSport).join(', ') : 'None selected' },
+          ...(birthdayDisplay ? [{ key: 'birthday', label: 'Birthday', value: birthdayDisplay }] : []),
           { key: 'appInfo', label: 'About SportsPal', value: 'Find sports partners, join activities, and stay active with your community!' },
-          { key: 'website', label: 'Website', value: 'sportspal.app' },
+          { key: 'website', label: 'Website', value: 'https://sportspal-1b468.web.app' },
           { key: 'support', label: 'Support', value: 'support@sportspal.app' },
         ],
       },
       barcodes: [
         {
           format: 'PKBarcodeFormatQR',
-          message: `https://sportspal.app/profile/${userId}`,
+          message: profileUrl,
           messageEncoding: 'iso-8859-1',
           altText: `@${username}`,
         },
@@ -658,27 +705,72 @@ export const getGoogleWalletPassUrl = onRequest({
       return;
     }
 
+    // Extract user data
     const username = userData.username || userData.username_lower || 'Member';
+    const displayName = userData.displayName || userData.name || username;
+    
+    // Get favorite sports
     const sportsArray: string[] = Array.isArray(userData.sports)
       ? userData.sports
       : Array.isArray(userData.selectedSports)
         ? userData.selectedSports
-        : [];
+        : Array.isArray(userData.sportsPreferences)
+          ? userData.sportsPreferences
+          : [];
     
-    // Format sports list nicely (capitalize first letter)
-    const formatSport = (sport: string) => sport.charAt(0).toUpperCase() + sport.slice(1).toLowerCase();
-    const sportsFormatted = sportsArray.length 
-      ? sportsArray.slice(0, 4).map(formatSport).join(' • ')
-      : 'Active Athlete';
+    // Emoji mapping - matches Apple Wallet pass exactly
+    const sportEmojiMap: Record<string, string> = {
+      'American Football': '🏈',
+      'Badminton': '🏸',
+      'Baseball': '⚾',
+      'Basketball': '🏀',
+      'Boxing': '🥊',
+      'Calisthenics': '💪',
+      'Cricket': '🏏',
+      'Cycling': '🚴',
+      'Field Hockey': '🏑',
+      'Golf': '⛳',
+      'Gym': '🏋️',
+      'Hiking': '🥾',
+      'Ice Hockey': '🏒',
+      'Martial Arts': '🥋',
+      'Padel': '🎾',
+      'Running': '🏃',
+      'Soccer': '⚽',
+      'Swimming': '🏊',
+      'Table Tennis': '🏓',
+      'Tennis': '🎾',
+      'Volleyball': '🏐',
+      'Yoga': '🧘',
+    };
+
+    // Get sport emoji with case-insensitive matching
+    const getSportEmoji = (sport: string): string => {
+      // Try exact match first
+      if (sportEmojiMap[sport]) return sportEmojiMap[sport];
+      // Try case-insensitive match
+      const normalizedSport = sport.toLowerCase().trim();
+      for (const [key, emoji] of Object.entries(sportEmojiMap)) {
+        if (key.toLowerCase() === normalizedSport) return emoji;
+      }
+      return '🏆'; // Default fallback
+    };
+
+    // Format sports as emojis only (like Apple Wallet pass)
+    const sportsEmojisOnly = sportsArray.length 
+      ? sportsArray.map(getSportEmoji).join(' ')
+      : '🏃';
     
+    // Member since date
     const createdAt = userData.createdAt?.toDate 
       ? userData.createdAt.toDate() 
       : (userData.createdAt?._seconds ? new Date(userData.createdAt._seconds * 1000) : null);
+    const memberSinceYear = createdAt ? String(createdAt.getFullYear()) : '2025';
     const memberSinceFormatted = createdAt 
       ? createdAt.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
-      : 'SportsPal Member';
-    
-    // Parse birthday if available
+      : 'Charter Member';
+
+    // Parse birthday if available (like Apple Wallet pass)
     let birthdayDisplay = '';
     if (userData.birthday) {
       try {
@@ -686,45 +778,67 @@ export const getGoogleWalletPassUrl = onRequest({
         birthdayDisplay = bday.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
       } catch { /* ignore */ }
     }
-
-    // Get profile photo URL for header image
+    
+    // Get profile photo URL
     const photoUrl = userData.photo || userData.photoURL || '';
+    
+    // Deep link URL for QR code - goes to actual profile
+    const profileDeepLink = `https://sportspal-1b468.web.app/profile/${userId}`;
 
-    // Create a unique object ID for this pass
-    const objectId = `${issuerId}.sportspal-${userId}`;
+    // Create a unique object ID for this pass (versioned for updates)
+    const objectId = `${issuerId}.sportspal-member-${userId}`;
 
-    // Build text modules for the pass
+    // Build info rows for the pass (key details) - includes full UID like Apple pass
+    const infoModuleData = {
+      labelValueRows: [
+        {
+          columns: [
+            {
+              label: 'USERNAME',
+              value: `@${username}`,
+            },
+            {
+              label: 'SINCE',
+              value: memberSinceYear,
+            },
+          ],
+        },
+        {
+          columns: [
+            {
+              label: 'MEMBER ID',
+              value: userId,
+            },
+          ],
+        },
+        ...(birthdayDisplay ? [{
+          columns: [
+            {
+              label: 'BIRTHDAY',
+              value: birthdayDisplay,
+            },
+          ],
+        }] : []),
+      ],
+      showLastUpdateTime: true,
+    };
+
+    // Build text modules for sports (emojis only like Apple pass)
     const textModulesData = [
       {
         id: 'sports',
-        header: 'SPORTS',
-        body: sportsFormatted,
+        header: 'FAVORITE SPORTS',
+        body: sportsEmojisOnly,
       },
     ];
-    
-    // Add birthday if available
-    if (birthdayDisplay) {
-      textModulesData.push({
-        id: 'birthday',
-        header: 'BIRTHDAY',
-        body: birthdayDisplay,
-      });
-    }
-    
-    // Add Member ID
-    textModulesData.push({
-      id: 'memberId',
-      header: 'MEMBER ID',
-      body: userId.slice(0, 12) + '...',
-    });
 
-    // Build the Generic Pass object - Premium Design
+    // Build the Generic Pass object - Premium SportsPal Design
     // See: https://developers.google.com/wallet/generic/rest/v1/genericobject
-    const genericObject = {
+    const genericObject: any = {
       id: objectId,
-      classId: `${issuerId}.sportspal-pass`,
+      classId: `${issuerId}.sportspal-member-v2`,
       genericType: 'GENERIC_TYPE_UNSPECIFIED',
-      hexBackgroundColor: '#121212', // Dark theme
+      hexBackgroundColor: '#0D1117', // Dark premium theme
       logo: {
         sourceUri: {
           uri: 'https://sportspal-1b468.web.app/logo.png',
@@ -732,7 +846,7 @@ export const getGoogleWalletPassUrl = onRequest({
         contentDescription: {
           defaultValue: {
             language: 'en',
-            value: 'SportsPal',
+            value: 'SportsPal Logo',
           },
         },
       },
@@ -745,59 +859,79 @@ export const getGoogleWalletPassUrl = onRequest({
       subheader: {
         defaultValue: {
           language: 'en',
-          value: `Member since ${memberSinceFormatted}`,
+          value: 'MEMBER PASS',
         },
       },
       header: {
         defaultValue: {
           language: 'en',
-          value: username,
+          value: displayName,
         },
       },
       textModulesData,
+      infoModuleData,
       linksModuleData: {
         uris: [
           {
-            uri: 'https://sportspal.app',
-            description: 'Visit SportsPal',
-            id: 'website',
+            uri: profileDeepLink,
+            description: 'Open Profile in App',
+            id: 'profile',
           },
           {
-            uri: `https://sportspal.app/profile/${userId}`,
-            description: 'View Profile',
-            id: 'profile',
+            uri: 'https://sportspal.app',
+            description: 'SportsPal Website',
+            id: 'website',
           },
         ],
       },
       barcode: {
         type: 'QR_CODE',
-        value: `https://sportspal.app/profile/${userId}`,
+        value: profileDeepLink,
         alternateText: `@${username}`,
       },
-      heroImage: photoUrl ? {
+    };
+    
+    // Add hero image if profile photo exists
+    if (photoUrl) {
+      genericObject.heroImage = {
         sourceUri: {
           uri: photoUrl,
         },
         contentDescription: {
           defaultValue: {
             language: 'en',
-            value: `${username}'s profile`,
+            value: `${displayName}'s Profile Photo`,
           },
         },
-      } : undefined,
-    };
-
-    // Remove undefined heroImage if no photo
-    if (!photoUrl) {
-      delete genericObject.heroImage;
+      };
     }
 
-    // Define the Generic Pass Class (will be created if it doesn't exist)
-    const classId = `${issuerId}.sportspal-pass`;
+    // Define the Generic Pass Class (production ready)
+    const classId = `${issuerId}.sportspal-member-v2`;
     const genericClass = {
       id: classId,
       issuerName: 'SportsPal',
-      reviewStatus: 'DRAFT',  // Use DRAFT for testing, change to UNDER_REVIEW for production
+      reviewStatus: 'UNDER_REVIEW',  // Production mode
+      classTemplateInfo: {
+        cardTemplateOverride: {
+          cardRowTemplateInfos: [
+            {
+              twoItems: {
+                startItem: {
+                  firstValue: {
+                    fields: [{ fieldPath: "object.textModulesData['sports']" }],
+                  },
+                },
+                endItem: {
+                  firstValue: {
+                    fields: [{ fieldPath: "object.infoModuleData.labelValueRows[0].columns[0]" }],
+                  },
+                },
+              },
+            },
+          ],
+        },
+      },
     };
 
     // Build JWT claims

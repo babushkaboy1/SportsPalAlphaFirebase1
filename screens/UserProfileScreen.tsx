@@ -16,11 +16,13 @@ function HostUsername({ activity }: { activity: any }) {
   return <Text style={{ fontSize: 14, color: theme.muted, fontWeight: '500' }}>{username}</Text>;
 }
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, FlatList, Animated, RefreshControl, Alert, Modal, Pressable, TextInput, Clipboard, Keyboard, Linking, ActivityIndicator, PanResponder } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList, Animated, RefreshControl, Alert, Modal, Pressable, TextInput, Clipboard, Keyboard, Linking, ActivityIndicator, PanResponder, ScrollView } from 'react-native';
+import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { doc, getDoc, onSnapshot, collection, query as fsQuery, where, getDocs } from 'firebase/firestore';
 import { db, auth } from '../firebaseConfig';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -133,10 +135,45 @@ const UserProfileScreen = () => {
   const [theyListMe, setTheyListMe] = useState(false);
   const [favModalVisible, setFavModalVisible] = useState(false);
   const [connectionsModalVisible, setConnectionsModalVisible] = useState(false);
+  const [activitiesModalVisible, setActivitiesModalVisible] = useState(false);
   const [userFriendProfiles, setUserFriendProfiles] = useState<Array<{ uid: string; username: string; photo?: string }>>([]);
   const [menuVisible, setMenuVisible] = useState(false);
   const [imageViewerVisible, setImageViewerVisible] = useState(false);
   const [isBlocked, setIsBlocked] = useState(false);
+
+  // Activities breakdown by sport for this user
+  const activitiesBreakdown = React.useMemo(() => {
+    const breakdown: Record<string, { total: number; upcoming: number; past: number }> = {};
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+
+    userJoinedActivities.forEach((activity) => {
+      const sport = activity.activity || 'Unknown';
+      if (!breakdown[sport]) {
+        breakdown[sport] = { total: 0, upcoming: 0, past: 0 };
+      }
+      breakdown[sport].total++;
+
+      // Check if upcoming or past
+      try {
+        const [dd, mm, yyyy] = (activity.date || '').split('-');
+        const activityDate = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+        activityDate.setHours(0, 0, 0, 0);
+        if (activityDate >= now) {
+          breakdown[sport].upcoming++;
+        } else {
+          breakdown[sport].past++;
+        }
+      } catch {
+        breakdown[sport].past++;
+      }
+    });
+
+    // Convert to sorted array
+    return Object.entries(breakdown)
+      .map(([sport, counts]) => ({ sport, ...counts }))
+      .sort((a, b) => b.total - a.total);
+  }, [userJoinedActivities]);
 
   useEffect(() => {
     const fetchProfile = async () => {
@@ -678,130 +715,111 @@ const UserProfileScreen = () => {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <Animated.View style={{ flex: 1, opacity: fadeAnim, backgroundColor: theme.background }}>
-        <View style={styles.headerRow}>
-          <View style={styles.headerLeft}>
-            <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-              <Ionicons name="arrow-back" size={28} color={theme.primary} />
-            </TouchableOpacity>
-            <Text style={styles.profileNameHeader} numberOfLines={1}>
-              {profile?.username || 'Username'}
-            </Text>
-          </View>
-          <TouchableOpacity style={styles.settingsButton} onPress={() => setMenuVisible(true)}>
-            <Ionicons name="ellipsis-horizontal" size={28} color={theme.primary} />
+        {/* ===== COMPACT PROFILE HEADER ===== */}
+        {/* Username Header Row with Back + Menu */}
+        <View style={styles.usernameHeaderRow}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backIconBtn}>
+            <Ionicons name="arrow-back" size={24} color={theme.primary} />
+          </TouchableOpacity>
+          <Text style={styles.usernameTitle} numberOfLines={1}>
+            {profile?.username || 'Username'}
+          </Text>
+          <TouchableOpacity style={styles.menuIconBtn} onPress={() => setMenuVisible(true)}>
+            <Ionicons name="ellipsis-vertical" size={22} color={theme.primary} />
           </TouchableOpacity>
         </View>
-        {/* Profile hero area: match Profile page spacing and size */}
-        <View style={styles.profileInfo}>
-          <View style={styles.profileLeftColumn}>
-            <TouchableOpacity 
-              activeOpacity={0.8} 
-              onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                setImageViewerVisible(true);
-              }}
-            >
+
+        {/* Profile Info Row: Avatar + Stats */}
+        <View style={styles.profileCompactRow}>
+          {/* Left: Avatar */}
+          <TouchableOpacity 
+            activeOpacity={0.85} 
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              setImageViewerVisible(true);
+            }}
+          >
+            <View style={[styles.avatarRingCompact, styles.avatarShadow]}>
               <UserAvatar
                 photoUrl={profile?.photo}
                 username={profile?.username}
-                size={100}
-                style={styles.profileImage}
+                size={80}
+                style={styles.profileAvatarCompact}
               />
-            </TouchableOpacity>
-          </View>
-          {/* Stats next to avatar */}
-          <View style={styles.statsColumn}>
-            <View style={styles.statsRow}>
-              <TouchableOpacity style={styles.statBlock} activeOpacity={0.8} onPress={() => setConnectionsModalVisible(true)}>
-                <View style={styles.statNumberWrap}><Text style={styles.statNumber}>{profile?.friends?.length || 0}</Text></View>
-                <Text style={styles.statLabel}>Connections</Text>
-                <Text style={[styles.statLabel, { opacity: 0 }]}>_</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.statBlock} activeOpacity={0.8} onPress={() => setFavModalVisible(true)}>
-                <View style={styles.statNumberWrap}><Text style={styles.statNumber}>{(profile?.sportsPreferences || profile?.selectedSports || []).length}</Text></View>
-                <Text style={styles.statLabel}>Favourite{((profile?.sportsPreferences || profile?.selectedSports || []).length === 1) ? '' : 's'}</Text>
-                <Text style={[styles.statLabel, { marginTop: -2 }]}>Sports</Text>
-              </TouchableOpacity>
-              <View style={styles.statBlock}>
-                <View style={styles.statNumberWrap}><Text style={styles.statNumber}>{userJoinedActivities.length}</Text></View>
-                <Text style={styles.statLabel}>Joined</Text>
-                <Text style={[styles.statLabel, { marginTop: -2 }]}>Activities</Text>
-              </View>
             </View>
+          </TouchableOpacity>
+
+          {/* Right: Stats */}
+          <View style={styles.statsCompactContainer}>
+            <TouchableOpacity style={styles.statCompactItem} activeOpacity={0.7} onPress={() => setConnectionsModalVisible(true)}>
+              <Text style={styles.statCompactValue}>{profile?.friends?.length || 0}</Text>
+              <Text style={styles.statCompactLabel}>Connections</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.statCompactItem} activeOpacity={0.7} onPress={() => setFavModalVisible(true)}>
+              <Text style={styles.statCompactValue}>{(profile?.sportsPreferences || profile?.selectedSports || []).length}</Text>
+              <Text style={styles.statCompactLabel}>Sports</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.statCompactItem} activeOpacity={0.7} onPress={() => setActivitiesModalVisible(true)}>
+              <Text style={styles.statCompactValue}>{userJoinedActivities.length}</Text>
+              <Text style={styles.statCompactLabel}>Activities</Text>
+            </TouchableOpacity>
           </View>
         </View>
 
-        {/* Bio and Social Media Row - Above Action Buttons */}
+        {/* Bio + Social Row */}
         {(profile?.bio || profile?.socials?.instagram || profile?.socials?.facebook) ? (
-          <View style={styles.bioSocialRow}>
-            {/* Bio Section - Left Side (to center) */}
-            <View style={styles.bioSectionHorizontal}>
-              {profile?.bio ? (
-                <Text style={styles.bioText} numberOfLines={2} ellipsizeMode="tail">
-                  {profile.bio}
-                </Text>
-              ) : null}
-            </View>
-
-            {/* Social Media Icons - Right Side (from center) */}
+          <View style={styles.bioSocialCompactRow}>
+            {profile?.bio ? (
+              <Text style={styles.bioCompactText}>
+                {profile.bio}
+              </Text>
+            ) : null}
             {(profile?.socials?.instagram || profile?.socials?.facebook) ? (
-              <View style={styles.socialSectionHorizontal}>
+              <View style={styles.socialCompactRow}>
                 {profile.socials.instagram ? (
                   <TouchableOpacity 
-                    style={styles.socialIconButton} 
                     onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                       const value = profile.socials.instagram;
                       const isLink = value.startsWith('http://') || value.startsWith('https://');
-                      
                       if (isLink) {
-                        Linking.openURL(value).catch(() => {
-                          Alert.alert('Error', 'Could not open link');
-                        });
+                        Linking.openURL(value).catch(() => Alert.alert('Error', 'Could not open link'));
                       } else {
-                        Alert.alert(
-                          'Instagram',
-                          value,
-                          [
-                            { text: 'Copy', onPress: () => {
-                              Clipboard.setString(value);
-                              Alert.alert('Copied', 'Instagram handle copied to clipboard');
-                            }},
-                            { text: 'Cancel', style: 'cancel' }
-                          ]
-                        );
+                        Alert.alert('Instagram', value, [
+                          { text: 'Copy', onPress: () => { Clipboard.setString(value); Alert.alert('Copied', 'Instagram handle copied'); }},
+                          { text: 'Cancel', style: 'cancel' }
+                        ]);
                       }
                     }}
                   >
-                    <Ionicons name="logo-instagram" size={26} color={theme.primary} />
+                    <LinearGradient
+                      colors={['#F58529', '#DD2A7B', '#8134AF', '#515BD4']}
+                      start={{ x: 0, y: 1 }}
+                      end={{ x: 1, y: 0 }}
+                      style={styles.instagramGradientBtn}
+                    >
+                      <Ionicons name="logo-instagram" size={20} color="#fff" />
+                    </LinearGradient>
                   </TouchableOpacity>
                 ) : null}
                 {profile.socials.facebook ? (
                   <TouchableOpacity 
-                    style={styles.socialIconButton} 
+                    style={styles.facebookBtn}
                     onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                       const value = profile.socials.facebook;
                       const isLink = value.startsWith('http://') || value.startsWith('https://');
-                      
                       if (isLink) {
-                        Linking.openURL(value).catch(() => {
-                          Alert.alert('Error', 'Could not open link');
-                        });
+                        Linking.openURL(value).catch(() => Alert.alert('Error', 'Could not open link'));
                       } else {
-                        Alert.alert(
-                          'Facebook',
-                          value,
-                          [
-                            { text: 'Copy', onPress: () => {
-                              Clipboard.setString(value);
-                              Alert.alert('Copied', 'Facebook handle copied to clipboard');
-                            }},
-                            { text: 'Cancel', style: 'cancel' }
-                          ]
-                        );
+                        Alert.alert('Facebook', value, [
+                          { text: 'Copy', onPress: () => { Clipboard.setString(value); Alert.alert('Copied', 'Facebook handle copied'); }},
+                          { text: 'Cancel', style: 'cancel' }
+                        ]);
                       }
                     }}
                   >
-                    <Ionicons name="logo-facebook" size={26} color={theme.primary} />
+                    <Ionicons name="logo-facebook" size={20} color="#fff" />
                   </TouchableOpacity>
                 ) : null}
               </View>
@@ -809,13 +827,13 @@ const UserProfileScreen = () => {
           </View>
         ) : null}
 
-        {/* Actions row identical to own Profile: center-aligned, same sizes/spacings as Edit Profile & Share Profile */}
+        {/* Action Buttons */}
         {!isSelf && (
-          <View style={styles.profileActionsRow}>
+          <View style={styles.actionCompactRow}>
             {incomingRequest ? (
               <>
                 <TouchableOpacity
-                  style={[styles.profileActionButton, styles.profileActionButtonInverted]}
+                  style={styles.actionCompactBtnPrimary}
                   onPress={async () => {
                     try {
                       await acceptIncomingRequestFromProfile(userId);
@@ -826,11 +844,11 @@ const UserProfileScreen = () => {
                   }}
                   activeOpacity={0.85}
                 >
-                  <Ionicons name="checkmark-done-outline" size={18} color={'#fff'} style={{ marginRight: 6 }} />
-                  <Text style={[styles.profileActionText, styles.profileActionTextInverted]}>Accept</Text>
+                  <Ionicons name="checkmark-done" size={16} color="#fff" />
+                  <Text style={styles.actionCompactBtnPrimaryText}>Accept</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={styles.profileActionButton}
+                  style={styles.actionCompactBtnSecondary}
                   onPress={async () => {
                     try {
                       await declineIncomingRequestFromProfile(userId);
@@ -840,36 +858,32 @@ const UserProfileScreen = () => {
                   }}
                   activeOpacity={0.85}
                 >
-                  <Ionicons name="close-outline" size={18} color={theme.primary} style={{ marginRight: 4 }} />
-                  <Text style={styles.profileActionText}>Delete</Text>
+                  <Ionicons name="close" size={16} color={theme.primary} />
+                  <Text style={styles.actionCompactBtnSecondaryText}>Decline</Text>
                 </TouchableOpacity>
               </>
             ) : (
               <TouchableOpacity
                 style={[
-                  styles.profileActionButton,
-                  (requestSent || isFriend) && styles.profileActionButtonInverted,
+                  (requestSent || isFriend) ? styles.actionCompactBtnPrimary : styles.actionCompactBtnSecondary,
                 ]}
                 onPress={handleAddFriend}
-                disabled={false}
                 activeOpacity={0.85}
               >
                 <Ionicons
-                  name={isFriend ? 'checkmark-done-outline' : 'person-add-outline'}
-                  size={18}
+                  name={isFriend ? 'checkmark-done' : 'person-add'}
+                  size={16}
                   color={(requestSent || isFriend) ? '#fff' : theme.primary}
-                  style={{ marginRight: 4 }}
                 />
-                <Text style={[styles.profileActionText, (requestSent || isFriend) && styles.profileActionTextInverted]}>
-                  {isFriend ? 'Connected' : (requestSent ? 'Request Sent' : 'Add Friend')}
+                <Text style={(requestSent || isFriend) ? styles.actionCompactBtnPrimaryText : styles.actionCompactBtnSecondaryText}>
+                  {isFriend ? 'Connected' : (requestSent ? 'Pending' : 'Connect')}
                 </Text>
               </TouchableOpacity>
             )}
             <TouchableOpacity
-              style={styles.profileActionButton}
+              style={styles.actionCompactBtnSecondary}
               onPress={async () => {
                 try {
-                  // Open or create a DM regardless of connection status
                   const chatId = await ensureDmChat(userId);
                   navigation.navigate('ChatDetail', { chatId });
                 } catch (e) {
@@ -877,8 +891,14 @@ const UserProfileScreen = () => {
                 }
               }}
             >
-              <Ionicons name="chatbubble-ellipses-outline" size={18} color={theme.primary} style={{ marginRight: 4 }} />
-              <Text style={styles.profileActionText}>Message</Text>
+              <Ionicons name="chatbubble" size={16} color={theme.primary} />
+              <Text style={styles.actionCompactBtnSecondaryText}>Message</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={styles.actionCompactBtnIcon} 
+              onPress={handleShareProfile}
+            >
+              <Ionicons name="share-outline" size={18} color={theme.primary} />
             </TouchableOpacity>
           </View>
         )}
@@ -912,14 +932,24 @@ const UserProfileScreen = () => {
               {...backSwipeResponder.panHandlers}
             >
               <View style={{ flex: 1 }}>
-                <TouchableOpacity activeOpacity={1} onPress={() => Keyboard.dismiss()}>
-                  <Text style={styles.tabTitleCentered}>Scheduled Activities</Text>
-                </TouchableOpacity>
-                <View style={styles.userSearchRow}>
-                  <Ionicons name="search" size={16} color={theme.primary} style={{ marginRight: 8 }} />
+                <View style={styles.tabHeaderRow}>
+                  <View style={styles.tabIconWrap}>
+                    <Ionicons name="calendar" size={18} color={theme.primary} />
+                  </View>
+                  <Text style={styles.tabTitleStyled}>Upcoming</Text>
+                  {filteredUpcoming.length > 0 && (
+                    <View style={styles.tabBadge}>
+                      <Text style={styles.tabBadgeText}>{filteredUpcoming.length}</Text>
+                    </View>
+                  )}
+                </View>
+                <View style={styles.styledSearchBar}>
+                  <View style={styles.searchIconWrap}>
+                    <Ionicons name="search" size={18} color={theme.primary} />
+                  </View>
                   <TextInput
-                    style={[styles.searchInput, { flex: 1 }]}
-                    placeholder="Search activity or host..."
+                    style={styles.styledSearchInput}
+                    placeholder="Search activities..."
                     placeholderTextColor={theme.muted}
                     value={scheduledSearchQuery}
                     onChangeText={setScheduledSearchQuery}
@@ -928,8 +958,8 @@ const UserProfileScreen = () => {
                     autoCorrect={false}
                   />
                   {scheduledSearchQuery.trim().length > 0 && (
-                    <TouchableOpacity style={styles.clearButton} onPress={() => setScheduledSearchQuery('')}>
-                      <Ionicons name="close-circle" size={18} color={theme.primary} />
+                    <TouchableOpacity style={styles.styledClearBtn} onPress={() => setScheduledSearchQuery('')}>
+                      <Ionicons name="close-circle" size={20} color={theme.muted} />
                     </TouchableOpacity>
                   )}
                 </View>
@@ -969,14 +999,24 @@ const UserProfileScreen = () => {
             </View>
             <View key="history" style={styles.pagerPage}>
               <View style={{ flex: 1 }}>
-                <TouchableOpacity activeOpacity={1} onPress={() => Keyboard.dismiss()}>
-                  <Text style={styles.tabTitleCentered}>Activity History</Text>
-                </TouchableOpacity>
-                <View style={styles.userSearchRow}>
-                  <Ionicons name="search" size={16} color={theme.primary} style={{ marginRight: 8 }} />
+                <View style={styles.tabHeaderRow}>
+                  <View style={styles.tabIconWrap}>
+                    <Ionicons name="time" size={18} color={theme.primary} />
+                  </View>
+                  <Text style={styles.tabTitleStyled}>History</Text>
+                  {filteredHistory.length > 0 && (
+                    <View style={styles.tabBadge}>
+                      <Text style={styles.tabBadgeText}>{filteredHistory.length}</Text>
+                    </View>
+                  )}
+                </View>
+                <View style={styles.styledSearchBar}>
+                  <View style={styles.searchIconWrap}>
+                    <Ionicons name="search" size={18} color={theme.primary} />
+                  </View>
                   <TextInput
-                    style={[styles.searchInput, { flex: 1 }]}
-                    placeholder="Search activity or host..."
+                    style={styles.styledSearchInput}
+                    placeholder="Search past activities..."
                     placeholderTextColor={theme.muted}
                     value={historySearchQuery}
                     onChangeText={setHistorySearchQuery}
@@ -985,8 +1025,8 @@ const UserProfileScreen = () => {
                     autoCorrect={false}
                   />
                   {historySearchQuery.trim().length > 0 && (
-                    <TouchableOpacity style={styles.clearButton} onPress={() => setHistorySearchQuery('')}>
-                      <Ionicons name="close-circle" size={18} color={theme.primary} />
+                    <TouchableOpacity style={styles.styledClearBtn} onPress={() => setHistorySearchQuery('')}>
+                      <Ionicons name="close-circle" size={20} color={theme.muted} />
                     </TouchableOpacity>
                   )}
                 </View>
@@ -1025,33 +1065,64 @@ const UserProfileScreen = () => {
         transparent
         onRequestClose={() => setFavModalVisible(false)}
       >
-        <Pressable style={styles.modalOverlay} onPress={() => setFavModalVisible(false)}>
-          <Pressable style={styles.modalCard} onPress={() => {}}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={{ color: theme.primary, fontWeight: 'bold', fontSize: 18 }}>Favourite Sports</Text>
+        <View style={styles.modalOverlay}>
+          <Pressable
+            style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }}
+            onPress={() => setFavModalVisible(false)}
+          />
+          <View style={[styles.modalCard, { maxHeight: '70%' }]}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <View>
+                <Text style={{ color: theme.primary, fontWeight: 'bold', fontSize: 18 }}>Favourite Sports</Text>
+                <Text style={{ color: theme.muted, fontSize: 13, marginTop: 2 }}>
+                  {((profile?.sportsPreferences || profile?.selectedSports || []) as string[]).length} sport{((profile?.sportsPreferences || profile?.selectedSports || []) as string[]).length === 1 ? '' : 's'} selected
+                </Text>
+              </View>
               <TouchableOpacity onPress={() => setFavModalVisible(false)} style={{ backgroundColor: theme.danger, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 }}>
                 <Text style={{ color: '#fff', fontWeight: '700' }}>Close</Text>
               </TouchableOpacity>
             </View>
-            <View style={{ height: 10 }} />
             {((profile?.sportsPreferences || profile?.selectedSports || []) as string[]).length === 0 ? (
-              <Text style={{ color: theme.muted }}>No favourites yet.</Text>
+              <View style={{ alignItems: 'center', paddingVertical: 30 }}>
+                <Ionicons name="heart-outline" size={48} color={theme.muted} />
+                <Text style={{ color: theme.muted, marginTop: 12, textAlign: 'center' }}>No favourite sports yet.</Text>
+              </View>
             ) : (
-              <FlatList
-                data={[...(((profile?.sportsPreferences || profile?.selectedSports || []) as string[]))].sort((a, b) => a.localeCompare(b))}
-                keyExtractor={(s, i) => s + i}
-                ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
-                renderItem={({ item }) => (
-                  <View style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }}>
-                    <ActivityIcon activity={item} size={22} color={theme.primary} />
-                    <Text style={{ color: theme.text, marginLeft: 10, fontWeight: '600' }}>{item}</Text>
+              <ScrollView
+                style={{ maxHeight: 400 }}
+                contentContainerStyle={{ paddingBottom: 12 }}
+                showsVerticalScrollIndicator={true}
+              >
+                {[...(((profile?.sportsPreferences || profile?.selectedSports || []) as string[]))].sort((a, b) => a.localeCompare(b)).map((item, index) => (
+                  <View key={item + index} style={{ 
+                    flexDirection: 'row', 
+                    alignItems: 'center', 
+                    backgroundColor: theme.card,
+                    padding: 14,
+                    borderRadius: 14,
+                    borderLeftWidth: 4,
+                    borderLeftColor: theme.primary,
+                    marginBottom: 10,
+                  }}>
+                    <View style={{
+                      width: 44,
+                      height: 44,
+                      borderRadius: 22,
+                      backgroundColor: `${theme.primary}15`,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      marginRight: 12,
+                    }}>
+                      <ActivityIcon activity={item} size={26} color={theme.primary} />
+                    </View>
+                    <Text style={{ color: theme.text, fontWeight: '700', fontSize: 15, flex: 1 }}>{item}</Text>
+                    <Ionicons name="heart" size={20} color={theme.primary} />
                   </View>
-                )}
-                contentContainerStyle={{ paddingBottom: 16 }}
-              />
+                ))}
+              </ScrollView>
             )}
-          </Pressable>
-        </Pressable>
+          </View>
+        </View>
       </Modal>
 
       {/* Connections modal */}
@@ -1061,33 +1132,45 @@ const UserProfileScreen = () => {
         transparent
         onRequestClose={() => setConnectionsModalVisible(false)}
       >
-        <Pressable style={styles.modalOverlay} onPress={() => setConnectionsModalVisible(false)}>
-          <Pressable style={styles.modalCard} onPress={() => {}}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={{ color: theme.primary, fontWeight: 'bold', fontSize: 18 }}>Connections</Text>
+        <View style={styles.modalOverlay}>
+          <Pressable
+            style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }}
+            onPress={() => setConnectionsModalVisible(false)}
+          />
+          <View style={[styles.modalCard, { maxHeight: '70%' }]}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <View>
+                <Text style={{ color: theme.primary, fontWeight: 'bold', fontSize: 18 }}>Connections</Text>
+                <Text style={{ color: theme.muted, fontSize: 13, marginTop: 2 }}>
+                  {userFriendProfiles.length} connection{userFriendProfiles.length === 1 ? '' : 's'}
+                </Text>
+              </View>
               <TouchableOpacity onPress={() => setConnectionsModalVisible(false)} style={{ backgroundColor: theme.danger, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 }}>
                 <Text style={{ color: '#fff', fontWeight: '700' }}>Close</Text>
               </TouchableOpacity>
             </View>
-            <View style={{ height: 10 }} />
-            {userFriendProfiles.length > 0 ? (
-              <FlatList
-                data={userFriendProfiles.slice(0, displayedConnectionsCount)}
-                keyExtractor={(u) => u.uid}
-                ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
-                onEndReached={displayedConnectionsCount < userFriendProfiles.length ? handleLoadMoreConnections : null}
-                onEndReachedThreshold={0.5}
-                ListFooterComponent={
-                  isLoadingMoreConnections ? (
-                    <View style={{ paddingVertical: 20, alignItems: 'center' }}>
-                      <ActivityIndicator size="small" color={theme.primary} />
-                    </View>
-                  ) : null
-                }
-                contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 20) }}
-                renderItem={({ item }) => (
+            {userFriendProfiles.length === 0 ? (
+              <View style={{ alignItems: 'center', paddingVertical: 30 }}>
+                <Ionicons name="people-outline" size={48} color={theme.muted} />
+                <Text style={{ color: theme.muted, marginTop: 12, textAlign: 'center' }}>No connections yet.</Text>
+              </View>
+            ) : (
+              <ScrollView
+                style={{ maxHeight: 400 }}
+                contentContainerStyle={{ paddingBottom: 12 }}
+                showsVerticalScrollIndicator={true}
+              >
+                {userFriendProfiles.map((item) => (
                   <TouchableOpacity
-                    style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }}
+                    key={item.uid}
+                    style={{ 
+                      flexDirection: 'row', 
+                      alignItems: 'center', 
+                      backgroundColor: theme.card,
+                      padding: 12,
+                      borderRadius: 14,
+                      marginBottom: 10,
+                    }}
                     activeOpacity={0.8}
                     onPress={() => {
                       setConnectionsModalVisible(false);
@@ -1097,19 +1180,188 @@ const UserProfileScreen = () => {
                     <UserAvatar
                       photoUrl={item.photo}
                       username={item.username}
-                      size={36}
+                      size={44}
                       borderColor={theme.primary}
-                      borderWidth={1}
+                      borderWidth={2}
                     />
-                    <Text style={{ color: theme.text, marginLeft: 10, fontWeight: '600' }}>{item.username}</Text>
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <Text style={{ color: theme.text, fontWeight: '700', fontSize: 15 }}>{item.username}</Text>
+                      <Text style={{ color: theme.muted, fontSize: 12, marginTop: 2 }}>Tap to view profile</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={20} color={theme.muted} />
                   </TouchableOpacity>
-                )}
-              />
-            ) : (
-              <Text style={{ color: theme.muted }}>No connections yet.</Text>
+                ))}
+              </ScrollView>
             )}
-          </Pressable>
-        </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Activities Breakdown Modal */}
+      <Modal
+        visible={activitiesModalVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setActivitiesModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <Pressable
+            style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }}
+            onPress={() => setActivitiesModalVisible(false)}
+          />
+          <View style={[styles.modalCard, { maxHeight: '70%' }]}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <View>
+                <Text style={{ color: theme.primary, fontWeight: 'bold', fontSize: 18 }}>Activity Breakdown</Text>
+                <Text style={{ color: theme.muted, fontSize: 13, marginTop: 2 }}>
+                  {userJoinedActivities.length} total activit{userJoinedActivities.length === 1 ? 'y' : 'ies'} joined
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setActivitiesModalVisible(false)} style={{ backgroundColor: theme.danger, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 }}>
+                <Text style={{ color: '#fff', fontWeight: '700' }}>Close</Text>
+              </TouchableOpacity>
+            </View>
+            
+            {activitiesBreakdown.length === 0 ? (
+              <View style={{ alignItems: 'center', paddingVertical: 30 }}>
+                <Ionicons name="fitness-outline" size={48} color={theme.muted} />
+                <Text style={{ color: theme.muted, marginTop: 12, textAlign: 'center' }}>No activities joined yet.</Text>
+              </View>
+            ) : (
+              <ScrollView
+                style={{ maxHeight: 400 }}
+                contentContainerStyle={{ paddingBottom: 12 }}
+                showsVerticalScrollIndicator={true}
+              >
+                {activitiesBreakdown.map((item, index) => (
+                  <View key={item.sport} style={{ 
+                    flexDirection: 'row', 
+                    alignItems: 'center', 
+                    backgroundColor: theme.card,
+                    padding: 14,
+                    borderRadius: 14,
+                    borderLeftWidth: 4,
+                    borderLeftColor: index === 0 ? '#FFD700' : index === 1 ? '#C0C0C0' : index === 2 ? '#CD7F32' : theme.primary,
+                    marginBottom: 10,
+                  }}>
+                    {/* Rank Medal/Badge */}
+                    {index <= 2 ? (
+                      <View style={{ marginRight: 12, alignItems: 'center', width: 36, height: 46 }}>
+                        {/* Ribbon - positioned behind */}
+                        <View style={{ position: 'absolute', top: 0, flexDirection: 'row', zIndex: 0 }}>
+                          <View style={{
+                            width: 10,
+                            height: 20,
+                            backgroundColor: index === 0 ? '#DC143C' : index === 1 ? '#4169E1' : '#228B22',
+                            transform: [{ skewX: '-10deg' }],
+                            borderTopLeftRadius: 2,
+                          }} />
+                          <View style={{
+                            width: 10,
+                            height: 20,
+                            backgroundColor: index === 0 ? '#FF6347' : index === 1 ? '#6495ED' : '#32CD32',
+                            transform: [{ skewX: '10deg' }],
+                            borderTopRightRadius: 2,
+                          }} />
+                        </View>
+                        {/* Medal Circle - positioned in front */}
+                        <View style={{
+                          position: 'absolute',
+                          top: 12,
+                          zIndex: 1,
+                          width: 32,
+                          height: 32,
+                          borderRadius: 16,
+                          backgroundColor: index === 0 ? '#FFD700' : index === 1 ? '#C0C0C0' : '#CD7F32',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          borderWidth: 3,
+                          borderColor: index === 0 ? '#DAA520' : index === 1 ? '#A9A9A9' : '#8B4513',
+                          shadowColor: '#000',
+                          shadowOffset: { width: 0, height: 2 },
+                          shadowOpacity: 0.3,
+                          shadowRadius: 2,
+                          elevation: 4,
+                        }}>
+                          {/* Inner ring */}
+                          <View style={{
+                            width: 24,
+                            height: 24,
+                            borderRadius: 12,
+                            borderWidth: 1,
+                            borderColor: index === 0 ? '#B8860B' : index === 1 ? '#808080' : '#A0522D',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                          }}>
+                            <Text style={{ 
+                              fontSize: 14, 
+                              fontWeight: '900', 
+                              color: index === 0 ? '#8B6914' : index === 1 ? '#4A4A4A' : '#5D3A1A',
+                            }}>
+                              {index + 1}
+                            </Text>
+                          </View>
+                        </View>
+                      </View>
+                    ) : (
+                      <View style={{
+                        width: 36,
+                        height: 46,
+                        borderRadius: 16,
+                        backgroundColor: `${theme.muted}15`,
+                        borderWidth: 2,
+                        borderColor: `${theme.muted}30`,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        marginRight: 12,
+                      }}>
+                        <Text style={{ 
+                          fontSize: 16, 
+                          fontWeight: '700', 
+                          color: theme.muted 
+                        }}>
+                          {index + 1}
+                        </Text>
+                      </View>
+                    )}
+                    
+                    {/* Sport Icon */}
+                    <ActivityIcon activity={item.sport} size={32} color={theme.primary} />
+                    
+                    {/* Sport Name & Details */}
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <Text style={{ color: theme.text, fontWeight: '700', fontSize: 15 }}>{item.sport}</Text>
+                      <View style={{ flexDirection: 'row', marginTop: 4, gap: 12 }}>
+                        {item.upcoming > 0 && (
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                            <Ionicons name="calendar" size={12} color={theme.primary} />
+                            <Text style={{ color: theme.primary, fontSize: 12, fontWeight: '600' }}>{item.upcoming} upcoming</Text>
+                          </View>
+                        )}
+                        {item.past > 0 && (
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                            <Ionicons name="time" size={12} color={theme.muted} />
+                            <Text style={{ color: theme.muted, fontSize: 12, fontWeight: '500' }}>{item.past} past</Text>
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                    
+                    {/* Total Count Badge */}
+                    <View style={{
+                      backgroundColor: `${theme.primary}20`,
+                      paddingHorizontal: 12,
+                      paddingVertical: 6,
+                      borderRadius: 16,
+                    }}>
+                      <Text style={{ color: theme.primary, fontWeight: '700', fontSize: 16 }}>{item.total}</Text>
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        </View>
       </Modal>
 
       {/* Menu Modal */}
@@ -1166,10 +1418,20 @@ const UserProfileScreen = () => {
           >
             <Ionicons name="close" size={32} color="#fff" />
           </TouchableOpacity>
-          <Image
-            source={{ uri: profile?.photo || 'https://via.placeholder.com/100' }}
-            style={{ width: '90%', height: '70%', resizeMode: 'contain' }}
-          />
+          {profile?.photo ? (
+            <Image
+              source={{ uri: profile.photo }}
+              style={{ width: '90%', height: '70%' }}
+              contentFit="contain"
+              cachePolicy="memory-disk"
+            />
+          ) : (
+            <UserAvatar
+              photoUrl={null}
+              username={profile?.username}
+              size={250}
+            />
+          )}
         </View>
       </Modal>
     </View>
@@ -1177,6 +1439,188 @@ const UserProfileScreen = () => {
 };
 
 const createStyles = (t: any) => StyleSheet.create({
+  // ===== COMPACT PROFILE HEADER STYLES =====
+  usernameHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 12,
+    position: 'relative',
+  },
+  usernameTitle: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: t.primary,
+    letterSpacing: 0.3,
+    textAlign: 'center',
+    flex: 1,
+    marginHorizontal: 50,
+  },
+  backIconBtn: {
+    position: 'absolute',
+    left: 16,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: t.card,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  menuIconBtn: {
+    position: 'absolute',
+    right: 16,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: t.card,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  profileCompactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    marginBottom: 10,
+  },
+  avatarRingCompact: {
+    padding: 3,
+    borderRadius: 46,
+    borderWidth: 2.5,
+    borderColor: t.primary,
+  },
+  avatarShadow: {
+    shadowColor: t.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  profileAvatarCompact: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+  },
+  statsCompactContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    marginLeft: 16,
+  },
+  statCompactItem: {
+    alignItems: 'center',
+    paddingHorizontal: 4,
+  },
+  statCompactValue: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: t.primary,
+  },
+  statCompactLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: t.muted,
+    marginTop: 2,
+  },
+  bioSocialCompactRow: {
+    paddingHorizontal: 16,
+    marginBottom: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  bioCompactText: {
+    fontSize: 13,
+    color: t.text,
+    lineHeight: 18,
+    opacity: 0.85,
+    flex: 1,
+  },
+  socialCompactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  socialCompactBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: t.card,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: t.border,
+  },
+  instagramGradientBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  facebookBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#1877F2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionCompactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    marginBottom: 12,
+    gap: 8,
+  },
+  actionCompactBtnPrimary: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: t.primary,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    gap: 6,
+  },
+  actionCompactBtnPrimaryText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  actionCompactBtnSecondary: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: t.card,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: t.primary,
+    gap: 5,
+  },
+  actionCompactBtnSecondaryText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: t.primary,
+  },
+  actionCompactBtnIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: t.card,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: t.primary,
+  },
+
+  // Tab and list styles
   tabTitleCentered: {
     color: t.primary,
     fontSize: 18,
@@ -1184,6 +1628,78 @@ const createStyles = (t: any) => StyleSheet.create({
     textAlign: 'center',
     marginTop: 4,
     marginBottom: 8,
+  },
+  // Styled tab headers
+  tabHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    paddingHorizontal: 4,
+  },
+  tabIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: t.primary + '15',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  tabTitleStyled: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: t.text,
+  },
+  tabBadge: {
+    marginLeft: 10,
+    backgroundColor: t.primary,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    minWidth: 28,
+    alignItems: 'center',
+  },
+  tabBadgeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  // Styled search bar
+  styledSearchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: t.card,
+    borderRadius: 14,
+    paddingHorizontal: 4,
+    paddingVertical: 4,
+    borderWidth: 1.5,
+    borderColor: t.primary + '25',
+    marginBottom: 16,
+  },
+  searchIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 11,
+    backgroundColor: t.primary + '15',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  styledSearchInput: {
+    flex: 1,
+    backgroundColor: 'transparent',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    minHeight: 38,
+    color: t.text,
+    fontWeight: '500',
+    fontSize: 15,
+  },
+  styledClearBtn: {
+    marginRight: 8,
+    height: 30,
+    width: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   userSearchRow: {
     flexDirection: 'row',

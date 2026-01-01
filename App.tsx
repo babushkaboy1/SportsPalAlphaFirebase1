@@ -793,7 +793,7 @@ export default function App() {
 
 // Helper mounted inside providers to consume ActivityContext
 const SplashHider: React.FC<{ navReady: boolean; initializing: boolean; user: User | null; hasProfile: boolean | null; splashHiddenRef: React.MutableRefObject<boolean>; updateChecked: boolean; }> = ({ navReady, initializing, user, hasProfile, splashHiddenRef, updateChecked }) => {
-  const { initialActivitiesLoaded } = useActivityContext();
+  const { initialActivitiesLoaded, initialLocationLoaded } = useActivityContext();
 
   useEffect(() => {
     if (splashHiddenRef.current) return;
@@ -801,15 +801,16 @@ const SplashHider: React.FC<{ navReady: boolean; initializing: boolean; user: Us
       if (!navReady || initializing || !updateChecked) return false;
       if (!user) return true; // login screen is ready
       if (hasProfile === false) return true; // create profile flow
-      // user has profile -> wait for activities initial load
-      return initialActivitiesLoaded;
+      // user has profile -> wait for activities AND location to load
+      // This ensures the discover screen shows properly filtered activities immediately
+      return initialActivitiesLoaded && initialLocationLoaded;
     };
 
     if (shouldHide()) {
       SplashScreen.hideAsync().catch(() => {});
       splashHiddenRef.current = true;
     }
-  }, [navReady, initializing, user, hasProfile, initialActivitiesLoaded, updateChecked]);
+  }, [navReady, initializing, user, hasProfile, initialActivitiesLoaded, initialLocationLoaded, updateChecked]);
 
   // Fallback: hide after 8s max
   useEffect(() => {

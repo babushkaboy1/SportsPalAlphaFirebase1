@@ -1,14 +1,22 @@
 // utils/activityCache.ts
-// Smart caching system to minimize Firestore reads
+// Smart caching system to minimize Firestore reads and save costs
+// 
+// CACHING STRATEGY:
+// - Activities cache: 5 min TTL - balances freshness with cost savings
+// - Historical cache: 7 days TTL - past activities rarely change
+// 
+// When cache is valid, we skip Firestore reads entirely.
+// Users can pull-to-refresh to force a fresh fetch when needed.
+// 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const CACHE_KEY = 'activities_cache';
 const CACHE_TIMESTAMP_KEY = 'activities_cache_timestamp';
-const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes - adjust based on expected activity creation rate
 
-// Historical activities cache (decorative, low priority)
+// Historical activities cache (past activities don't change)
 const HISTORY_CACHE_KEY = 'activities_history_cache';
-const HISTORY_CACHE_DURATION = 7 * 24 * 60 * 60 * 1000; // 7 days
+const HISTORY_CACHE_DURATION = 7 * 24 * 60 * 60 * 1000; // 7 days - historical data is decorative
 
 export interface CachedActivity {
   id: string;

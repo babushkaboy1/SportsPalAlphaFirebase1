@@ -27,7 +27,13 @@ export default function ProfileStack() {
       <Stack.Screen name="UserProfile" component={UserProfileScreen} />
       <Stack.Screen name="Settings" component={SettingsScreen} />
       <Stack.Screen name="LegalDocument" component={LegalDocumentScreen} />
-      <Stack.Screen name="SportsPalPass" component={SportsPalPassScreen} />
+      <Stack.Screen 
+        name="SportsPalPass" 
+        component={SportsPalPassScreen}
+        options={{
+          gestureResponseDistance: 50, // Reduce gesture area to allow scroll
+        }}
+      />
     </Stack.Navigator>
   );
 }

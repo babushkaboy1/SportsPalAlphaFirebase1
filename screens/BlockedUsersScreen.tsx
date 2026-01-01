@@ -1,10 +1,11 @@
 // screens/BlockedUsersScreen.tsx
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Image, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useTheme } from '../context/ThemeContext';
+import UserAvatar from '../components/UserAvatar';
 import { getBlockedUsers, unblockUser } from '../utils/firestoreBlocks';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
@@ -98,8 +99,10 @@ const BlockedUsersScreen: React.FC = () => {
   const renderBlockedUser = ({ item }: { item: BlockedUserProfile }) => (
     <View style={styles.userCard}>
       <View style={styles.userInfo}>
-        <Image
-          source={{ uri: item.photo || `https://ui-avatars.com/api/?name=${encodeURIComponent(item.username)}&background=random` }}
+        <UserAvatar
+          photoUrl={item.photo}
+          username={item.username}
+          size={50}
           style={styles.userAvatar}
         />
         <View style={styles.userDetails}>

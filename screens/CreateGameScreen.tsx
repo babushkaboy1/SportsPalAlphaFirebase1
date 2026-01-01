@@ -23,6 +23,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { ActivityIcon } from '../components/ActivityIcons';
+import { ActivitySuccessModal } from '../components/ActivitySuccessModal';
 import { useActivityContext } from '../context/ActivityContext';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../types/navigation';
@@ -160,422 +161,6 @@ const darkMapStyle = [
   { elementType: 'labels.text.stroke', stylers: [{ color: '#212121' }] },
   { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#000000' }] },
 ];
-
-// SuccessModal Component with animations
-interface SuccessModalProps {
-  visible: boolean;
-  sport: string;
-  friendProfiles: any[];
-  selectedFriendIds: Record<string, boolean>;
-  invitedFriendIds: string[];
-  createdActivityId: string | null;
-  noSelectionHintVisible: boolean;
-  invitedState: boolean;
-  onSelectFriend: (friendId: string) => void;
-  onInviteFriends: () => void;
-  onClose: () => void;
-}
-
-const SuccessModal: React.FC<SuccessModalProps> = ({
-  visible,
-  sport,
-  friendProfiles,
-  selectedFriendIds,
-  invitedFriendIds,
-  createdActivityId,
-  noSelectionHintVisible,
-  invitedState,
-  onSelectFriend,
-  onInviteFriends,
-  onClose,
-}) => {
-  const { theme } = useTheme();
-  
-  const overlayOpacity = useRef(new Animated.Value(0)).current;
-  const scaleAnim = useRef(new Animated.Value(0.7)).current;
-  const slideAnim = useRef(new Animated.Value(50)).current;
-  const iconScale = useRef(new Animated.Value(0)).current;
-  const iconRotate = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    if (visible) {
-      // Trigger haptic feedback
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      
-      // Staggered entrance animation
-      Animated.parallel([
-        Animated.timing(overlayOpacity, {
-          toValue: 1,
-          duration: 200,
-          useNativeDriver: true,
-        }),
-        Animated.spring(scaleAnim, {
-          toValue: 1,
-          tension: 50,
-          friction: 7,
-          useNativeDriver: true,
-        }),
-        Animated.timing(slideAnim, {
-          toValue: 0,
-          duration: 300,
-          useNativeDriver: true,
-        }),
-      ]).start();
-
-      // Delayed icon animation
-      setTimeout(() => {
-        Animated.parallel([
-          Animated.spring(iconScale, {
-            toValue: 1,
-            tension: 100,
-            friction: 5,
-            useNativeDriver: true,
-          }),
-          Animated.timing(iconRotate, {
-            toValue: 1,
-            duration: 600,
-            useNativeDriver: true,
-          }),
-        ]).start();
-      }, 200);
-    } else {
-      overlayOpacity.setValue(0);
-      scaleAnim.setValue(0.7);
-      slideAnim.setValue(50);
-      iconScale.setValue(0);
-      iconRotate.setValue(0);
-    }
-  }, [visible]);
-
-  const iconRotation = iconRotate.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0deg', '360deg'],
-  });
-
-  if (!visible) return null;
-
-  const styles = StyleSheet.create({
-    overlay: {
-      flex: 1,
-      backgroundColor: 'rgba(0, 0, 0, 0.7)',
-      justifyContent: 'center',
-      alignItems: 'center',
-      padding: 20,
-    },
-    modalCard: {
-      width: '100%',
-      maxWidth: 500,
-      backgroundColor: theme.card,
-      borderRadius: 24,
-      padding: 24,
-      borderWidth: 1,
-      borderColor: theme.border,
-      ...Platform.select({
-        ios: {
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 8 },
-          shadowOpacity: 0.3,
-          shadowRadius: 16,
-        },
-        android: {
-          elevation: 12,
-        },
-      }),
-    },
-    iconContainer: {
-      width: 90,
-      height: 90,
-      borderRadius: 45,
-      backgroundColor: theme.background,
-      justifyContent: 'center',
-      alignItems: 'center',
-      alignSelf: 'center',
-      marginBottom: 20,
-      borderWidth: 3,
-      borderColor: theme.primary,
-    },
-    title: {
-      fontSize: 26,
-      fontWeight: 'bold',
-      color: theme.primary,
-      marginBottom: 8,
-      textAlign: 'center',
-    },
-    subtitle: {
-      fontSize: 14,
-      color: theme.muted,
-      textAlign: 'center',
-      marginBottom: 20,
-      lineHeight: 20,
-    },
-    sectionTitle: {
-      fontSize: 15,
-      fontWeight: '700',
-      color: theme.text,
-      marginBottom: 12,
-      marginTop: 8,
-    },
-    friendsList: {
-      maxHeight: 260,
-      marginBottom: 16,
-    },
-    friendRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingVertical: 12,
-      paddingHorizontal: 8,
-      borderRadius: 12,
-      marginBottom: 8,
-      backgroundColor: theme.background,
-    },
-    friendRowInvited: {
-      opacity: 0.5,
-    },
-    friendLeft: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      flex: 1,
-    },
-    friendAvatar: {
-      width: 44,
-      height: 44,
-      borderRadius: 22,
-      marginRight: 12,
-      borderWidth: 2,
-      borderColor: theme.primary,
-    },
-    friendInfo: {
-      flex: 1,
-    },
-    friendName: {
-      color: theme.text,
-      fontWeight: '600',
-      fontSize: 15,
-    },
-    friendBio: {
-      color: theme.muted,
-      fontSize: 12,
-      marginTop: 2,
-    },
-    checkbox: {
-      width: 24,
-      height: 24,
-      borderRadius: 8,
-      borderWidth: 2,
-      borderColor: theme.primary,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    checkboxSelected: {
-      backgroundColor: theme.primary,
-    },
-    noFriends: {
-      fontSize: 14,
-      color: theme.muted,
-      textAlign: 'center',
-      marginVertical: 20,
-    },
-    buttonContainer: {
-      gap: 12,
-      marginTop: 4,
-    },
-    button: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      paddingVertical: 16,
-      paddingHorizontal: 20,
-      borderRadius: 12,
-      gap: 10,
-    },
-    primaryButton: {
-      backgroundColor: theme.primary,
-    },
-    primaryButtonDisabled: {
-      backgroundColor: theme.primaryStrong,
-    },
-    secondaryButton: {
-      backgroundColor: 'transparent',
-      borderWidth: 2,
-      borderColor: theme.primary,
-    },
-    buttonText: {
-      fontSize: 16,
-      fontWeight: '700',
-      color: '#fff', // Always white for primary buttons
-    },
-    primaryButtonText: {
-      color: '#fff', // Always white
-    },
-    secondaryButtonText: {
-      color: theme.primary,
-    },
-    toast: {
-      position: 'absolute',
-      left: 0,
-      right: 0,
-      bottom: 20,
-      alignItems: 'center',
-    },
-    toastText: {
-      backgroundColor: 'rgba(26, 233, 239, 0.2)',
-      color: theme.text,
-      paddingHorizontal: 16,
-      paddingVertical: 10,
-      borderRadius: 16,
-      fontWeight: '600',
-      overflow: 'hidden',
-    },
-  });
-
-  const hasSelectedFriends = Object.keys(selectedFriendIds).some(
-    id => selectedFriendIds[id] && !invitedFriendIds.includes(id)
-  );
-
-  return (
-    <Animated.View style={[styles.overlay, { opacity: overlayOpacity }]}>
-      <Animated.View
-        style={[
-          styles.modalCard,
-          {
-            transform: [
-              { scale: scaleAnim },
-              { translateY: slideAnim },
-            ],
-          },
-        ]}
-      >
-        {/* Animated Activity Icon */}
-        <Animated.View
-          style={[
-            styles.iconContainer,
-            {
-              transform: [
-                { scale: iconScale },
-                { rotate: iconRotation },
-              ],
-            },
-          ]}
-        >
-          <ActivityIcon activity={sport} size={56} color={theme.primary} />
-        </Animated.View>
-
-        {/* Title & Subtitle */}
-        <Text style={styles.title}>🎉 Activity Created!</Text>
-        <Text style={styles.subtitle}>
-          Your {sport} activity is live! Friends can now discover and join from their feed.
-        </Text>
-
-        {/* Friends List */}
-        {friendProfiles.length > 0 ? (
-          <>
-            <Text style={styles.sectionTitle}>
-              Invite friends to join this activity:
-            </Text>
-            <ScrollView style={styles.friendsList} showsVerticalScrollIndicator={false}>
-              {friendProfiles.map((friend: any) => {
-                const invited = invitedFriendIds.includes(friend.uid);
-                const selected = !!selectedFriendIds[friend.uid];
-                return (
-                  <TouchableOpacity
-                    key={friend.uid}
-                    style={[
-                      styles.friendRow,
-                      invited && styles.friendRowInvited,
-                    ]}
-                    onPress={() => onSelectFriend(friend.uid)}
-                    activeOpacity={invited ? 1 : 0.7}
-                    disabled={invited}
-                  >
-                    <View style={styles.friendLeft}>
-                      <Image
-                        source={{
-                          uri: friend.photo || friend.photoURL || 
-                            `https://ui-avatars.com/api/?name=${encodeURIComponent(friend.username || 'User')}`
-                        }}
-                        style={styles.friendAvatar}
-                      />
-                      <View style={styles.friendInfo}>
-                        <Text style={styles.friendName}>
-                          {friend.username || 'User'}
-                        </Text>
-                        {friend.bio ? (
-                          <Text style={styles.friendBio} numberOfLines={1}>
-                            {friend.bio}
-                          </Text>
-                        ) : null}
-                      </View>
-                    </View>
-                    <View
-                      style={[
-                        styles.checkbox,
-                        (selected || invited) && styles.checkboxSelected,
-                      ]}
-                    >
-                      {(selected || invited) && (
-                        <Ionicons
-                          name="checkmark"
-                          size={16}
-                          color={theme.isDark ? '#111' : '#fff'}
-                        />
-                      )}
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-
-            {/* Invite Button */}
-            <TouchableOpacity
-              style={[
-                styles.button,
-                hasSelectedFriends ? styles.primaryButton : styles.primaryButtonDisabled,
-              ]}
-              onPress={onInviteFriends}
-              disabled={!hasSelectedFriends}
-            >
-              <Ionicons
-                name="send"
-                size={20}
-                color="#fff"
-              />
-              <Text style={styles.buttonText}>
-                {invitedState && !hasSelectedFriends
-                  ? 'Friends Invited!'
-                  : 'Send Invites'}
-              </Text>
-            </TouchableOpacity>
-          </>
-        ) : (
-          <Text style={styles.noFriends}>
-            No friends to invite yet. Add friends to invite them to your activities!
-          </Text>
-        )}
-
-        {/* Action Button */}
-        <View style={styles.buttonContainer}>
-          <TouchableOpacity
-            style={[styles.button, styles.primaryButton]}
-            onPress={onClose}
-          >
-            <Ionicons name="checkmark-circle" size={20} color="#fff" />
-            <Text style={styles.buttonText}>
-              Done
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Toast */}
-        {noSelectionHintVisible && (
-          <View style={styles.toast} pointerEvents="none">
-            <Text style={styles.toastText}>Please select friends to invite</Text>
-          </View>
-        )}
-      </Animated.View>
-    </Animated.View>
-  );
-};
 
 // Improved Route Drawing Modal Component
 interface RouteDrawerModalProps {
@@ -822,7 +407,7 @@ const RouteDrawerModal: React.FC<RouteDrawerModalProps> = ({
                 borderColor: theme.border,
               }}
             >
-              <Ionicons name="arrow-back" size={24} color={theme.text} />
+              <Ionicons name="arrow-back" size={24} color={theme.primary} />
             </TouchableOpacity>
             
             {/* Title in center */}
@@ -902,41 +487,35 @@ const RouteDrawerModal: React.FC<RouteDrawerModalProps> = ({
             onRegionChangeComplete={onRegionChangeComplete}
             scrollEnabled={!isDrawingMode}
             zoomEnabled={!isDrawingMode}
-            rotateEnabled={!isDrawingMode}
+            rotateEnabled={false}
             pitchEnabled={false}
+            toolbarEnabled={false}
             userInterfaceStyle={theme.isDark ? 'dark' : 'light'}
-            showsCompass={!isDrawingMode}
+            showsCompass={false}
             showsScale={true}
           >
-            {/* Meeting Point Marker */}
+            {/* Meeting Point Marker - orange circle with people icon */}
             <Marker
               coordinate={initialCoords}
-              title="Meeting Point"
               anchor={{ x: 0.5, y: 0.5 }}
+              title="Meet Here"
             >
               <View style={{ 
-                width: 44, 
-                height: 44, 
-                alignItems: 'center', 
+                width: 32, 
+                height: 32, 
+                borderRadius: 16, 
+                backgroundColor: '#f59e0b', 
+                borderWidth: 3, 
+                borderColor: '#fff',
+                alignItems: 'center',
                 justifyContent: 'center',
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.3,
+                shadowRadius: 3,
+                elevation: 4,
               }}>
-                <View style={{ 
-                  backgroundColor: theme.primary, 
-                  width: 36, 
-                  height: 36, 
-                  borderRadius: 18, 
-                  alignItems: 'center', 
-                  justifyContent: 'center', 
-                  borderWidth: 3, 
-                  borderColor: '#fff',
-                  shadowColor: '#000',
-                  shadowOffset: { width: 0, height: 2 },
-                  shadowOpacity: 0.3,
-                  shadowRadius: 4,
-                  elevation: 5,
-                }}>
-                  <Ionicons name="flag" size={18} color="#fff" />
-                </View>
+                <Ionicons name="people" size={16} color="#fff" />
               </View>
             </Marker>
 
@@ -953,15 +532,15 @@ const RouteDrawerModal: React.FC<RouteDrawerModalProps> = ({
 
             {/* Start Marker */}
             {drawnRoute.length > 0 && (
-              <Marker coordinate={drawnRoute[0]} anchor={{ x: 0.5, y: 0.5 }}>
+              <Marker coordinate={drawnRoute[0]} anchor={{ x: 0.5, y: 0.5 }} title="Start">
                 <View style={{ 
-                  backgroundColor: '#4CAF50', 
                   width: 28, 
                   height: 28, 
                   borderRadius: 14, 
+                  backgroundColor: '#22c55e', 
                   borderWidth: 3, 
-                  borderColor: '#fff', 
-                  alignItems: 'center', 
+                  borderColor: '#fff',
+                  alignItems: 'center',
                   justifyContent: 'center',
                   shadowColor: '#000',
                   shadowOffset: { width: 0, height: 2 },
@@ -969,22 +548,22 @@ const RouteDrawerModal: React.FC<RouteDrawerModalProps> = ({
                   shadowRadius: 3,
                   elevation: 4,
                 }}>
-                  <Ionicons name="play" size={12} color="#fff" />
+                  <Ionicons name="play" size={14} color="#fff" style={{ marginLeft: 2 }} />
                 </View>
               </Marker>
             )}
 
             {/* End Marker */}
             {drawnRoute.length > 1 && (
-              <Marker coordinate={drawnRoute[drawnRoute.length - 1]} anchor={{ x: 0.5, y: 0.5 }}>
+              <Marker coordinate={drawnRoute[drawnRoute.length - 1]} anchor={{ x: 0.5, y: 0.5 }} title="Finish">
                 <View style={{ 
-                  backgroundColor: '#f44336', 
                   width: 28, 
                   height: 28, 
                   borderRadius: 14, 
+                  backgroundColor: '#ef4444', 
                   borderWidth: 3, 
-                  borderColor: '#fff', 
-                  alignItems: 'center', 
+                  borderColor: '#fff',
+                  alignItems: 'center',
                   justifyContent: 'center',
                   shadowColor: '#000',
                   shadowOffset: { width: 0, height: 2 },
@@ -992,7 +571,7 @@ const RouteDrawerModal: React.FC<RouteDrawerModalProps> = ({
                   shadowRadius: 3,
                   elevation: 4,
                 }}>
-                  <Ionicons name="stop" size={12} color="#fff" />
+                  <Ionicons name="flag" size={14} color="#fff" />
                 </View>
               </Marker>
             )}
@@ -1303,6 +882,41 @@ const CreateGameScreen = () => {
     setTime(`${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`);
     setMaxParticipants(10);
     setSelectedCoords(null);
+  };
+
+  // Compute if form has been modified from defaults
+  const isFormDirty = useMemo(() => {
+    // Check if any field has been modified
+    if (sport) return true;
+    if (description.trim()) return true;
+    if (location) return true;
+    if (selectedCoords) return true;
+    if (maxParticipants !== 10) return true;
+    if (gpxFile) return true;
+    if (drawnRoute.length > 0) return true;
+    // Check if date is different from today
+    const today = normalizeDateFormat(new Date().toISOString().split('T')[0]);
+    if (date !== today) return true;
+    return false;
+  }, [sport, description, location, selectedCoords, maxParticipants, gpxFile, drawnRoute, date]);
+
+  // Handle reset with confirmation
+  const handleResetConfirm = () => {
+    Alert.alert(
+      'Reset Form',
+      'Are you sure you want to reset all fields?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reset',
+          style: 'destructive',
+          onPress: () => {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+            resetForm();
+          },
+        },
+      ]
+    );
   };
 
   const handleScroll = (e: any) => {
@@ -1747,80 +1361,73 @@ const CreateGameScreen = () => {
         </Animated.View>
 
         {/* Success Modal Popup */}
-        <Modal
+        {/* Activity Success Modal */}
+        <ActivitySuccessModal
           visible={showSuccessModal}
-          transparent
-          animationType="none"
-          onRequestClose={() => setShowSuccessModal(false)}
-        >
-          {/* Pass sport with fallback to prevent empty/undefined issues */}
-          <SuccessModal
-            visible={showSuccessModal}
-            sport={sport || 'Soccer'}
-            friendProfiles={friendProfiles}
-            selectedFriendIds={selectedFriendIds}
-            invitedFriendIds={invitedFriendIds}
-            createdActivityId={createdActivityId}
-            noSelectionHintVisible={noSelectionHintVisible}
-            invitedState={invitedState}
-            onSelectFriend={(friendId: string) => {
-              if (!invitedFriendIds.includes(friendId)) {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                setSelectedFriendIds(prev => ({ ...prev, [friendId]: !prev[friendId] }));
-              }
-            }}
-            onInviteFriends={async () => {
-              const selected = Object.keys(selectedFriendIds).filter(id => selectedFriendIds[id] && !invitedFriendIds.includes(id));
-              if (selected.length === 0) {
-                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-                setNoSelectionHintVisible(true);
-                if (noSelectionTimerRef.current) clearTimeout(noSelectionTimerRef.current);
-                noSelectionTimerRef.current = setTimeout(() => setNoSelectionHintVisible(false), 1800);
-                return;
-              }
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-              let sent = 0;
-              let skipped = 0;
-              if (!createdActivityId) return;
-              const newlyInvited: string[] = [];
-              for (const friendId of selected) {
-                try {
-                  const res = await import('../utils/firestoreInvites').then(mod => mod.sendActivityInvites(friendId, [createdActivityId as string]));
-                  if ((res?.sentIds || []).length > 0) {
-                    sent += 1;
-                    newlyInvited.push(friendId);
-                  } else {
-                    skipped += 1;
-                  }
-                } catch {
+          sport={sport || 'Soccer'}
+          friendProfiles={friendProfiles}
+          selectedFriendIds={selectedFriendIds}
+          invitedFriendIds={invitedFriendIds}
+          onSelectFriend={(friendId: string) => {
+            if (!invitedFriendIds.includes(friendId)) {
+              setSelectedFriendIds(prev => ({ ...prev, [friendId]: !prev[friendId] }));
+            }
+          }}
+          onInviteFriends={async () => {
+            const selected = Object.keys(selectedFriendIds).filter(id => selectedFriendIds[id] && !invitedFriendIds.includes(id));
+            if (selected.length === 0) {
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+              return;
+            }
+            let sent = 0;
+            let skipped = 0;
+            if (!createdActivityId) return;
+            const newlyInvited: string[] = [];
+            for (const friendId of selected) {
+              try {
+                const res = await import('../utils/firestoreInvites').then(mod => mod.sendActivityInvites(friendId, [createdActivityId as string]));
+                if ((res?.sentIds || []).length > 0) {
+                  sent += 1;
+                  newlyInvited.push(friendId);
+                } else {
                   skipped += 1;
                 }
+              } catch {
+                skipped += 1;
               }
-              setInvitedFriendIds(prev => Array.from(new Set([...prev, ...newlyInvited])));
-              setInvitedState(true);
-              setSelectedFriendIds({});
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-              Alert.alert('Invites',
-                sent > 0
-                  ? `Sent invites to ${sent} friend${sent === 1 ? '' : 's'}${skipped ? ` (skipped ${skipped} already joined)` : ''}.`
-                  : `No invites sent. ${skipped} skipped (already joined).`
-              );
-            }}
-            onClose={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              setShowSuccessModal(false);
-              // Clear sport after modal closes since form was already reset
-              setSport('');
-              // Reset selection states for next time
-              setSelectedFriendIds({});
-              setInvitedFriendIds([]);
-              setInvitedState(false);
-            }}
-          />
-        </Modal>
+            }
+            setInvitedFriendIds(prev => Array.from(new Set([...prev, ...newlyInvited])));
+            setInvitedState(true);
+            setSelectedFriendIds({});
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            Alert.alert('Invites Sent! 🎉',
+              sent > 0
+                ? `Sent invites to ${sent} friend${sent === 1 ? '' : 's'}${skipped ? ` (skipped ${skipped} already joined)` : ''}.`
+                : `No invites sent. ${skipped} skipped (already joined).`
+            );
+          }}
+          onClose={() => {
+            setShowSuccessModal(false);
+            // Clear sport after modal closes since form was already reset
+            setSport('');
+            // Reset selection states for next time
+            setSelectedFriendIds({});
+            setInvitedFriendIds([]);
+            setInvitedState(false);
+          }}
+        />
 
         <View style={styles.header}>
           <Text style={styles.headerTitle}>Create Activity</Text>
+          {isFormDirty && (
+            <TouchableOpacity
+              style={styles.resetButton}
+              onPress={handleResetConfirm}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Ionicons name="arrow-undo" size={22} color={theme.primary} />
+            </TouchableOpacity>
+          )}
         </View>
           <ScrollView
             ref={scrollRef}
@@ -2394,26 +2001,48 @@ const CreateGameScreen = () => {
               </View>
             </Modal>
           )}
-          {Platform.OS === 'android' && showDifficultyPicker && (
+          {Platform.OS === 'android' && (
             <Modal transparent animationType="slide" visible={showDifficultyPicker} onRequestClose={() => setShowDifficultyPicker(false)}>
               <View style={styles.pickerModal}>
                 <View style={styles.rollerContainer}>
-                  <Picker
-                    selectedValue={gpxStats.difficulty}
-                    onValueChange={(value) => {
-                      setGpxStats((s: any) => ({ ...s, difficulty: value }));
+                  <View style={styles.rollerHeader}>
+                    <TouchableOpacity onPress={() => setShowDifficultyPicker(false)}>
+                      <Text style={styles.rollerCancel}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                       setShowDifficultyPicker(false);
-                    }}
-                    style={{ width: '100%' }}
-                    itemStyle={{ fontSize: 22 }}
-                  >
-                    <Picker.Item label="Select difficulty" value="" />
-                    <Picker.Item label="Easy" value="Easy" />
-                    <Picker.Item label="Moderate" value="Moderate" />
-                    <Picker.Item label="Hard" value="Hard" />
-                    <Picker.Item label="Very Hard" value="Very Hard" />
-                    <Picker.Item label="Expert" value="Expert" />
-                  </Picker>
+                    }}>
+                      <Text style={styles.rollerDone}>Done</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <ScrollView style={{ maxHeight: 260 }}>
+                    {['Easy', 'Moderate', 'Hard', 'Very Hard', 'Expert'].map((option) => {
+                      const isSelected = gpxStats.difficulty === option;
+                      return (
+                        <TouchableOpacity
+                          key={option}
+                          style={{
+                            paddingVertical: 16,
+                            paddingHorizontal: 20,
+                            backgroundColor: isSelected ? theme.primary : 'transparent',
+                            borderBottomWidth: 1,
+                            borderBottomColor: theme.border,
+                          }}
+                          onPress={() => setGpxStats((s: any) => ({ ...s, difficulty: option }))}
+                        >
+                          <Text style={{
+                            color: isSelected ? '#fff' : theme.text,
+                            fontSize: 18,
+                            fontWeight: isSelected ? 'bold' : '500',
+                            textAlign: 'center',
+                          }}>
+                            {option}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
                 </View>
               </View>
             </Modal>
@@ -2447,24 +2076,48 @@ const CreateGameScreen = () => {
               </View>
             </Modal>
           )}
-          {Platform.OS === 'android' && showRouteTypePicker && (
+          {Platform.OS === 'android' && (
             <Modal transparent animationType="slide" visible={showRouteTypePicker} onRequestClose={() => setShowRouteTypePicker(false)}>
               <View style={styles.pickerModal}>
                 <View style={styles.rollerContainer}>
-                  <Picker
-                    selectedValue={gpxStats.routeType}
-                    onValueChange={(value) => {
-                      setGpxStats((s: any) => ({ ...s, routeType: value }));
+                  <View style={styles.rollerHeader}>
+                    <TouchableOpacity onPress={() => setShowRouteTypePicker(false)}>
+                      <Text style={styles.rollerCancel}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                       setShowRouteTypePicker(false);
-                    }}
-                    style={{ width: '100%' }}
-                    itemStyle={{ fontSize: 22 }}
-                  >
-                    <Picker.Item label="Select route type" value="" />
-                    <Picker.Item label="Loop" value="Loop" />
-                    <Picker.Item label="Out and back" value="Out and back" />
-                    <Picker.Item label="Point to point" value="Point to point" />
-                  </Picker>
+                    }}>
+                      <Text style={styles.rollerDone}>Done</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <ScrollView style={{ maxHeight: 260 }}>
+                    {['Loop', 'Out and back', 'Point to point'].map((option) => {
+                      const isSelected = gpxStats.routeType === option;
+                      return (
+                        <TouchableOpacity
+                          key={option}
+                          style={{
+                            paddingVertical: 16,
+                            paddingHorizontal: 20,
+                            backgroundColor: isSelected ? theme.primary : 'transparent',
+                            borderBottomWidth: 1,
+                            borderBottomColor: theme.border,
+                          }}
+                          onPress={() => setGpxStats((s: any) => ({ ...s, routeType: option }))}
+                        >
+                          <Text style={{
+                            color: isSelected ? '#fff' : theme.text,
+                            fontSize: 18,
+                            fontWeight: isSelected ? 'bold' : '500',
+                            textAlign: 'center',
+                          }}>
+                            {option}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
                 </View>
               </View>
             </Modal>
@@ -2529,15 +2182,27 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
     paddingHorizontal: 10,
   },
   header: {
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     marginTop: 10,
     marginBottom: 18,
+    position: 'relative',
   },
   headerTitle: {
     fontSize: 28,
     color: t.primary,
     fontWeight: 'bold',
     textAlign: 'center',
+  },
+  resetButton: {
+    position: 'absolute',
+    right: 0,
+    padding: 8,
+    borderRadius: 20,
+    backgroundColor: t.card,
+    borderWidth: 1,
+    borderColor: t.border,
   },
   form: {
     paddingBottom: 0,

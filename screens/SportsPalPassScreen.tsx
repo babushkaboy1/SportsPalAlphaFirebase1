@@ -7,10 +7,10 @@ import {
   Alert,
   StyleSheet,
   Platform,
-  Image,
   ScrollView,
   Share,
 } from 'react-native';
+import { Image } from 'expo-image';
 import * as Linking from 'expo-linking';
 import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../firebaseConfig';
@@ -19,6 +19,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { ActivityIcon } from '../components/ActivityIcons';
+import AddToAppleWalletButton from '../components/AddToAppleWalletButton';
+import QRCode from 'react-native-qrcode-svg';
 
 // Functions base URL
 const FUNCTIONS_BASE_URL = 'https://us-central1-sportspal-1b468.cloudfunctions.net';
@@ -51,10 +53,12 @@ const SportsPalPassScreen: React.FC = () => {
         setUsername(data?.username || user.email || 'Member');
         setPhotoUrl(data?.photo || data?.photoURL || null);
         
-        const sportsArray: string[] = Array.isArray(data?.sports)
-          ? data?.sports
+        const sportsArray: string[] = Array.isArray(data?.sportsPreferences)
+          ? data?.sportsPreferences
           : Array.isArray(data?.selectedSports)
           ? data?.selectedSports
+          : Array.isArray(data?.sports)
+          ? data?.sports
           : [];
         setSports(sportsArray);
 
@@ -164,6 +168,8 @@ const SportsPalPassScreen: React.FC = () => {
       <ScrollView 
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        scrollEventThrottle={16}
       >
         {loading ? (
           <View style={styles.loadingContainer}>
@@ -191,10 +197,12 @@ const SportsPalPassScreen: React.FC = () => {
                 {/* Profile Picture */}
                 <View style={styles.profileSection}>
                   {photoUrl ? (
-                    <Image source={{ uri: photoUrl }} style={styles.profilePic} />
+                    <Image source={{ uri: photoUrl }} style={styles.profilePic} cachePolicy="memory-disk" />
                   ) : (
                     <View style={[styles.profilePic, styles.profilePlaceholder]}>
-                      <Ionicons name="person" size={40} color="#1ae9ef" />
+                      <Text style={{ color: '#00CED1', fontSize: 40, fontWeight: 'bold' }}>
+                        {username ? username.charAt(0).toUpperCase() : '?'}
+                      </Text>
                     </View>
                   )}
                 </View>
@@ -207,14 +215,17 @@ const SportsPalPassScreen: React.FC = () => {
                   <Text style={styles.memberSinceText}>Member since {memberSince}</Text>
                 ) : null}
 
-                {/* Sports Icons Row */}
+                {/* Favorite Sports Section */}
                 {sports.length > 0 && (
-                  <View style={styles.sportsIconsRow}>
-                    {sports.slice(0, 5).map((sport, index) => (
-                      <View key={index} style={styles.sportIconWrapper}>
-                        <ActivityIcon activity={sport} size={24} color="#1ae9ef" />
-                      </View>
-                    ))}
+                  <View style={styles.sportsSection}>
+                    <Text style={styles.sportsSectionLabel}>FAVORITE SPORTS</Text>
+                    <View style={styles.sportsIconsRow}>
+                      {sports.slice(0, 8).map((sport, index) => (
+                        <View key={index} style={styles.sportIconWrapper}>
+                          <ActivityIcon activity={sport} size={26} color="#1ae9ef" />
+                        </View>
+                      ))}
+                    </View>
                   </View>
                 )}
 
@@ -226,58 +237,63 @@ const SportsPalPassScreen: React.FC = () => {
                       <Text style={styles.infoValue}>{birthday}</Text>
                     </View>
                   ) : null}
-                  <View style={styles.infoItem}>
+                  <View style={[styles.infoItem, { flex: 1 }]}>
                     <Text style={styles.infoLabel}>MEMBER ID</Text>
-                    <Text style={styles.infoValue}>{auth.currentUser?.uid?.slice(0, 8)}...</Text>
+                    <Text style={styles.memberIdValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+                      {auth.currentUser?.uid || 'N/A'}
+                    </Text>
                   </View>
                 </View>
 
                 {/* QR Code */}
                 <View style={styles.qrSection}>
-                  <View style={styles.qrPlaceholder}>
-                    <MaterialCommunityIcons name="qrcode" size={80} color="#1ae9ef" />
+                  <View style={styles.qrContainer}>
+                    {auth.currentUser?.uid ? (
+                      <QRCode
+                        value={`https://sportspal-1b468.web.app/profile/${auth.currentUser.uid}`}
+                        size={140}
+                        color="#000000"
+                        backgroundColor="#ffffff"
+                      />
+                    ) : (
+                      <MaterialCommunityIcons name="qrcode" size={120} color="#888" />
+                    )}
                   </View>
-                  <Text style={styles.qrLabel}>@{username}</Text>
+                  <Text style={styles.qrLabel}>Scan to view profile</Text>
+                  <Text style={styles.qrUsername}>@{username}</Text>
                 </View>
               </View>
             </View>
 
-            {/* Add to Wallet Button */}
+            {/* Add to Apple Wallet Button - Uses official Apple badge per guidelines */}
+            {/* @see https://developer.apple.com/wallet/add-to-apple-wallet-guidelines/ */}
             {Platform.OS === 'ios' && (
-              <TouchableOpacity
-                style={styles.walletButton}
-                onPress={handleOpenPass}
-                disabled={opening}
-                activeOpacity={0.85}
-              >
-                {opening ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <View style={styles.walletButtonContent}>
-                    <Image
-                      source={{ uri: 'https://developer.apple.com/assets/elements/icons/wallet/wallet-96x96_2x.png' }}
-                      style={styles.walletIcon}
-                    />
-                    <Text style={styles.walletButtonText}>Add to Apple Wallet</Text>
-                  </View>
-                )}
-              </TouchableOpacity>
+              <View style={styles.walletButtonContainer}>
+                <AddToAppleWalletButton
+                  onPress={handleOpenPass}
+                  disabled={opening}
+                  loading={opening}
+                />
+              </View>
             )}
 
             {Platform.OS === 'android' && (
               <TouchableOpacity
-                style={[styles.walletButton, styles.googleWalletButton]}
+                style={styles.walletButtonContainer}
                 onPress={handleOpenGoogleWallet}
                 disabled={openingGoogle}
                 activeOpacity={0.85}
               >
                 {openingGoogle ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <View style={styles.walletButtonContent}>
-                    <MaterialCommunityIcons name="wallet" size={24} color="#4285F4" style={{ marginRight: 10 }} />
-                    <Text style={styles.walletButtonText}>Add to Google Wallet</Text>
+                  <View style={styles.googleWalletLoading}>
+                    <ActivityIndicator color="#fff" />
                   </View>
+                ) : (
+                  <Image
+                    source={require('../assets/Add_to_Google_Wallet_badge.png')}
+                    style={styles.googleWalletBadge}
+                    resizeMode="contain"
+                  />
                 )}
               </TouchableOpacity>
             )}
@@ -318,6 +334,7 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: 20,
     paddingBottom: 40,
+    flexGrow: 1,
   },
   loadingContainer: {
     flex: 1,
@@ -407,21 +424,35 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     marginBottom: 16,
   },
+  sportsSection: {
+    width: '100%',
+    marginBottom: 20,
+    paddingHorizontal: 10,
+  },
+  sportsSectionLabel: {
+    color: '#666',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1,
+    textAlign: 'center',
+    marginBottom: 12,
+  },
   sportsIconsRow: {
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    gap: 12,
-    marginBottom: 16,
-    paddingHorizontal: 20,
+    flexWrap: 'wrap',
+    gap: 10,
   },
   sportIconWrapper: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: 'rgba(26, 233, 239, 0.1)',
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(26, 233, 239, 0.2)',
   },
   infoRow: {
     flexDirection: 'row',
@@ -446,7 +477,21 @@ const styles = StyleSheet.create({
   },
   qrSection: {
     alignItems: 'center',
-    marginTop: 8,
+    marginTop: 12,
+  },
+  qrContainer: {
+    width: 160,
+    height: 160,
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
   qrPlaceholder: {
     width: 80,
@@ -457,15 +502,32 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   qrLabel: {
+    color: '#888',
+    fontSize: 11,
+    marginTop: 10,
+    fontWeight: '500',
+  },
+  qrUsername: {
     color: '#1ae9ef',
-    fontSize: 13,
-    marginTop: 8,
+    fontSize: 14,
+    marginTop: 4,
+    fontWeight: '700',
+  },
+  memberIdValue: {
+    color: '#ffffff',
+    fontSize: 11,
     fontWeight: '600',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
   memberSinceLabel: {
     color: '#bdbdbd',
     fontSize: 10,
     fontWeight: '500',
+  },
+  walletButtonContainer: {
+    marginTop: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   walletButton: {
     backgroundColor: '#000',
@@ -478,18 +540,27 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#333',
   },
-  googleWalletButton: {
+  googleWalletBadge: {
+    width: 180,
+    height: 54,
+  },
+  googleWalletLoading: {
+    width: 180,
+    height: 54,
     backgroundColor: '#1a1a1a',
-    borderColor: '#4285F4',
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   walletButtonContent: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   walletIcon: {
-    width: 24,
-    height: 24,
-    marginRight: 10,
+    width: 40,
+    height: 40,
+    marginRight: 12,
+    borderRadius: 8,
   },
   walletButtonText: {
     color: '#fff',

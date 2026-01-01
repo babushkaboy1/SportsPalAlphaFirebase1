@@ -13,7 +13,6 @@ import {
   StyleSheet,
   FlatList,
   TouchableOpacity,
-  Image,
   TextInput,
   ActivityIndicator,
   RefreshControl,
@@ -24,6 +23,7 @@ import {
   Keyboard,
 } from 'react-native';
 import { Swipeable, RectButton } from 'react-native-gesture-handler';
+import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -40,6 +40,8 @@ import {
   loadProfilesFromCache,
   updateProfileInCache,
   clearAllChatCaches,
+  getDismissedRatingReminders,
+  dismissRatingReminder,
 } from '../utils/chatCache';
 import {
   doc,
@@ -204,8 +206,12 @@ const ChatsScreen = ({ navigation }: any) => {
   const [chatMenuVisible, setChatMenuVisible] = useState(false);
   const [selectedChat, setSelectedChat] = useState<any>(null);
   const [mutedChats, setMutedChats] = useState<string[]>([]);
-  const [displayedChatsCount, setDisplayedChatsCount] = useState(10);
+  const [displayedChatsCount, setDisplayedChatsCount] = useState(9);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+
+  // Rating reminders for past activities
+  const [ratingReminders, setRatingReminders] = useState<any[]>([]);
+  const [dismissedReminders, setDismissedReminders] = useState<string[]>([]);
 
   // Profile cache to minimize reads
   const profileCacheRef = useRef<{ [uid: string]: { username: string; photo?: string; timestamp: number } }>({});
@@ -220,7 +226,7 @@ const ChatsScreen = ({ navigation }: any) => {
   const route = useRoute<any>();
   const nav = useNavigation<any>();
   const { unreadNotifications, unreadChatMessages, markNotificationsRead } = useInboxBadge();
-  const { toggleJoinActivity } = useActivityContext();
+  const { toggleJoinActivity, allActivities, joinedActivities } = useActivityContext();
 
   /** ========= Helper: Fetch profile with caching (5 min cache) ========= */
   const fetchProfileCached = async (uid: string): Promise<{ username: string; photo?: string }> => {
@@ -587,6 +593,70 @@ const ChatsScreen = ({ navigation }: any) => {
     }, [])
   );
 
+  /** ========= Rating reminders for past activities ========= */
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid || !allActivities.length) return;
+
+    const loadRatingReminders = async () => {
+      try {
+        const dismissed = await getDismissedRatingReminders();
+        setDismissedReminders(dismissed);
+
+        // Get activities user joined
+        const myActivities = allActivities.filter(a => 
+          joinedActivities.includes(a.id) || 
+          (a as any).joinedUserIds?.includes(uid)
+        );
+
+        // Helper to parse activity start time
+        const toStartDate = (a: any): Date | null => {
+          if (!a?.date || !a?.time) return null;
+          const { date, time } = a;
+          const dateStr = String(date);
+          let ymd = dateStr;
+          // dd-mm-yyyy -> yyyy-mm-dd
+          if (/^\d{2}-\d{2}-\d{4}$/.test(dateStr)) {
+            const [dd, mm, yyyy] = dateStr.split('-');
+            ymd = `${yyyy}-${mm}-${dd}`;
+          }
+          const dt = new Date(`${ymd}T${time}`);
+          return isNaN(dt.getTime()) ? null : dt;
+        };
+
+        // Filter activities that started more than 6 hours ago but less than 7 days ago
+        const now = Date.now();
+        const SIX_HOURS = 6 * 60 * 60 * 1000;
+        const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+
+        const reminders = myActivities.filter(a => {
+          const start = toStartDate(a);
+          if (!start) return false;
+          
+          const timeSinceStart = now - start.getTime();
+          const isEligible = timeSinceStart > SIX_HOURS && timeSinceStart < SEVEN_DAYS;
+          
+          if (!isEligible) return false;
+
+          // Check if already dismissed
+          if (dismissed.includes(a.id)) return false;
+
+          // Check if already rated by this user
+          const ratings = (a as any).ratings || {};
+          if (ratings[uid]) return false;
+
+          return true;
+        });
+
+        setRatingReminders(reminders);
+      } catch (error) {
+        console.error('Error loading rating reminders:', error);
+      }
+    };
+
+    loadRatingReminders();
+  }, [allActivities, joinedActivities]);
+
   /** ========= Pull to refresh ========= */
   const onRefresh = async () => {
     setRefreshing(true);
@@ -594,7 +664,18 @@ const ChatsScreen = ({ navigation }: any) => {
     // Clear caches on refresh
     profileCacheRef.current = {};
     activityCacheRef.current = {};
+    // Reload dismissed reminders
+    const dismissed = await getDismissedRatingReminders();
+    setDismissedReminders(dismissed);
     setTimeout(() => setRefreshing(false), 1200);
+  };
+
+  /** ========= Dismiss rating reminder ========= */
+  const handleDismissRatingReminder = async (activityId: string) => {
+    await dismissRatingReminder(activityId);
+    setDismissedReminders(prev => [...prev, activityId]);
+    setRatingReminders(prev => prev.filter(a => a.id !== activityId));
+    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
   /** ========= Header badge ========= */
@@ -806,13 +887,10 @@ const ChatsScreen = ({ navigation }: any) => {
     if (isLoadingMore || displayedChatsCount >= filteredChats.length) return;
     
     setIsLoadingMore(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     
-    // Load 10 more chats
-    setTimeout(() => {
-      setDisplayedChatsCount(prev => prev + 10);
-      setIsLoadingMore(false);
-    }, 300);
+    // Load 15 more chats immediately
+    setDisplayedChatsCount(prev => Math.min(prev + 9, filteredChats.length));
+    setIsLoadingMore(false);
   };
 
   /** ========= Row render ========= */
@@ -857,7 +935,7 @@ const ChatsScreen = ({ navigation }: any) => {
             {sportIconFor(item.activityType?.toLowerCase?.(), theme.primary) || <ActivityIcon activity={item.activityType} size={28} color={theme.primary} />}
           </View>
       ) : item.image ? (
-        <Image source={{ uri: item.image }} style={styles.dmAvatar} />
+        <Image source={{ uri: item.image }} style={styles.dmAvatar} cachePolicy="memory-disk" />
       ) : (
         <View style={styles.groupAvatar}>
           <Ionicons name="people" size={28} color={theme.primary} />
@@ -1069,7 +1147,7 @@ const ChatsScreen = ({ navigation }: any) => {
         {/* Body */}
         {showActivity ? (
           <Animated.View style={{ flex: 1, opacity: notifFade.current }}>
-            {notifications.length === 0 ? (
+            {notifications.length === 0 && ratingReminders.length === 0 ? (
               <View style={styles.activityEmpty}>
                 <Ionicons name="notifications-outline" size={46} color={theme.primary} />
                 <Text style={styles.activityEmptyTitle}>No notifications yet</Text>
@@ -1080,6 +1158,59 @@ const ChatsScreen = ({ navigation }: any) => {
                 data={notifications}
                 keyExtractor={(item) => item.id}
                 contentContainerStyle={styles.chatList}
+                ListHeaderComponent={
+                  ratingReminders.length > 0 ? (
+                    <View style={{ marginBottom: 8 }}>
+                      {ratingReminders.map((activity) => (
+                        <View key={`rating_${activity.id}`} style={styles.notificationItem}>
+                          <View style={styles.notificationRow}>
+                            <TouchableOpacity
+                              style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}
+                              activeOpacity={0.8}
+                              onPress={() => {
+                                navigation.navigate('ActivityDetails', { 
+                                  activityId: activity.id,
+                                  fromProfile: true // This enables the rating card to show
+                                });
+                              }}
+                            >
+                              <View style={[styles.ratingReminderIcon]}>
+                                <ActivityIcon activity={activity.activity} size={24} color={theme.primary} />
+                              </View>
+                              <View style={{ flex: 1 }}>
+                                <Text style={styles.notificationText}>Rate your {activity.activity} activity</Text>
+                                <Text style={styles.notificationMeta}>
+                                  {activity.location ? activity.location.split(',')[0] : 'Activity'} • Tap to rate
+                                </Text>
+                              </View>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={styles.dismissReminderBtn}
+                              onPress={() => handleDismissRatingReminder(activity.id)}
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            >
+                              <Ionicons name="close" size={18} color={theme.muted} />
+                            </TouchableOpacity>
+                          </View>
+                          <View style={styles.ratingReminderAction}>
+                            <TouchableOpacity
+                              style={[styles.connectBtn, { paddingHorizontal: 16, borderRadius: 10 }]}
+                              onPress={() => {
+                                navigation.navigate('ActivityDetails', { 
+                                  activityId: activity.id,
+                                  fromProfile: true
+                                });
+                              }}
+                            >
+                              <Ionicons name="star" size={14} color={theme.isDark ? '#111' : '#fff'} style={{ marginRight: 6 }} />
+                              <Text style={styles.connectBtnText}>Rate Now</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      ))}
+                    </View>
+                  ) : null
+                }
                 renderItem={({ item }) => (
                   <Swipeable
                     overshootLeft={false}
@@ -1126,8 +1257,10 @@ const ChatsScreen = ({ navigation }: any) => {
                             }
                           }}
                         >
-                          <Image
-                            source={{ uri: item.fromPhoto || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(item.fromUsername || 'User') }}
+                          <UserAvatar
+                            photoUrl={item.fromPhoto}
+                            username={item.fromUsername || 'User'}
+                            size={48}
                             style={styles.notificationAvatar}
                           />
                           <View style={{ flex: 1 }}>
@@ -1242,12 +1375,11 @@ const ChatsScreen = ({ navigation }: any) => {
             renderItem={renderChatItem}
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.primary} />}
             onEndReached={handleLoadMore}
-            onEndReachedThreshold={0.5}
+            onEndReachedThreshold={0.2}
             ListFooterComponent={
-              isLoadingMore && displayedChatsCount < filteredChats.length ? (
-                <View style={{ paddingVertical: 20, alignItems: 'center' }}>
+              displayedChatsCount < filteredChats.length ? (
+                <View style={{ paddingVertical: 16, alignItems: 'center' }}>
                   <ActivityIndicator size="small" color={theme.primary} />
-                  <Text style={{ color: theme.muted, fontSize: 12, marginTop: 8 }}>Loading more chats...</Text>
                 </View>
               ) : null
             }
@@ -1289,7 +1421,16 @@ const ChatsScreen = ({ navigation }: any) => {
             }}
           />
           <View style={styles.createGroupPanel} pointerEvents="auto">
-            <Text style={styles.createGroupTitle}>Create Group Chat</Text>
+            {/* Header */}
+            <View style={styles.createGroupHeader}>
+              <View style={styles.createGroupHeaderIcon}>
+                <Ionicons name="people" size={26} color={theme.primary} />
+              </View>
+              <View style={styles.createGroupHeaderText}>
+                <Text style={styles.createGroupTitle}>Create Group Chat</Text>
+                <Text style={styles.createGroupSubtitle}>Chat with multiple friends</Text>
+              </View>
+            </View>
 
             {/* Group Photo Picker */}
             <View style={styles.photoPickerSection}>
@@ -1297,8 +1438,12 @@ const ChatsScreen = ({ navigation }: any) => {
                 <TouchableOpacity
                   onPress={handlePickGroupPhoto}
                   disabled={creating}
+                  style={styles.groupPhotoWrapper}
                 >
-                  <Image source={{ uri: groupPhoto as string }} style={styles.groupPhotoPreview} />
+                  <Image source={{ uri: groupPhoto as string }} style={styles.groupPhotoPreview} cachePolicy="memory-disk" />
+                  <View style={styles.photoEditBadge}>
+                    <Ionicons name="pencil" size={12} color="#fff" />
+                  </View>
                 </TouchableOpacity>
               ) : (
                 <TouchableOpacity
@@ -1306,21 +1451,23 @@ const ChatsScreen = ({ navigation }: any) => {
                   disabled={creating}
                 >
                   <View style={styles.groupPhotoPlaceholder}>
-                    <Ionicons name="image-outline" size={44} color={theme.primary} />
+                    <Ionicons name="camera" size={32} color={theme.primary} />
                     <View style={styles.photoPlus}>
-                      <Ionicons name="add" size={16} color={theme.isDark ? '#111' : '#fff'} />
+                      <Ionicons name="add" size={14} color="#fff" />
                     </View>
                   </View>
                 </TouchableOpacity>
               )}
+              <Text style={styles.photoHintText}>Add group photo</Text>
             </View>
 
             {/* Group Title Input */}
+            <Text style={styles.inputLabel}>Group Name</Text>
             <TextInput
               style={styles.groupTitleInput}
               value={groupTitle}
               onChangeText={(t) => setGroupTitle(t.slice(0, 25))}
-              placeholder="Group name"
+              placeholder="Enter group name"
               placeholderTextColor={theme.muted}
               maxLength={25}
               editable={!creating}
@@ -1328,68 +1475,86 @@ const ChatsScreen = ({ navigation }: any) => {
             <Text style={styles.characterCount}>{groupTitle.length}/25</Text>
 
             {/* Members Section */}
-            <Text style={styles.sectionLabel}>Select Members</Text>
+            <Text style={styles.sectionLabel}>
+              Select Members <Text style={styles.sectionLabelHint}>(min. 2)</Text>
+            </Text>
 
             {friends.length === 0 ? (
-              <Text style={styles.emptyText}>You don't have any friends yet. Add friends to create group chats.</Text>
+              <View style={styles.emptyStateContainer}>
+                <Ionicons name="people-outline" size={40} color={theme.muted} />
+                <Text style={styles.emptyText}>You don't have any connections yet</Text>
+                <Text style={styles.emptyHintText}>Add friends to create group chats</Text>
+              </View>
             ) : (
               <FlatList
                 data={friends}
                 keyExtractor={(item) => item.uid}
                 style={styles.friendsList}
-                renderItem={({ item }) => (
-                  <TouchableOpacity
-                    style={styles.friendItem}
-                    onPress={() => { Keyboard.dismiss(); toggleSelectFriend(item.uid); }}
-                    disabled={creating}
-                  >
-                    <Image
-                      source={{ uri: item.photo || `https://ui-avatars.com/api/?name=${encodeURIComponent(item.username)}` }}
-                      style={styles.friendAvatar}
-                    />
-                    <Text style={styles.friendName}>{item.username}</Text>
-                    <Ionicons
-                      name={selected[item.uid] ? 'checkbox' : 'square-outline'}
-                      size={24}
-                      color={selected[item.uid] ? theme.primary : theme.muted}
-                    />
-                  </TouchableOpacity>
-                )}
+                showsVerticalScrollIndicator={false}
+                renderItem={({ item }) => {
+                  const isSelected = selected[item.uid];
+                  return (
+                    <TouchableOpacity
+                      style={[styles.friendItem, isSelected && styles.friendItemSelected]}
+                      onPress={() => { Keyboard.dismiss(); toggleSelectFriend(item.uid); }}
+                      disabled={creating}
+                      activeOpacity={0.7}
+                    >
+                      <UserAvatar
+                        photoUrl={item.photo}
+                        username={item.username}
+                        size={44}
+                        style={styles.friendAvatar}
+                      />
+                      <Text style={styles.friendName}>{item.username}</Text>
+                      <View style={[styles.selectCheckbox, isSelected && styles.selectCheckboxSelected]}>
+                        {isSelected && <Ionicons name="checkmark" size={16} color="#fff" />}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                }}
                 ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
               />
             )}
 
-            {/* Action Buttons */}
-            <View style={styles.modalActions}>
-              <TouchableOpacity
-                onPress={() => {
-                  setCreateModalVisible(false);
-                  setGroupTitle('');
-                  setSelected({});
-                  setGroupPhoto(null);
-                }}
-                style={[styles.modalButton, styles.cancelButton]}
-                disabled={creating}
-              >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
-              </TouchableOpacity>
+            {/* Footer */}
+            <View style={styles.modalFooter}>
+              <Text style={styles.selectedCountText}>
+                {Object.values(selected).filter(Boolean).length} selected
+              </Text>
+              <View style={styles.modalActions}>
+                <TouchableOpacity
+                  onPress={() => {
+                    setCreateModalVisible(false);
+                    setGroupTitle('');
+                    setSelected({});
+                    setGroupPhoto(null);
+                  }}
+                  style={styles.cancelButton}
+                  disabled={creating}
+                >
+                  <Text style={styles.cancelButtonText}>Cancel</Text>
+                </TouchableOpacity>
 
-              <TouchableOpacity
-                onPress={handleCreateGroup}
-                style={[
-                  styles.modalButton,
-                  styles.createButton,
-                  (!groupTitle.trim() || Object.keys(selected).filter(k => selected[k]).length < 2) && styles.createButtonDisabled,
-                  creating && { opacity: 0.5 },
-                ]}
-                disabled={creating || !groupTitle.trim() || Object.keys(selected).filter(k => selected[k]).length < 2}
-              >
-                {creating ? (
-                  <ActivityIndicator size="small" color={theme.isDark ? '#111' : '#fff'} />
-                ) : (
-                  <Text style={styles.createButtonText}>Create</Text>
-                )}
-              </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={handleCreateGroup}
+                  style={[
+                    styles.createButton,
+                    (!groupTitle.trim() || Object.keys(selected).filter(k => selected[k]).length < 2) && styles.createButtonDisabled,
+                    creating && { opacity: 0.5 },
+                  ]}
+                  disabled={creating || !groupTitle.trim() || Object.keys(selected).filter(k => selected[k]).length < 2}
+                >
+                  {creating ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <>
+                      <Ionicons name="people" size={18} color="#fff" />
+                      <Text style={styles.createButtonText}>Create</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
         </View>
@@ -1510,6 +1675,28 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
   unreadBadgeText: { color: '#fff', fontSize: 12, fontWeight: '700' },
   swipeActionRight: { justifyContent: 'center', alignItems: 'flex-end', backgroundColor: t.danger, borderRadius: 12, marginVertical: 5 },
   swipeDeleteBtn: { width: 64, height: '100%', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 8 },
+  // Rating reminder styles
+  ratingReminderIcon: { 
+    width: 40, 
+    height: 40, 
+    borderRadius: 20, 
+    backgroundColor: `${t.primary}20`, 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    marginRight: 12 
+  },
+  dismissReminderBtn: { 
+    padding: 4, 
+    marginLeft: 8 
+  },
+  ratingReminderAction: { 
+    flexDirection: 'row', 
+    justifyContent: 'flex-end', 
+    marginTop: 8, 
+    paddingTop: 8, 
+    borderTopWidth: 1, 
+    borderTopColor: t.border 
+  },
   // Create Group Chat Modal Styles
   modalOverlay: {
     flex: 1,
@@ -1522,51 +1709,97 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
     width: '100%',
     maxWidth: 400,
     backgroundColor: t.card,
-    borderRadius: 16,
+    borderRadius: 20,
     padding: 20,
     borderWidth: 1,
     borderColor: t.border,
-    maxHeight: '80%',
+    maxHeight: '85%',
+  },
+  createGroupHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 20,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: t.border,
+  },
+  createGroupHeaderIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: `${t.primary}20`,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 14,
+  },
+  createGroupHeaderText: {
+    flex: 1,
   },
   createGroupTitle: {
-    fontSize: 24,
-    fontWeight: '900',
-    color: t.primary,
-    marginBottom: 20,
-    textAlign: 'center',
+    fontSize: 20,
+    fontWeight: '800',
+    color: t.text,
+    marginBottom: 2,
+  },
+  createGroupSubtitle: {
+    fontSize: 14,
+    color: t.muted,
   },
   photoPickerSection: {
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 16,
+  },
+  groupPhotoWrapper: {
+    position: 'relative',
   },
   groupPhotoPreview: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    borderWidth: 2,
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    borderWidth: 3,
     borderColor: t.primary,
   },
   groupPhotoPlaceholder: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
+    width: 88,
+    height: 88,
+    borderRadius: 44,
     borderWidth: 2,
-    borderColor: t.primary,
-    backgroundColor: t.card,
+    borderColor: t.border,
+    borderStyle: 'dashed',
+    backgroundColor: `${t.primary}10`,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  photoPickerText: {
+  photoHintText: {
     color: t.muted,
-    fontSize: 12,
-    marginTop: 4,
+    fontSize: 13,
+    marginTop: 8,
+  },
+  photoEditBadge: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: t.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: t.card,
+  },
+  inputLabel: {
+    color: t.primary,
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 8,
   },
   groupTitleInput: {
-    backgroundColor: t.card,
+    backgroundColor: t.background,
     color: t.text,
     borderRadius: 12,
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 14,
     fontSize: 16,
     borderWidth: 1,
     borderColor: t.border,
@@ -1575,93 +1808,140 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
     color: t.muted,
     fontSize: 12,
     textAlign: 'right',
-    marginTop: 4,
+    marginTop: 6,
     marginBottom: 16,
   },
   sectionLabel: {
     color: t.primary,
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '700',
     marginBottom: 12,
   },
+  sectionLabelHint: {
+    color: t.muted,
+    fontWeight: '500',
+  },
+  emptyStateContainer: {
+    alignItems: 'center',
+    paddingVertical: 24,
+  },
   emptyText: {
     color: t.muted,
-    fontSize: 14,
+    fontSize: 15,
     textAlign: 'center',
-    marginVertical: 20,
+    marginTop: 12,
+  },
+  emptyHintText: {
+    color: t.muted,
+    fontSize: 13,
+    textAlign: 'center',
+    marginTop: 4,
+    opacity: 0.7,
   },
   friendsList: {
     maxHeight: 200,
-    marginBottom: 20,
+    marginBottom: 8,
   },
   friendItem: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: 12,
-    backgroundColor: t.card,
+    backgroundColor: t.background,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: t.border,
   },
+  friendItemSelected: {
+    borderColor: t.primary,
+    backgroundColor: `${t.primary}10`,
+  },
   friendAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     marginRight: 12,
-    borderWidth: 1,
+    borderWidth: 2,
     borderColor: t.primary,
   },
   friendName: {
     flex: 1,
     color: t.text,
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '600',
+  },
+  selectCheckbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: t.border,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  selectCheckboxSelected: {
+    backgroundColor: t.primary,
+    borderColor: t.primary,
+  },
+  modalFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: t.border,
+  },
+  selectedCountText: {
+    color: t.muted,
+    fontSize: 14,
+    fontWeight: '500',
   },
   modalActions: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  modalButton: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
+    gap: 10,
   },
   cancelButton: {
-    backgroundColor: t.card,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: t.background,
     borderWidth: 1,
-    borderColor: t.danger,
+    borderColor: t.border,
   },
   cancelButtonText: {
-    color: t.danger,
-    fontSize: 16,
-    fontWeight: '700',
+    color: t.text,
+    fontSize: 15,
+    fontWeight: '600',
   },
   createButton: {
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 10,
     backgroundColor: t.primary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   createButtonText: {
-    color: t.isDark ? '#111' : '#fff',
-    fontSize: 16,
-    fontWeight: '900',
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
   },
   createButtonDisabled: {
     opacity: 0.45,
   },
   photoPlus: {
     position: 'absolute',
-    right: -6,
-    bottom: -6,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    right: -4,
+    bottom: -4,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
     backgroundColor: t.primary,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: t.border,
+    borderWidth: 2,
+    borderColor: t.card,
   },
 });
 

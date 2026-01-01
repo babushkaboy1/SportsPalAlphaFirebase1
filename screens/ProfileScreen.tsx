@@ -4,7 +4,6 @@ import {
   View,
   Text,
   StyleSheet,
-  Image,
   TouchableOpacity,
   ScrollView,
   Platform,
@@ -21,12 +20,15 @@ import {
   Clipboard,
   Linking,
 } from 'react-native';
+import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 // useActivityContext is already imported above in this file; avoid duplicate
 import { ActivityIcon } from '../components/ActivityIcons';
+import { ActivityRatingModal } from '../components/ActivityRatingModal';
 import UserAvatar from '../components/UserAvatar';
 import * as Location from 'expo-location';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -96,7 +98,7 @@ function HostUsername({ activity }: { activity: any }) {
 
 type ProfileStackParamList = {
   ProfileMain: undefined;
-  ActivityDetails: { activityId: string };
+  ActivityDetails: { activityId: string; fromProfile?: boolean };
   UserProfile: { userId: string };
   Settings: undefined;
   CreateProfile: { mode: string; profileData: any };
@@ -139,7 +141,47 @@ const ProfileScreen = () => {
   // Stats modals
   const [favModalVisible, setFavModalVisible] = useState(false);
   const [connectionsModalVisible, setConnectionsModalVisible] = useState(false);
+  const [activitiesModalVisible, setActivitiesModalVisible] = useState(false);
   const [imageViewerVisible, setImageViewerVisible] = useState(false);
+  
+  // Rating modal state (for rating past activities directly from card)
+  const [ratingModalVisible, setRatingModalVisible] = useState(false);
+  const [ratingActivity, setRatingActivity] = useState<any>(null);
+  const [localRatings, setLocalRatings] = useState<Record<string, number>>({});
+
+  // Activities breakdown by sport
+  const activitiesBreakdown = React.useMemo(() => {
+    const breakdown: Record<string, { total: number; upcoming: number; past: number }> = {};
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+
+    myJoinedActivities.forEach((activity) => {
+      const sport = activity.activity || 'Unknown';
+      if (!breakdown[sport]) {
+        breakdown[sport] = { total: 0, upcoming: 0, past: 0 };
+      }
+      breakdown[sport].total++;
+
+      // Check if upcoming or past
+      try {
+        const [dd, mm, yyyy] = (activity.date || '').split('-');
+        const activityDate = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+        activityDate.setHours(0, 0, 0, 0);
+        if (activityDate >= now) {
+          breakdown[sport].upcoming++;
+        } else {
+          breakdown[sport].past++;
+        }
+      } catch {
+        breakdown[sport].past++;
+      }
+    });
+
+    // Convert to sorted array
+    return Object.entries(breakdown)
+      .map(([sport, counts]) => ({ sport, ...counts }))
+      .sort((a, b) => b.total - a.total);
+  }, [myJoinedActivities]);
 
   // Lightweight bottom toast
   const toastAnim = useRef(new Animated.Value(0)).current;
@@ -617,21 +659,34 @@ const ProfileScreen = () => {
       }
       return location;
     };
+    // Check if user has rated this activity (from Firebase or local state)
+    const firebaseRating = item.ratings?.find((r: any) => r.raterId === auth.currentUser?.uid)?.overall;
+    const localRating = localRatings[item.id];
+    const userRating = localRating || firebaseRating;
+    const hasRated = !!userRating;
+    
+    const handleRatePress = (e: any) => {
+      e.stopPropagation();
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      setRatingActivity(item);
+      setRatingModalVisible(true);
+    };
+    
     return (
       <TouchableOpacity
         style={styles.card}
-        onPress={() => navigation.navigate('ActivityDetails', { activityId: item.id })}
+        onPress={() => navigation.navigate('ActivityDetails', { activityId: item.id, fromProfile: true })}
       >
         <View style={styles.cardHeader}>
           <View style={styles.cardHeaderLeft}>
             <ActivityIcon activity={item.activity} size={32} color={theme.primary} />
             <Text style={styles.cardTitle}>{item.activity}</Text>
           </View>
-          {distance && (
-            <View style={styles.distanceContainer}>
-              <Ionicons name="navigate" size={14} color={theme.primary} />
-              <Text style={styles.distanceNumber}>{distance}</Text>
-              <Text style={styles.distanceUnit}>km away</Text>
+          {/* Rating badge in header */}
+          {hasRated && (
+            <View style={styles.ratedBadge}>
+              <Ionicons name="star" size={14} color="#FFD700" />
+              <Text style={styles.ratedBadgeText}>{userRating}</Text>
             </View>
           )}
         </View>
@@ -664,7 +719,35 @@ const ProfileScreen = () => {
             {item.joinedUserIds ? item.joinedUserIds.length : item.joinedCount} / {item.maxParticipants}
           </Text>
         </View>
-        {/* No action buttons for history */}
+        
+        {/* Rating action button (like Join/Leave button in scheduled activities) */}
+        <View style={styles.cardActions}>
+          <TouchableOpacity 
+            style={[
+              styles.rateButton,
+              hasRated && styles.rateButtonRated,
+            ]} 
+            onPress={handleRatePress}
+          >
+            <Ionicons 
+              name={hasRated ? 'eye-outline' : 'star-outline'} 
+              size={18} 
+              color={hasRated ? '#FFD700' : '#fff'} 
+            />
+            <Text style={[
+              styles.rateButtonText,
+              hasRated && styles.rateButtonTextRated,
+            ]}>
+              {hasRated ? `View Rating (${userRating}★)` : 'Rate Activity'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={styles.shareButton} 
+            onPress={() => shareActivity(item.id, item.activity)}
+          >
+            <Ionicons name="share-social-outline" size={20} color={theme.text} />
+          </TouchableOpacity>
+        </View>
       </TouchableOpacity>
     );
   };
@@ -674,14 +757,24 @@ const ProfileScreen = () => {
       case 'activities':
         return (
           <View style={{ flex: 1 }}>
-            <TouchableOpacity activeOpacity={1} onPress={() => Keyboard.dismiss()}>
-              <Text style={styles.tabTitleCentered}>Scheduled Activities</Text>
-            </TouchableOpacity>
-            <View style={styles.userSearchRow}>
-              <Ionicons name="search" size={16} color={theme.primary} style={{ marginRight: 8 }} />
+            <View style={styles.tabHeaderRow}>
+              <View style={styles.tabIconWrap}>
+                <Ionicons name="calendar" size={18} color={theme.primary} />
+              </View>
+              <Text style={styles.tabTitleStyled}>Upcoming</Text>
+              {filteredUpcoming.length > 0 && (
+                <View style={styles.tabBadge}>
+                  <Text style={styles.tabBadgeText}>{filteredUpcoming.length}</Text>
+                </View>
+              )}
+            </View>
+            <View style={styles.styledSearchBar}>
+              <View style={styles.searchIconWrap}>
+                <Ionicons name="search" size={18} color={theme.primary} />
+              </View>
               <TextInput
-                style={[styles.searchInput, { flex: 1 }]}
-                placeholder="Search activity or host..."
+                style={styles.styledSearchInput}
+                placeholder="Search activities..."
                 placeholderTextColor={theme.muted}
                 value={scheduledSearchQuery}
                 onChangeText={setScheduledSearchQuery}
@@ -691,12 +784,12 @@ const ProfileScreen = () => {
               />
               {scheduledSearchQuery.trim().length > 0 && (
                 <TouchableOpacity
-                  style={styles.clearButton}
+                  style={styles.styledClearBtn}
                   onPress={() => setScheduledSearchQuery('')}
                   accessibilityRole="button"
                   accessibilityLabel="Clear search"
                 >
-                  <Ionicons name="close-circle" size={18} color={theme.primary} />
+                  <Ionicons name="close-circle" size={20} color={theme.muted} />
                 </TouchableOpacity>
               )}
             </View>
@@ -737,14 +830,24 @@ const ProfileScreen = () => {
       case 'history':
         return (
           <View style={{ flex: 1 }}>
-            <TouchableOpacity activeOpacity={1} onPress={() => Keyboard.dismiss()}>
-              <Text style={styles.tabTitleCentered}>Activity History</Text>
-            </TouchableOpacity>
-            <View style={styles.userSearchRow}>
-              <Ionicons name="search" size={16} color={theme.primary} style={{ marginRight: 8 }} />
+            <View style={styles.tabHeaderRow}>
+              <View style={styles.tabIconWrap}>
+                <Ionicons name="time" size={18} color={theme.primary} />
+              </View>
+              <Text style={styles.tabTitleStyled}>History</Text>
+              {filteredHistory.length > 0 && (
+                <View style={styles.tabBadge}>
+                  <Text style={styles.tabBadgeText}>{filteredHistory.length}</Text>
+                </View>
+              )}
+            </View>
+            <View style={styles.styledSearchBar}>
+              <View style={styles.searchIconWrap}>
+                <Ionicons name="search" size={18} color={theme.primary} />
+              </View>
               <TextInput
-                style={[styles.searchInput, { flex: 1 }]}
-                placeholder="Search activity or host..."
+                style={styles.styledSearchInput}
+                placeholder="Search past activities..."
                 placeholderTextColor={theme.muted}
                 value={historySearchQuery}
                 onChangeText={setHistorySearchQuery}
@@ -754,12 +857,12 @@ const ProfileScreen = () => {
               />
               {historySearchQuery.trim().length > 0 && (
                 <TouchableOpacity
-                  style={styles.clearButton}
+                  style={styles.styledClearBtn}
                   onPress={() => setHistorySearchQuery('')}
                   accessibilityRole="button"
                   accessibilityLabel="Clear search"
                 >
-                  <Ionicons name="close-circle" size={18} color={theme.primary} />
+                  <Ionicons name="close-circle" size={20} color={theme.muted} />
                 </TouchableOpacity>
               )}
             </View>
@@ -791,15 +894,25 @@ const ProfileScreen = () => {
       case 'friends':
         return (
           <View style={{ flex: 1 }}>
-            <TouchableOpacity activeOpacity={1} onPress={() => Keyboard.dismiss()}>
-              <Text style={styles.tabTitleCentered}>Connections</Text>
-            </TouchableOpacity>
+            <View style={styles.tabHeaderRow}>
+              <View style={styles.tabIconWrap}>
+                <Ionicons name="people" size={18} color={theme.primary} />
+              </View>
+              <Text style={styles.tabTitleStyled}>Connections</Text>
+              {friends.length > 0 && (
+                <View style={styles.tabBadge}>
+                  <Text style={styles.tabBadgeText}>{friends.length}</Text>
+                </View>
+              )}
+            </View>
             {/* Search users (on top) */}
-            <View style={styles.userSearchRow}>
-              <Ionicons name="search" size={16} color={theme.primary} style={{ marginRight: 8 }} />
+            <View style={styles.styledSearchBar}>
+              <View style={styles.searchIconWrap}>
+                <Ionicons name="search" size={18} color={theme.primary} />
+              </View>
               <TextInput
-                style={[styles.searchInput, { flex: 1 }]}
-                placeholder="Search users..."
+                style={styles.styledSearchInput}
+                placeholder="Find people..."
                 placeholderTextColor={theme.muted}
                 value={userSearchQuery}
                 onChangeText={(text) => {
@@ -857,7 +970,7 @@ const ProfileScreen = () => {
               />
               {userSearchQuery.trim().length > 0 && (
                 <TouchableOpacity
-                  style={styles.clearButton}
+                  style={styles.styledClearBtn}
                   onPress={() => {
                     setUserSearchQuery('');
                     setUserResults([]);
@@ -866,7 +979,7 @@ const ProfileScreen = () => {
                   accessibilityRole="button"
                   accessibilityLabel="Clear search"
                 >
-                  <Ionicons name="close-circle" size={18} color={theme.primary} />
+                  <Ionicons name="close-circle" size={20} color={theme.muted} />
                 </TouchableOpacity>
               )}
             </View>
@@ -876,12 +989,12 @@ const ProfileScreen = () => {
                 <Text style={styles.mutedText}>No connections yet.</Text>
               ) : (
                 <FlatList
-                  data={friends.slice(0, displayedConnectionsCount)}
-                  keyExtractor={(item) => item.uid}
-                  contentContainerStyle={{ paddingVertical: 6, paddingBottom: Math.max(insets.bottom, 16) }}
-                  onEndReached={displayedConnectionsCount < friends.length ? handleLoadMoreConnections : null}
-                  onEndReachedThreshold={0.5}
-                  ListFooterComponent={
+                    data={friends.slice(0, displayedConnectionsCount)}
+                    keyExtractor={(item) => item.uid}
+                    contentContainerStyle={{ paddingVertical: 6, paddingBottom: Math.max(insets.bottom, 16) }}
+                    onEndReached={displayedConnectionsCount < friends.length ? handleLoadMoreConnections : null}
+                    onEndReachedThreshold={0.5}
+                    ListFooterComponent={
                     isLoadingMoreConnections ? (
                       <View style={{ paddingVertical: 20, alignItems: 'center' }}>
                         <ActivityIndicator size="small" color={theme.primary} />
@@ -891,18 +1004,22 @@ const ProfileScreen = () => {
                   renderItem={({ item }) => (
                     <View style={styles.friendRow}>
                       <TouchableOpacity
-                        style={{ flexDirection: 'row', alignItems: 'center', flex: 1, minWidth: 0 }}
+                        style={styles.friendTouchable}
                         activeOpacity={0.8}
                         onPress={() => navigation.navigate('UserProfile', { userId: item.uid })}
                       >
                         <UserAvatar
                           photoUrl={item.photo}
                           username={item.username}
-                          size={44}
-                          style={styles.userAvatar}
+                          size={48}
+                          style={styles.friendAvatar}
                         />
                         <View style={{ flex: 1, minWidth: 0 }}>
                           <Text style={styles.friendName} numberOfLines={1} ellipsizeMode="tail">{item.username}</Text>
+                          <View style={styles.friendStatusRow}>
+                            <Ionicons name="checkmark-circle" size={12} color={theme.primary} />
+                            <Text style={styles.friendStatusText}>Connected</Text>
+                          </View>
                         </View>
                       </TouchableOpacity>
                       <View style={styles.friendActions}>
@@ -922,7 +1039,6 @@ const ProfileScreen = () => {
                           }}
                         >
                           <Ionicons name="chatbubble-ellipses-outline" size={18} color={theme.primary} />
-                          <Text style={styles.msgBtnText}>Message</Text>
                         </TouchableOpacity>
                       </View>
                     </View>
@@ -933,9 +1049,9 @@ const ProfileScreen = () => {
             {userSearchQuery.trim().length === 0 && friends.length === 0 ? (
               <TouchableOpacity activeOpacity={1} onPress={() => Keyboard.dismiss()} style={styles.emptyState}>
                 <Ionicons name="people-outline" size={48} color={theme.primary} />
-                <Text style={styles.emptyStateTitle}>Create connections</Text>
+                <Text style={styles.emptyStateTitle}>Build Your Network</Text>
                 <Text style={styles.emptyStateText}>
-                  Search by username to discover people. Start typing a name.
+                  Search for friends by username to connect with people.
                 </Text>
               </TouchableOpacity>
             ) : userSearchQuery.trim().length > 0 && userSearching ? (
@@ -945,102 +1061,102 @@ const ProfileScreen = () => {
               </View>
             ) : userSearchQuery.trim().length > 0 && userResults.length === 0 ? (
               <TouchableOpacity activeOpacity={1} onPress={() => Keyboard.dismiss()} style={styles.emptyState}>
-                <Ionicons name="person-circle-outline" size={48} color={theme.primary} />
-                <Text style={styles.emptyStateTitle}>No matches yet</Text>
-                <Text style={styles.emptyStateText}>Try a different spelling.</Text>
+                <Ionicons name="search-outline" size={48} color={theme.muted} />
+                <Text style={styles.emptyStateTitle}>No users found</Text>
+                <Text style={styles.emptyStateText}>Try a different username.</Text>
               </TouchableOpacity>
             ) : userSearchQuery.trim().length > 0 ? (
               <FlatList
-                data={userResults}
-                keyExtractor={(item) => item.uid}
-                contentContainerStyle={{ paddingVertical: 6, paddingBottom: Math.max(insets.bottom, 16) }}
-                keyboardShouldPersistTaps="always"
-                keyboardDismissMode="on-drag"
-                bounces={false}
-                overScrollMode={Platform.OS === 'android' ? 'never' : undefined}
-                renderItem={({ item }) => {
-                  const isFriend = myFriendIds.includes(item.uid);
-                  const isRequested = myRequestsSent.includes(item.uid);
-                  return (
-                    <View style={[styles.userRow, { alignItems: 'center' }]}>
-                      <TouchableOpacity
-                        style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}
-                        activeOpacity={0.8}
-                        onPress={() => {
-                          Keyboard.dismiss();
-                          navigation.navigate('UserProfile', { userId: item.uid });
-                        }}
-                      >
-                        <UserAvatar
-                          photoUrl={item.photo}
-                          username={item.username}
-                          size={44}
-                          style={styles.userAvatar}
-                        />
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.userName}>{item.username}</Text>
-                        </View>
-                      </TouchableOpacity>
-                      {isFriend ? (
+                  data={userResults}
+                  keyExtractor={(item) => item.uid}
+                  contentContainerStyle={{ paddingVertical: 6, paddingBottom: Math.max(insets.bottom, 16) }}
+                  keyboardShouldPersistTaps="always"
+                  keyboardDismissMode="on-drag"
+                  bounces={false}
+                  overScrollMode={Platform.OS === 'android' ? 'never' : undefined}
+                  renderItem={({ item }) => {
+                    const isFriend = myFriendIds.includes(item.uid);
+                    const isRequested = myRequestsSent.includes(item.uid);
+                    return (
+                      <View style={styles.searchResultRow}>
                         <TouchableOpacity
-                          style={styles.msgBtnFilled}
-                          activeOpacity={0.85}
-                          onPress={() => {/* Optional: could open profile or show menu */}}
+                          style={styles.searchResultTouchable}
+                          activeOpacity={0.8}
+                          onPress={() => {
+                            Keyboard.dismiss();
+                            navigation.navigate('UserProfile', { userId: item.uid });
+                          }}
                         >
-                          <Ionicons name={'checkmark-done-outline'} size={18} color={'#fff'} style={{ marginRight: 4 }} />
-                          <Text style={styles.msgBtnTextInverted}>Connected</Text>
+                          <UserAvatar
+                            photoUrl={item.photo}
+                            username={item.username}
+                            size={48}
+                            style={styles.searchResultAvatar}
+                          />
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.searchResultName}>{item.username}</Text>
+                            {isFriend && (
+                              <View style={styles.friendStatusRow}>
+                                <Ionicons name="checkmark-circle" size={12} color={theme.primary} />
+                                <Text style={styles.friendStatusText}>Already connected</Text>
+                              </View>
+                            )}
+                          </View>
                         </TouchableOpacity>
-                      ) : isRequested ? (
+                        {isFriend ? (
+                          <TouchableOpacity
+                            style={styles.connectedBadgeBtn}
+                            activeOpacity={0.85}
+                            onPress={() => navigation.navigate('UserProfile', { userId: item.uid })}
+                          >
+                            <Ionicons name={'checkmark-done'} size={16} color={'#fff'} />
+                          </TouchableOpacity>
+                        ) : isRequested ? (
+                          <TouchableOpacity
+                            style={styles.requestSentBtn}
+                            activeOpacity={0.85}
+                            onPress={async () => {
+                              setMyRequestsSent((prev) => prev.filter((id) => id !== item.uid));
+                              try {
+                                await cancelFriendRequest(item.uid);
+                              } catch (e) {}
+                            }}
+                          >
+                            <Ionicons name={'time-outline'} size={16} color={theme.primary} />
+                            <Text style={styles.requestSentBtnText}>Pending</Text>
+                          </TouchableOpacity>
+                        ) : (
+                          <TouchableOpacity
+                            style={styles.addFriendBtn}
+                            activeOpacity={0.85}
+                            onPress={async () => {
+                              setMyRequestsSent((prev) => (prev.includes(item.uid) ? prev : [...prev, item.uid]));
+                              try {
+                                await sendFriendRequest(item.uid);
+                              } catch (e) {
+                                setMyRequestsSent((prev) => prev.filter((id) => id !== item.uid));
+                              }
+                            }}
+                          >
+                            <Ionicons name="person-add" size={16} color="#fff" />
+                            <Text style={styles.addFriendBtnText}>Add</Text>
+                          </TouchableOpacity>
+                        )}
                         <TouchableOpacity
-                          style={styles.msgBtnFilled}
-                          activeOpacity={0.85}
+                          style={styles.messageIconBtn}
                           onPress={async () => {
-                            // Optimistically revert to "Add Friend"
-                            setMyRequestsSent((prev) => prev.filter((id) => id !== item.uid));
                             try {
-                              await cancelFriendRequest(item.uid);
+                              const chatId = await ensureDmChat(item.uid);
+                              navigation.navigate('ChatDetail' as any, { chatId });
                             } catch (e) {}
                           }}
                         >
-                          <Ionicons name={'person-add-outline'} size={18} color={'#fff'} style={{ marginRight: 4 }} />
-                          <Text style={styles.msgBtnTextInverted}>Request Sent</Text>
+                          <Ionicons name="chatbubble-ellipses-outline" size={18} color={theme.primary} />
                         </TouchableOpacity>
-                      ) : (
-                        <TouchableOpacity
-                          style={styles.msgBtn}
-                          activeOpacity={0.85}
-                          onPress={async () => {
-                            // Optimistically mark as requested
-                            setMyRequestsSent((prev) => (prev.includes(item.uid) ? prev : [...prev, item.uid]));
-                            try {
-                              await sendFriendRequest(item.uid);
-                            } catch (e) {
-                              // Rollback if failed
-                              setMyRequestsSent((prev) => prev.filter((id) => id !== item.uid));
-                            }
-                          }}
-                        >
-                          <Ionicons name="person-add-outline" size={18} color={theme.primary} style={{ marginRight: 4 }} />
-                          <Text style={styles.msgBtnText}>Add Friend</Text>
-                        </TouchableOpacity>
-                      )}
-                      {/* Message button remains as-is */}
-                      <TouchableOpacity
-                        style={[styles.msgBtn, { marginLeft: 8 }]}
-                        onPress={async () => {
-                          try {
-                            const chatId = await ensureDmChat(item.uid);
-                            navigation.navigate('ChatDetail' as any, { chatId });
-                          } catch (e) {}
-                        }}
-                      >
-                        <Ionicons name="chatbubble-ellipses-outline" size={18} color={theme.primary} />
-                        <Text style={styles.msgBtnText}>Message</Text>
-                      </TouchableOpacity>
-                    </View>
-                  );
-                }}
-              />
+                      </View>
+                    );
+                  }}
+                />
             ) : null}
             {/* Invite modal */}
             <Modal
@@ -1050,56 +1166,108 @@ const ProfileScreen = () => {
               onRequestClose={() => setInviteModalVisible(false)}
             >
               <Pressable style={styles.modalOverlay} onPress={() => setInviteModalVisible(false)}>
-                <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
-                  <Text style={styles.modalTitle}>Invite {inviteTargetUser?.username || 'user'}</Text>
+                <Pressable style={styles.inviteModalCard} onPress={(e) => e.stopPropagation()}>
+                  {/* Header */}
+                  <View style={styles.inviteModalHeader}>
+                    <View style={styles.inviteModalIconWrap}>
+                      <Ionicons name="paper-plane" size={24} color={theme.primary} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.inviteModalTitle}>Invite {inviteTargetUser?.username || 'User'}</Text>
+                      <Text style={styles.inviteModalSubtitle}>Select activities to invite them to</Text>
+                    </View>
+                    <TouchableOpacity 
+                      style={styles.inviteModalCloseBtn} 
+                      onPress={() => setInviteModalVisible(false)}
+                    >
+                      <Ionicons name="close" size={20} color={theme.muted} />
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* Activity List */}
                   {myJoinedActivitiesUpcoming.length === 0 ? (
-                    <Text style={styles.modalEmpty}>You haven't joined any upcoming activities.</Text>
+                    <View style={styles.inviteEmptyState}>
+                      <Ionicons name="calendar-outline" size={48} color={theme.muted} style={{ marginBottom: 12 }} />
+                      <Text style={styles.inviteEmptyTitle}>No upcoming activities</Text>
+                      <Text style={styles.inviteEmptyText}>
+                        Join or create activities to invite your connections.
+                      </Text>
+                    </View>
                   ) : (
                     <FlatList
                       data={myJoinedActivitiesUpcoming}
                       keyExtractor={(a) => a.id}
+                      style={styles.inviteActivityList}
+                      showsVerticalScrollIndicator={false}
+                      ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
                       renderItem={({ item }) => {
                         const targetAlreadyJoined = !!(inviteTargetUser && Array.isArray(item?.joinedUserIds) && item.joinedUserIds.includes(inviteTargetUser.uid));
+                        const isSelected = inviteSelection[item.id];
                         return (
-                        <Pressable
-                          style={[styles.activityPickRow, targetAlreadyJoined && { opacity: 0.45 }]}
-                          onPress={() => {
-                            if (targetAlreadyJoined) {
-                              showToast(`${inviteTargetUser?.username || 'User'} is already in this activity`);
-                              return;
-                            }
-                            toggleSelectInvite(item.id);
-                          }}
-                        >
-                          <View style={styles.activityPickLeft}>
-                            <ActivityIcon activity={item.activity} size={22} color={theme.primary} />
-                            <View>
-                              <Text style={styles.activityPickTitle} numberOfLines={1}>{item.activity}</Text>
-                              <Text style={styles.activityPickMeta}>{item.date} • {item.time}</Text>
+                          <TouchableOpacity
+                            style={[
+                              styles.inviteActivityRow, 
+                              targetAlreadyJoined && styles.inviteActivityRowJoined,
+                              isSelected && !targetAlreadyJoined && styles.inviteActivityRowSelected
+                            ]}
+                            activeOpacity={targetAlreadyJoined ? 1 : 0.7}
+                            onPress={() => {
+                              if (targetAlreadyJoined) {
+                                showToast(`${inviteTargetUser?.username || 'User'} already joined`);
+                                return;
+                              }
+                              toggleSelectInvite(item.id);
+                            }}
+                          >
+                            <View style={styles.inviteActivityIcon}>
+                              <ActivityIcon activity={item.activity} size={28} color={theme.primary} />
                             </View>
-                          </View>
-                          {targetAlreadyJoined ? (
-                            <Text style={styles.joinedBadge}>Joined</Text>
-                          ) : (
-                            <Ionicons
-                              name={inviteSelection[item.id] ? 'checkbox' : 'square-outline'}
-                              size={22}
-                              color={inviteSelection[item.id] ? theme.primary : theme.muted}
-                            />
-                          )}
-                        </Pressable>
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.inviteActivityTitle} numberOfLines={1}>{item.activity}</Text>
+                              <Text style={styles.inviteActivityMeta}>
+                                <Ionicons name="calendar-outline" size={11} color={theme.muted} /> {item.date}  •  <Ionicons name="time-outline" size={11} color={theme.muted} /> {item.time}
+                              </Text>
+                              <Text style={styles.inviteActivityParticipants}>
+                                <Ionicons name="people-outline" size={11} color={theme.muted} /> {item.joinedUserIds?.length || 0}/{item.maxParticipants} joined
+                              </Text>
+                            </View>
+                            {targetAlreadyJoined ? (
+                              <View style={styles.inviteAlreadyJoinedBadge}>
+                                <Ionicons name="checkmark-circle" size={14} color="#10b981" />
+                                <Text style={styles.inviteAlreadyJoinedText}>Joined</Text>
+                              </View>
+                            ) : (
+                              <View style={[styles.inviteCheckbox, isSelected && styles.inviteCheckboxSelected]}>
+                                {isSelected && <Ionicons name="checkmark" size={16} color="#fff" />}
+                              </View>
+                            )}
+                          </TouchableOpacity>
                         );
                       }}
-                      ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
-                      style={{ maxHeight: 280, marginVertical: 8 }}
                     />
                   )}
-                  <View style={styles.modalActions}>
-                    <TouchableOpacity style={[styles.modalBtn, styles.modalBtnCancel]} onPress={() => setInviteModalVisible(false)}>
-                      <Text style={styles.modalBtnTextCancel}>Cancel</Text>
+
+                  {/* Footer */}
+                  <View style={styles.inviteModalFooter}>
+                    <TouchableOpacity 
+                      style={styles.inviteModalCancelBtn} 
+                      onPress={() => setInviteModalVisible(false)}
+                    >
+                      <Text style={styles.inviteModalCancelText}>Cancel</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity style={[styles.modalBtn, styles.modalBtnPrimary]} onPress={confirmSendInvites}>
-                      <Text style={styles.modalBtnTextPrimary}>Send</Text>
+                    <TouchableOpacity 
+                      style={[
+                        styles.inviteModalSendBtn,
+                        Object.values(inviteSelection).filter(Boolean).length === 0 && styles.inviteModalSendBtnDisabled
+                      ]} 
+                      onPress={confirmSendInvites}
+                    >
+                      <Ionicons name="paper-plane" size={16} color="#fff" />
+                      <Text style={styles.inviteModalSendText}>
+                        {Object.values(inviteSelection).filter(Boolean).length > 0
+                          ? `Send (${Object.values(inviteSelection).filter(Boolean).length})`
+                          : 'Send Invites'}
+                      </Text>
                     </TouchableOpacity>
                   </View>
                 </Pressable>
@@ -1156,162 +1324,154 @@ const ProfileScreen = () => {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}> 
       <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
-        <View style={styles.headerRow}>
-        <Text style={styles.profileNameHeader}>{profile?.username || 'Username'}</Text>
-        <TouchableOpacity
-          style={styles.settingsButton}
-          onPress={() => navigation.navigate('Settings')} // Navigate to SettingsScreen
-        >
-          <Ionicons name="settings-outline" size={28} color={theme.text} />
-        </TouchableOpacity>
-      </View>
+        {/* ===== COMPACT PROFILE HEADER ===== */}
+        {/* Username Header Row */}
+        <View style={styles.usernameHeaderRow}>
+          <Text style={styles.usernameTitle}>{profile?.username || 'Username'}</Text>
+          <TouchableOpacity
+            style={styles.settingsIconBtn}
+            onPress={() => navigation.navigate('Settings')}
+          >
+            <Ionicons name="settings-outline" size={24} color={theme.primary} />
+          </TouchableOpacity>
+        </View>
 
-      <View style={styles.profileInfo}>
-        <View style={styles.profileLeftColumn}>
+        {/* Profile Info Row: Avatar + Stats + Bio */}
+        <View style={styles.profileCompactRow}>
+          {/* Left: Avatar */}
           <TouchableOpacity 
-            activeOpacity={0.8} 
+            activeOpacity={0.85} 
             onPress={() => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
               setImageViewerVisible(true);
             }}
           >
-            <UserAvatar
-              photoUrl={profile?.photo}
-              username={profile?.username}
-              size={100}
-              style={styles.profileImage}
-            />
-          </TouchableOpacity>
-        </View>
-        {/* Stats next to avatar */}
-        <View style={styles.statsColumn}>
-          <View style={styles.statsRow}>
-            <TouchableOpacity style={styles.statBlock} activeOpacity={0.8} onPress={() => setConnectionsModalVisible(true)}>
-              <View style={styles.statNumberWrap}><Text style={styles.statNumber}>{friends.length}</Text></View>
-              <Text style={styles.statLabel}>Connections</Text>
-              {/* spacer to match two-line labels on other stats */}
-              <Text style={[styles.statLabel, { opacity: 0 }]}>_</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.statBlock} activeOpacity={0.8} onPress={() => setFavModalVisible(true)}>
-              <View style={styles.statNumberWrap}><Text style={styles.statNumber}>{(contextProfile?.sportsPreferences || contextProfile?.selectedSports || []).length}</Text></View>
-              <Text style={styles.statLabel}>Favourite{((contextProfile?.sportsPreferences || contextProfile?.selectedSports || []).length === 1) ? '' : 's'}</Text>
-              <Text style={[styles.statLabel, { marginTop: -2 }]}>Sports</Text>
-            </TouchableOpacity>
-            <View style={styles.statBlock}>
-              <View style={styles.statNumberWrap}><Text style={styles.statNumber}>{myJoinedActivities.length}</Text></View>
-              <Text style={styles.statLabel}>Joined</Text>
-              <Text style={[styles.statLabel, { marginTop: -2 }]}>Activities</Text>
+            <View style={[styles.avatarRingCompact, styles.avatarShadow]}>
+              <UserAvatar
+                photoUrl={profile?.photo}
+                username={profile?.username}
+                size={80}
+                style={styles.profileAvatarCompact}
+              />
             </View>
+          </TouchableOpacity>
+
+          {/* Right: Stats */}
+          <View style={styles.statsCompactContainer}>
+            <TouchableOpacity style={styles.statCompactItem} activeOpacity={0.7} onPress={() => setConnectionsModalVisible(true)}>
+              <Text style={styles.statCompactValue}>{friends.length}</Text>
+              <Text style={styles.statCompactLabel}>Connections</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.statCompactItem} activeOpacity={0.7} onPress={() => setFavModalVisible(true)}>
+              <Text style={styles.statCompactValue}>{(contextProfile?.sportsPreferences || contextProfile?.selectedSports || []).length}</Text>
+              <Text style={styles.statCompactLabel}>Sports</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.statCompactItem} activeOpacity={0.7} onPress={() => setActivitiesModalVisible(true)}>
+              <Text style={styles.statCompactValue}>{myJoinedActivities.length}</Text>
+              <Text style={styles.statCompactLabel}>Activities</Text>
+            </TouchableOpacity>
           </View>
         </View>
-      </View>
 
-      {/* Bio and Social Media Row - Above Action Buttons */}
-      {(profile?.bio || profile?.socials?.instagram || profile?.socials?.facebook) ? (
-        <View style={styles.bioSocialRow}>
-          {/* Bio Section - Left Side (to center) */}
-            <View style={styles.bioSectionHorizontal}>
-              {profile?.bio ? (
-                <Text style={styles.bioText} numberOfLines={2} ellipsizeMode="tail">
-                  {profile.bio}
-                </Text>
-              ) : null}
-            </View>
-
-            {/* Social Media Icons - Right Side (from center) */}
+        {/* Bio + Social Row */}
+        {(profile?.bio || profile?.socials?.instagram || profile?.socials?.facebook) ? (
+          <View style={styles.bioSocialCompactRow}>
+            {profile?.bio ? (
+              <Text style={styles.bioCompactText}>
+                {profile.bio}
+              </Text>
+            ) : null}
             {(profile?.socials?.instagram || profile?.socials?.facebook) ? (
-            <View style={styles.socialSectionHorizontal}>
-              {profile.socials.instagram ? (
-                <TouchableOpacity 
-                  style={styles.socialIconButton} 
-                  onPress={() => {
-                    const value = profile.socials.instagram;
-                    const isLink = value.startsWith('http://') || value.startsWith('https://');
-                    
-                    if (isLink) {
-                      Linking.openURL(value).catch(() => {
-                        Alert.alert('Error', 'Could not open link');
-                      });
-                    } else {
-                      Alert.alert(
-                        'Instagram',
-                        value,
-                        [
-                          { text: 'Copy', onPress: () => {
-                            Clipboard.setString(value);
-                            Alert.alert('Copied', 'Instagram handle copied to clipboard');
-                          }},
+              <View style={styles.socialCompactRow}>
+                {profile.socials.instagram ? (
+                  <TouchableOpacity 
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      const value = profile.socials.instagram;
+                      const isLink = value.startsWith('http://') || value.startsWith('https://');
+                      if (isLink) {
+                        Linking.openURL(value).catch(() => Alert.alert('Error', 'Could not open link'));
+                      } else {
+                        Alert.alert('Instagram', value, [
+                          { text: 'Copy', onPress: () => { Clipboard.setString(value); showToast('Copied'); }},
                           { text: 'Cancel', style: 'cancel' }
-                        ]
-                      );
-                    }
-                  }}
-                >
-                  <Ionicons name="logo-instagram" size={26} color={theme.primary} />
-                </TouchableOpacity>
-              ) : null}
-              {profile.socials.facebook ? (
-                <TouchableOpacity 
-                  style={styles.socialIconButton} 
-                  onPress={() => {
-                    const value = profile.socials.facebook;
-                    const isLink = value.startsWith('http://') || value.startsWith('https://');
-                    
-                    if (isLink) {
-                      Linking.openURL(value).catch(() => {
-                        Alert.alert('Error', 'Could not open link');
-                      });
-                    } else {
-                      Alert.alert(
-                        'Facebook',
-                        value,
-                        [
-                          { text: 'Copy', onPress: () => {
-                            Clipboard.setString(value);
-                            Alert.alert('Copied', 'Facebook handle copied to clipboard');
-                          }},
+                        ]);
+                      }
+                    }}
+                  >
+                    <LinearGradient
+                      colors={['#F58529', '#DD2A7B', '#8134AF', '#515BD4']}
+                      start={{ x: 0, y: 1 }}
+                      end={{ x: 1, y: 0 }}
+                      style={styles.instagramGradientBtn}
+                    >
+                      <Ionicons name="logo-instagram" size={20} color="#fff" />
+                    </LinearGradient>
+                  </TouchableOpacity>
+                ) : null}
+                {profile.socials.facebook ? (
+                  <TouchableOpacity 
+                    style={styles.facebookBtn}
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      const value = profile.socials.facebook;
+                      const isLink = value.startsWith('http://') || value.startsWith('https://');
+                      if (isLink) {
+                        Linking.openURL(value).catch(() => Alert.alert('Error', 'Could not open link'));
+                      } else {
+                        Alert.alert('Facebook', value, [
+                          { text: 'Copy', onPress: () => { Clipboard.setString(value); showToast('Copied'); }},
                           { text: 'Cancel', style: 'cancel' }
-                        ]
-                      );
-                    }
-                  }}
-                >
-                  <Ionicons name="logo-facebook" size={26} color={theme.primary} />
-                </TouchableOpacity>
-              ) : null}
-            </View>
-          ) : null}
-        </View>
-      ) : null}
+                        ]);
+                      }
+                    }}
+                  >
+                    <Ionicons name="logo-facebook" size={20} color="#fff" />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            ) : null}
+          </View>
+        ) : null}
 
-      {!userId || userId === auth.currentUser?.uid ? (
-        <View style={styles.profileActionsRow}>
-          <TouchableOpacity
-            style={styles.profileActionButton}
-            onPress={() => navigation.navigate('CreateProfile', { mode: 'edit', profileData: profile })}
-          >
-            <Ionicons name="create-outline" size={18} color={theme.primary} style={{ marginRight: 6 }} />
-            <Text style={styles.profileActionText}>Edit Profile</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.profileActionButton} onPress={() => navigation.navigate('SportsPalPass' as never)}>
-            <Ionicons name="wallet-outline" size={18} color={theme.primary} style={{ marginRight: 6 }} />
-            <Text style={styles.profileActionText}>SportsPal Pass</Text>
-          </TouchableOpacity>
-        </View>
-      ) : null}
+        {/* Action Buttons */}
+        {(!userId || userId === auth.currentUser?.uid) ? (
+          <View style={styles.actionCompactRow}>
+            <TouchableOpacity
+              style={styles.actionCompactBtnPrimary}
+              onPress={() => navigation.navigate('CreateProfile', { mode: 'edit', profileData: profile })}
+            >
+              <Ionicons name="pencil" size={16} color="#fff" />
+              <Text style={styles.actionCompactBtnPrimaryText}>Edit Profile</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={styles.actionCompactBtnSecondary} 
+              onPress={() => navigation.navigate('SportsPalPass' as never)}
+            >
+              <Ionicons name="wallet" size={16} color={theme.primary} />
+              <Text style={styles.actionCompactBtnSecondaryText}>Pass</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={styles.actionCompactBtnIcon} 
+              onPress={() => shareProfile(auth.currentUser?.uid || '', profile?.username || 'User')}
+            >
+              <Ionicons name="share-outline" size={18} color={theme.primary} />
+            </TouchableOpacity>
+          </View>
+        ) : null}
 
-      {userId && userId !== auth.currentUser?.uid && (
-        <View style={styles.profileActionsRow}>
-          <TouchableOpacity style={styles.profileActionButton} onPress={() => {/* Add friend logic */}}>
-            <Ionicons name="person-add-outline" size={18} color={theme.primary} style={{ marginRight: 6 }} />
-            <Text style={styles.profileActionText}>Add Friend</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.profileActionButton} onPress={() => {/* Message logic */}}>
-            <Ionicons name="chatbubble-ellipses-outline" size={18} color={theme.primary} style={{ marginRight: 6 }} />
-            <Text style={styles.profileActionText}>Message</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+        {userId && userId !== auth.currentUser?.uid && (
+          <View style={styles.actionCompactRow}>
+            <TouchableOpacity style={styles.actionCompactBtnPrimary} onPress={() => {/* Add friend logic */}}>
+              <Ionicons name="person-add" size={16} color="#fff" />
+              <Text style={styles.actionCompactBtnPrimaryText}>Connect</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.actionCompactBtnSecondary} onPress={() => {/* Message logic */}}>
+              <Ionicons name="chatbubble" size={16} color={theme.primary} />
+              <Text style={styles.actionCompactBtnSecondaryText}>Message</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
       <View style={styles.tabBar}>
         {tabs.map((tab, index) => (
@@ -1351,32 +1511,64 @@ const ProfileScreen = () => {
         transparent
         onRequestClose={() => setFavModalVisible(false)}
       >
-        <Pressable style={styles.modalOverlay} onPress={() => setFavModalVisible(false)}>
-          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={{ color: theme.primary, fontWeight: 'bold', fontSize: 18 }}>Favourite Sports</Text>
+        <View style={styles.modalOverlay}>
+          <Pressable
+            style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }}
+            onPress={() => setFavModalVisible(false)}
+          />
+          <View style={[styles.modalCard, { maxHeight: '70%' }]}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <View>
+                <Text style={{ color: theme.primary, fontWeight: 'bold', fontSize: 18 }}>Favourite Sports</Text>
+                <Text style={{ color: theme.muted, fontSize: 13, marginTop: 2 }}>
+                  {((contextProfile?.sportsPreferences || contextProfile?.selectedSports || []) as string[]).length} sport{((contextProfile?.sportsPreferences || contextProfile?.selectedSports || []) as string[]).length === 1 ? '' : 's'} selected
+                </Text>
+              </View>
               <TouchableOpacity onPress={() => setFavModalVisible(false)} style={{ backgroundColor: theme.danger, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 }}>
                 <Text style={{ color: '#fff', fontWeight: '700' }}>Close</Text>
               </TouchableOpacity>
             </View>
-            <View style={{ height: 10 }} />
             {((contextProfile?.sportsPreferences || contextProfile?.selectedSports || []) as string[]).length === 0 ? (
-              <Text style={{ color: theme.muted }}>No favourites yet.</Text>
+              <View style={{ alignItems: 'center', paddingVertical: 30 }}>
+                <Ionicons name="heart-outline" size={48} color={theme.muted} />
+                <Text style={{ color: theme.muted, marginTop: 12, textAlign: 'center' }}>No favourite sports yet.</Text>
+              </View>
             ) : (
-              <FlatList
-                data={[...(((contextProfile?.sportsPreferences || contextProfile?.selectedSports || []) as string[]))].sort((a, b) => a.localeCompare(b))}
-                keyExtractor={(s, i) => s + i}
-                ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
-                renderItem={({ item }) => (
-                  <View style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }}>
-                    <ActivityIcon activity={item} size={22} color={theme.primary} />
-                    <Text style={{ color: theme.text, marginLeft: 10, fontWeight: '600' }}>{item}</Text>
+              <ScrollView
+                style={{ maxHeight: 400 }}
+                contentContainerStyle={{ paddingBottom: 12 }}
+                showsVerticalScrollIndicator={true}
+              >
+                {[...(((contextProfile?.sportsPreferences || contextProfile?.selectedSports || []) as string[]))].sort((a, b) => a.localeCompare(b)).map((item, index) => (
+                  <View key={item + index} style={{ 
+                    flexDirection: 'row', 
+                    alignItems: 'center', 
+                    backgroundColor: theme.card,
+                    padding: 14,
+                    borderRadius: 14,
+                    borderLeftWidth: 4,
+                    borderLeftColor: theme.primary,
+                    marginBottom: 10,
+                  }}>
+                    <View style={{
+                      width: 44,
+                      height: 44,
+                      borderRadius: 22,
+                      backgroundColor: `${theme.primary}15`,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      marginRight: 12,
+                    }}>
+                      <ActivityIcon activity={item} size={26} color={theme.primary} />
+                    </View>
+                    <Text style={{ color: theme.text, fontWeight: '700', fontSize: 15, flex: 1 }}>{item}</Text>
+                    <Ionicons name="heart" size={20} color={theme.primary} />
                   </View>
-                )}
-              />
+                ))}
+              </ScrollView>
             )}
-          </Pressable>
-        </Pressable>
+          </View>
+        </View>
       </Modal>
 
       {/* Connections modal */}
@@ -1386,25 +1578,45 @@ const ProfileScreen = () => {
         transparent
         onRequestClose={() => setConnectionsModalVisible(false)}
       >
-        <Pressable style={styles.modalOverlay} onPress={() => setConnectionsModalVisible(false)}>
-          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={{ color: theme.primary, fontWeight: 'bold', fontSize: 18 }}>Connections</Text>
+        <View style={styles.modalOverlay}>
+          <Pressable
+            style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }}
+            onPress={() => setConnectionsModalVisible(false)}
+          />
+          <View style={[styles.modalCard, { maxHeight: '70%' }]}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <View>
+                <Text style={{ color: theme.primary, fontWeight: 'bold', fontSize: 18 }}>Connections</Text>
+                <Text style={{ color: theme.muted, fontSize: 13, marginTop: 2 }}>
+                  {friends.length} connection{friends.length === 1 ? '' : 's'}
+                </Text>
+              </View>
               <TouchableOpacity onPress={() => setConnectionsModalVisible(false)} style={{ backgroundColor: theme.danger, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 }}>
                 <Text style={{ color: '#fff', fontWeight: '700' }}>Close</Text>
               </TouchableOpacity>
             </View>
-            <View style={{ height: 10 }} />
             {friends.length === 0 ? (
-              <Text style={{ color: theme.muted }}>No connections yet.</Text>
+              <View style={{ alignItems: 'center', paddingVertical: 30 }}>
+                <Ionicons name="people-outline" size={48} color={theme.muted} />
+                <Text style={{ color: theme.muted, marginTop: 12, textAlign: 'center' }}>No connections yet.</Text>
+              </View>
             ) : (
-              <FlatList
-                data={friends}
-                keyExtractor={(u) => u.uid}
-                ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
-                renderItem={({ item }) => (
+              <ScrollView
+                style={{ maxHeight: 400 }}
+                contentContainerStyle={{ paddingBottom: 12 }}
+                showsVerticalScrollIndicator={true}
+              >
+                {friends.map((item, index) => (
                   <TouchableOpacity
-                    style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }}
+                    key={item.uid}
+                    style={{ 
+                      flexDirection: 'row', 
+                      alignItems: 'center', 
+                      backgroundColor: theme.card,
+                      padding: 12,
+                      borderRadius: 14,
+                      marginBottom: 10,
+                    }}
                     activeOpacity={0.8}
                     onPress={() => {
                       setConnectionsModalVisible(false);
@@ -1414,18 +1626,190 @@ const ProfileScreen = () => {
                     <UserAvatar
                       photoUrl={item.photo}
                       username={item.username}
-                      size={36}
+                      size={44}
                       borderColor={theme.primary}
-                      borderWidth={1}
+                      borderWidth={2}
                     />
-                    <Text style={{ color: theme.text, marginLeft: 10, fontWeight: '600' }}>{item.username}</Text>
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <Text style={{ color: theme.text, fontWeight: '700', fontSize: 15 }}>{item.username}</Text>
+                      <Text style={{ color: theme.muted, fontSize: 12, marginTop: 2 }}>Tap to view profile</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={20} color={theme.muted} />
                   </TouchableOpacity>
-                )}
-              />
+                ))}
+              </ScrollView>
             )}
-          </Pressable>
-        </Pressable>
+          </View>
+        </View>
       </Modal>
+
+      {/* Activities Breakdown Modal */}
+      <Modal
+        visible={activitiesModalVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setActivitiesModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <Pressable
+            style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }}
+            onPress={() => setActivitiesModalVisible(false)}
+          />
+          <View style={[styles.modalCard, { maxHeight: '70%' }]}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <View>
+                <Text style={{ color: theme.primary, fontWeight: 'bold', fontSize: 18 }}>Activity Breakdown</Text>
+                <Text style={{ color: theme.muted, fontSize: 13, marginTop: 2 }}>
+                  {myJoinedActivities.length} total activit{myJoinedActivities.length === 1 ? 'y' : 'ies'} joined
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setActivitiesModalVisible(false)} style={{ backgroundColor: theme.danger, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 }}>
+                <Text style={{ color: '#fff', fontWeight: '700' }}>Close</Text>
+              </TouchableOpacity>
+            </View>
+            
+            {activitiesBreakdown.length === 0 ? (
+              <View style={{ alignItems: 'center', paddingVertical: 30 }}>
+                <Ionicons name="fitness-outline" size={48} color={theme.muted} />
+                <Text style={{ color: theme.muted, marginTop: 12, textAlign: 'center' }}>No activities joined yet.</Text>
+              </View>
+            ) : (
+              <ScrollView
+                style={{ maxHeight: 400 }}
+                contentContainerStyle={{ paddingBottom: 12 }}
+                showsVerticalScrollIndicator={true}
+              >
+                {activitiesBreakdown.map((item, index) => (
+                  <View key={item.sport} style={{ 
+                    flexDirection: 'row', 
+                    alignItems: 'center', 
+                    backgroundColor: theme.card,
+                    padding: 14,
+                    borderRadius: 14,
+                    borderLeftWidth: 4,
+                    borderLeftColor: index === 0 ? '#FFD700' : index === 1 ? '#C0C0C0' : index === 2 ? '#CD7F32' : theme.primary,
+                    marginBottom: 10,
+                  }}>
+                    {/* Rank Medal/Badge */}
+                    {index <= 2 ? (
+                      <View style={{ marginRight: 12, alignItems: 'center', width: 36, height: 46 }}>
+                        {/* Ribbon - positioned behind */}
+                        <View style={{ position: 'absolute', top: 0, flexDirection: 'row', zIndex: 0 }}>
+                          <View style={{
+                            width: 10,
+                            height: 20,
+                            backgroundColor: index === 0 ? '#DC143C' : index === 1 ? '#4169E1' : '#228B22',
+                            transform: [{ skewX: '-10deg' }],
+                            borderTopLeftRadius: 2,
+                          }} />
+                          <View style={{
+                            width: 10,
+                            height: 20,
+                            backgroundColor: index === 0 ? '#FF6347' : index === 1 ? '#6495ED' : '#32CD32',
+                            transform: [{ skewX: '10deg' }],
+                            borderTopRightRadius: 2,
+                          }} />
+                        </View>
+                        {/* Medal Circle - positioned in front */}
+                        <View style={{
+                          position: 'absolute',
+                          top: 12,
+                          zIndex: 1,
+                          width: 32,
+                          height: 32,
+                          borderRadius: 16,
+                          backgroundColor: index === 0 ? '#FFD700' : index === 1 ? '#C0C0C0' : '#CD7F32',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          borderWidth: 3,
+                          borderColor: index === 0 ? '#DAA520' : index === 1 ? '#A9A9A9' : '#8B4513',
+                          shadowColor: '#000',
+                          shadowOffset: { width: 0, height: 2 },
+                          shadowOpacity: 0.3,
+                          shadowRadius: 2,
+                          elevation: 4,
+                        }}>
+                          {/* Inner ring */}
+                          <View style={{
+                            width: 24,
+                            height: 24,
+                            borderRadius: 12,
+                            borderWidth: 1,
+                            borderColor: index === 0 ? '#B8860B' : index === 1 ? '#808080' : '#A0522D',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                          }}>
+                            <Text style={{ 
+                              fontSize: 14, 
+                              fontWeight: '900', 
+                              color: index === 0 ? '#8B6914' : index === 1 ? '#4A4A4A' : '#5D3A1A',
+                            }}>
+                              {index + 1}
+                            </Text>
+                          </View>
+                        </View>
+                      </View>
+                    ) : (
+                      <View style={{
+                        width: 36,
+                        height: 46,
+                        borderRadius: 16,
+                        backgroundColor: `${theme.muted}15`,
+                        borderWidth: 2,
+                        borderColor: `${theme.muted}30`,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        marginRight: 12,
+                      }}>
+                        <Text style={{ 
+                          fontSize: 16, 
+                          fontWeight: '700', 
+                          color: theme.muted 
+                        }}>
+                          {index + 1}
+                        </Text>
+                      </View>
+                    )}
+                    
+                    {/* Sport Icon */}
+                    <ActivityIcon activity={item.sport} size={32} color={theme.primary} />
+                    
+                    {/* Sport Name & Details */}
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <Text style={{ color: theme.text, fontWeight: '700', fontSize: 15 }}>{item.sport}</Text>
+                      <View style={{ flexDirection: 'row', marginTop: 4, gap: 12 }}>
+                        {item.upcoming > 0 && (
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                            <Ionicons name="calendar" size={12} color={theme.primary} />
+                            <Text style={{ color: theme.primary, fontSize: 12, fontWeight: '600' }}>{item.upcoming} upcoming</Text>
+                          </View>
+                        )}
+                        {item.past > 0 && (
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                            <Ionicons name="time" size={12} color={theme.muted} />
+                            <Text style={{ color: theme.muted, fontSize: 12, fontWeight: '500' }}>{item.past} past</Text>
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                    
+                    {/* Total Count Badge */}
+                    <View style={{
+                      backgroundColor: `${theme.primary}20`,
+                      paddingHorizontal: 12,
+                      paddingVertical: 6,
+                      borderRadius: 16,
+                    }}>
+                      <Text style={{ color: theme.primary, fontWeight: '700', fontSize: 16 }}>{item.total}</Text>
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
+
       {/* Bottom toast */}
       <Animated.View
         pointerEvents={toastMsg ? 'auto' : 'none'}
@@ -1468,12 +1852,38 @@ const ProfileScreen = () => {
           >
             <Ionicons name="close" size={32} color="#fff" />
           </TouchableOpacity>
-          <Image
-            source={{ uri: profile?.photo || 'https://via.placeholder.com/100' }}
-            style={{ width: '90%', height: '70%', resizeMode: 'contain' }}
-          />
+          {profile?.photo ? (
+            <Image
+              source={{ uri: profile.photo }}
+              style={{ width: '90%', height: '70%' }}
+              contentFit="contain"
+              cachePolicy="memory-disk"
+            />
+          ) : (
+            <UserAvatar
+              photoUrl={null}
+              username={profile?.username}
+              size={250}
+            />
+          )}
         </View>
       </Modal>
+
+      {/* Activity Rating Modal */}
+      <ActivityRatingModal
+        visible={ratingModalVisible}
+        onClose={() => {
+          setRatingModalVisible(false);
+          setRatingActivity(null);
+        }}
+        activity={ratingActivity}
+        onRatingSubmitted={(activityId, rating) => {
+          // Update local state for immediate UI feedback
+          setLocalRatings(prev => ({ ...prev, [activityId]: rating }));
+          setRatingModalVisible(false);
+          setRatingActivity(null);
+        }}
+      />
 
       </Animated.View>
     </View>
@@ -1481,11 +1891,6 @@ const ProfileScreen = () => {
 };
 
 const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.create({
-  shareButton: {
-    padding: 8,
-    backgroundColor: t.card,
-    borderRadius: 5,
-  },
   container: {
     flex: 1,
     backgroundColor: t.background,
@@ -1495,6 +1900,176 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
     fontSize: 12,
     fontWeight: '600',
   },
+
+  // ===== COMPACT PROFILE HEADER STYLES =====
+  usernameHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 12,
+    position: 'relative',
+  },
+  usernameTitle: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: t.primary,
+    letterSpacing: 0.3,
+    textAlign: 'center',
+  },
+  settingsIconBtn: {
+    position: 'absolute',
+    right: 16,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: t.card,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  profileCompactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    marginBottom: 10,
+  },
+  avatarRingCompact: {
+    padding: 3,
+    borderRadius: 46,
+    borderWidth: 2.5,
+    borderColor: t.primary,
+  },
+  avatarShadow: {
+    shadowColor: t.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  profileAvatarCompact: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+  },
+  statsCompactContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    marginLeft: 16,
+  },
+  statCompactItem: {
+    alignItems: 'center',
+    paddingHorizontal: 4,
+  },
+  statCompactValue: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: t.primary,
+  },
+  statCompactLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: t.muted,
+    marginTop: 2,
+  },
+  bioSocialCompactRow: {
+    paddingHorizontal: 16,
+    marginBottom: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  bioCompactText: {
+    fontSize: 13,
+    color: t.text,
+    lineHeight: 18,
+    opacity: 0.85,
+    flex: 1,
+  },
+  socialCompactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  socialCompactBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: t.card,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: t.border,
+  },
+  instagramGradientBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  facebookBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#1877F2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionCompactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    marginBottom: 12,
+    gap: 8,
+  },
+  actionCompactBtnPrimary: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: t.primary,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    gap: 6,
+  },
+  actionCompactBtnPrimaryText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  actionCompactBtnSecondary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: t.card,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: t.primary,
+    gap: 5,
+  },
+  actionCompactBtnSecondaryText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: t.primary,
+  },
+  actionCompactBtnIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: t.card,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: t.primary,
+  },
+
+  // Legacy styles (kept for other parts of the screen)
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1668,6 +2243,209 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
   friendsTab: {
     marginTop: 10,
   },
+  // Connections Search Bar
+  connectionsSearchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: t.card,
+    borderRadius: 12,
+    paddingHorizontal: 4,
+    paddingVertical: 4,
+    borderWidth: 1.5,
+    borderColor: t.primary + '30',
+    marginBottom: 16,
+  },
+  connectionsSearchIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: t.primary + '15',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  connectionsSearchInput: {
+    backgroundColor: 'transparent',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    minHeight: 36,
+    color: t.text,
+    fontWeight: '500',
+    fontSize: 15,
+  },
+  connectionsClearBtn: {
+    marginRight: 8,
+    height: 28,
+    width: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // Section Headers
+  connectionsSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    paddingHorizontal: 4,
+  },
+  connectionsSectionTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: t.text,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  connectionsBadge: {
+    marginLeft: 8,
+    backgroundColor: t.primary,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    minWidth: 24,
+    alignItems: 'center',
+  },
+  connectionsBadgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  // Empty State
+  connectionsEmptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+    paddingHorizontal: 30,
+  },
+  connectionsEmptyIcon: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: t.primary + '15',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  connectionsEmptyTitle: {
+    color: t.text,
+    fontWeight: '700',
+    fontSize: 18,
+    marginBottom: 8,
+  },
+  connectionsEmptyText: {
+    color: t.muted,
+    fontSize: 14,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  // Friend Row (connected users)
+  friendTouchable: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    minWidth: 0,
+  },
+  friendAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 2,
+    borderColor: t.primary,
+    marginRight: 12,
+  },
+  friendStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  friendStatusText: {
+    fontSize: 11,
+    color: t.primary,
+    marginLeft: 4,
+    fontWeight: '500',
+  },
+  // Search Result Row
+  searchResultRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: t.card,
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: t.border,
+  },
+  searchResultTouchable: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  searchResultAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 2,
+    borderColor: t.muted + '50',
+    marginRight: 12,
+  },
+  searchResultName: {
+    color: t.text,
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  // Action Buttons
+  connectedBadgeBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: t.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  requestSentBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: t.primary,
+    backgroundColor: t.primary + '15',
+    borderRadius: 18,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderStyle: 'dashed',
+  },
+  requestSentBtnText: {
+    color: t.primary,
+    fontWeight: '600',
+    fontSize: 12,
+    marginLeft: 4,
+  },
+  addFriendBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: t.primary,
+    borderRadius: 18,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    shadowColor: t.primary,
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
+  },
+  addFriendBtnText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 12,
+    marginLeft: 4,
+  },
+  messageIconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: t.primary,
+    backgroundColor: t.primary + '10',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 8,
+  },
   userSearchRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1718,17 +2496,19 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: t.card,
-    borderRadius: 10,
-    padding: 10,
-    marginBottom: 8,
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: t.border,
   },
   userAvatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    borderWidth: 1,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 2,
     borderColor: t.primary,
-    marginRight: 8,
+    marginRight: 12,
   },
   userName: {
     color: t.text,
@@ -1739,7 +2519,7 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
     color: t.text,
     fontSize: 16,
     paddingVertical: 5,
-    fontWeight: '500',
+    fontWeight: '600',
   },
   card: {
     backgroundColor: t.card,
@@ -1778,6 +2558,37 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
     color: t.muted,
     fontWeight: '500',
   },
+  // Rating badges for history cards
+  ratedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 215, 0, 0.15)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+    gap: 4,
+  },
+  ratedBadgeText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFD700',
+  },
+  tapToRateBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: t.isDark ? 'rgba(26, 233, 239, 0.12)' : 'rgba(26, 233, 239, 0.08)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: t.isDark ? 'rgba(26, 233, 239, 0.3)' : 'rgba(26, 233, 239, 0.2)',
+  },
+  tapToRateText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: t.primary,
+  },
   infoRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1800,7 +2611,8 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
   cardActions: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: 10,
+    alignItems: 'center',
+    marginTop: 12,
   },
   joinButton: {
     paddingVertical: 8,
@@ -1815,6 +2627,37 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
   joinButtonText: {
     color: '#fff',
     fontWeight: 'bold',
+  },
+  // Rate button styles for history cards
+  rateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    backgroundColor: t.primary,
+    borderRadius: 8,
+    gap: 8,
+    flex: 1,
+    marginRight: 10,
+  },
+  rateButtonRated: {
+    backgroundColor: t.isDark ? 'rgba(255, 215, 0, 0.2)' : 'rgba(255, 215, 0, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 215, 0, 0.4)',
+  },
+  rateButtonText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  rateButtonTextRated: {
+    color: '#FFD700',
+  },
+  shareButton: {
+    padding: 8,
+    backgroundColor: t.card,
+    borderRadius: 5,
   },
   listContainer: {
     paddingBottom: 0,
@@ -1838,6 +2681,78 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
     marginTop: 4,
     marginBottom: 8,
   },
+  // New styled tab headers
+  tabHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    paddingHorizontal: 4,
+  },
+  tabIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: t.primary + '15',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  tabTitleStyled: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: t.text,
+  },
+  tabBadge: {
+    marginLeft: 10,
+    backgroundColor: t.primary,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    minWidth: 28,
+    alignItems: 'center',
+  },
+  tabBadgeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  // Styled search bar
+  styledSearchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: t.card,
+    borderRadius: 14,
+    paddingHorizontal: 4,
+    paddingVertical: 4,
+    borderWidth: 1.5,
+    borderColor: t.primary + '25',
+    marginBottom: 16,
+  },
+  searchIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 11,
+    backgroundColor: t.primary + '15',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  styledSearchInput: {
+    flex: 1,
+    backgroundColor: 'transparent',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    minHeight: 38,
+    color: t.text,
+    fontWeight: '500',
+    fontSize: 15,
+  },
+  styledClearBtn: {
+    marginRight: 8,
+    height: 30,
+    width: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   mutedText: {
     color: t.muted,
     fontSize: 14,
@@ -1848,12 +2763,14 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: 'transparent',
-    paddingVertical: 8,
-    paddingHorizontal: 0,
+    backgroundColor: t.card,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
     marginHorizontal: 0,
-    marginBottom: 8,
-    borderRadius: 0,
+    marginBottom: 10,
+    borderRadius: 14,
+    borderLeftWidth: 3,
+    borderLeftColor: t.primary,
   },
   friendActions: {
     flexDirection: 'row',
@@ -1864,48 +2781,59 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: t.primary,
-    borderRadius: 16,
-    paddingVertical: 5,
-    paddingHorizontal: 8,
-    marginRight: 6,
+    borderRadius: 20,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginRight: 8,
+    shadowColor: t.primary,
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
   },
   inviteBtnText: {
     color: '#fff',
     fontWeight: '700',
-    fontSize: 11,
-    marginLeft: 6,
+    fontSize: 12,
+    marginLeft: 4,
   },
   msgBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: t.primary,
-    borderRadius: 16,
-    paddingVertical: 5,
-    paddingHorizontal: 8,
+    backgroundColor: `${t.primary}10`,
+    borderRadius: 20,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
   },
   msgBtnText: {
     color: t.primary,
     fontWeight: '700',
-    fontSize: 11,
-    marginLeft: 6,
+    fontSize: 12,
+    marginLeft: 4,
   },
   // Filled variant matching msgBtn size for Connected/Requested
   msgBtnFilled: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: t.primary,
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: t.primary,
-    borderRadius: 16,
-    paddingVertical: 5,
-    paddingHorizontal: 8,
+    borderRadius: 20,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    shadowColor: t.primary,
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
   },
   msgBtnTextInverted: {
     color: '#fff',
     fontWeight: '700',
-    fontSize: 11,
-    marginLeft: 6,
+    fontSize: 12,
+    marginLeft: 4,
   },
   
   profileActionButtonSm: {
@@ -1949,7 +2877,7 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
   // Invite modal styles
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0,0,0,0.6)',
     alignItems: 'center',
     justifyContent: 'center',
     padding: 16,
@@ -2027,19 +2955,181 @@ const createStyles = (t: ReturnType<typeof useTheme>['theme']) => StyleSheet.cre
     color: '#fff',
     fontWeight: '700',
   },
-  addFriendBtn: {
+  
+  // New Invite Modal Styles
+  inviteModalCard: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: t.card,
+    borderRadius: 20,
+    padding: 0,
+    borderWidth: 1,
+    borderColor: t.border,
+    maxHeight: '80%',
+    overflow: 'hidden',
+  },
+  inviteModalHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: t.primary,
-    borderRadius: 16,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
+    padding: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: t.border,
+    gap: 12,
   },
-  addFriendBtnText: {
+  inviteModalIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: t.isDark ? 'rgba(26, 233, 239, 0.15)' : 'rgba(26, 233, 239, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  inviteModalTitle: {
+    color: t.text,
+    fontSize: 17,
+    fontWeight: 'bold',
+  },
+  inviteModalSubtitle: {
+    color: t.muted,
+    fontSize: 13,
+    marginTop: 2,
+  },
+  inviteModalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: t.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  inviteActivityList: {
+    maxHeight: 300,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  inviteEmptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+    paddingHorizontal: 20,
+  },
+  inviteEmptyTitle: {
+    color: t.text,
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  inviteEmptyText: {
+    color: t.muted,
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  inviteActivityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: t.isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+    gap: 12,
+  },
+  inviteActivityRowSelected: {
+    backgroundColor: t.isDark ? 'rgba(26, 233, 239, 0.12)' : 'rgba(26, 233, 239, 0.08)',
+    borderWidth: 1,
+    borderColor: t.primary,
+  },
+  inviteActivityRowJoined: {
+    opacity: 0.55,
+  },
+  inviteActivityIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    backgroundColor: t.isDark ? 'rgba(26, 233, 239, 0.1)' : 'rgba(26, 233, 239, 0.06)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  inviteActivityTitle: {
+    color: t.text,
+    fontWeight: '600',
+    fontSize: 15,
+  },
+  inviteActivityMeta: {
+    color: t.muted,
+    fontSize: 12,
+    marginTop: 3,
+  },
+  inviteActivityParticipants: {
+    color: t.muted,
+    fontSize: 11,
+    marginTop: 2,
+  },
+  inviteAlreadyJoinedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: t.isDark ? 'rgba(16, 185, 129, 0.15)' : 'rgba(16, 185, 129, 0.1)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+    gap: 4,
+  },
+  inviteAlreadyJoinedText: {
+    color: '#10b981',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  inviteCheckbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: t.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  inviteCheckboxSelected: {
+    backgroundColor: t.primary,
+  },
+  inviteModalFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+    borderTopWidth: 1,
+    borderTopColor: t.border,
+    gap: 12,
+  },
+  inviteModalCancelBtn: {
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    backgroundColor: t.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
+  },
+  inviteModalCancelText: {
+    color: t.muted,
+    fontWeight: '600',
+    fontSize: 15,
+  },
+  inviteModalSendBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: t.primary,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    flex: 1,
+    justifyContent: 'center',
+  },
+  inviteModalSendBtnDisabled: {
+    opacity: 0.5,
+  },
+  inviteModalSendText: {
     color: '#fff',
     fontWeight: '700',
-    fontSize: 12,
-    marginLeft: 6,
+    fontSize: 15,
   },
 });
 

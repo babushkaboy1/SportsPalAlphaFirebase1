@@ -70,14 +70,14 @@ type ProfileCache = {
  */
 export async function saveChatListToCache(chats: CachedChat[]): Promise<void> {
   try {
-    // Only cache first 5 chats to keep cache small
-    const chatsToCache = chats.slice(0, 5);
+    // Only cache first 8 chats to keep cache small but useful
+    const chatsToCache = chats.slice(0, 8);
     const cache: ChatListCache = {
       chats: chatsToCache,
       timestamp: Date.now(),
     };
     await AsyncStorage.setItem(CHAT_LIST_CACHE_KEY, JSON.stringify(cache));
-    console.log('💾 Chat list cached (first 5 chats)');
+    console.log('💾 Chat list cached (first 8 chats)');
   } catch (error) {
     console.error('Failed to save chat list to cache:', error);
   }
@@ -406,5 +406,62 @@ export async function clearAllChatCaches(): Promise<void> {
     console.log('🗑️ All chat caches cleared');
   } catch (error) {
     console.error('Failed to clear all chat caches:', error);
+  }
+}
+
+// ==================== RATING REMINDER DISMISSED ====================
+const DISMISSED_RATING_REMINDERS_KEY = 'dismissedRatingReminders';
+
+/**
+ * Get list of activity IDs where user has dismissed the rating reminder
+ */
+export async function getDismissedRatingReminders(): Promise<string[]> {
+  try {
+    const stored = await AsyncStorage.getItem(DISMISSED_RATING_REMINDERS_KEY);
+    if (!stored) return [];
+    return JSON.parse(stored);
+  } catch (error) {
+    console.error('Failed to get dismissed rating reminders:', error);
+    return [];
+  }
+}
+
+/**
+ * Dismiss a rating reminder for a specific activity (won't show again)
+ */
+export async function dismissRatingReminder(activityId: string): Promise<void> {
+  try {
+    const current = await getDismissedRatingReminders();
+    if (!current.includes(activityId)) {
+      current.push(activityId);
+      await AsyncStorage.setItem(DISMISSED_RATING_REMINDERS_KEY, JSON.stringify(current));
+      console.log('🔕 Rating reminder dismissed for activity:', activityId);
+    }
+  } catch (error) {
+    console.error('Failed to dismiss rating reminder:', error);
+  }
+}
+
+/**
+ * Check if a rating reminder has been dismissed for a specific activity
+ */
+export async function isRatingReminderDismissed(activityId: string): Promise<boolean> {
+  try {
+    const dismissed = await getDismissedRatingReminders();
+    return dismissed.includes(activityId);
+  } catch (error) {
+    return false;
+  }
+}
+
+/**
+ * Clear all dismissed rating reminders (for testing/reset)
+ */
+export async function clearDismissedRatingReminders(): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(DISMISSED_RATING_REMINDERS_KEY);
+    console.log('🗑️ Dismissed rating reminders cleared');
+  } catch (error) {
+    console.error('Failed to clear dismissed rating reminders:', error);
   }
 }

@@ -92,6 +92,8 @@ const CreateProfileScreen = ({ route }: any) => {
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
   const [changePwError, setChangePwError] = useState<string | null>(null);
   const [usernameError, setUsernameError] = useState<string | null>(null);
+  const [instagramError, setInstagramError] = useState<string | null>(null);
+  const [facebookError, setFacebookError] = useState<string | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scrollRef = useRef<ScrollView>(null);
   const instagramRef = useRef<TextInput>(null);
@@ -154,6 +156,42 @@ const CreateProfileScreen = ({ route }: any) => {
     if (trimmed.length < 1 || trimmed.length > 30) return 'Username must be 1–30 characters.';
     if (!/^[A-Za-z0-9._]+$/.test(trimmed)) return 'Use letters, numbers, periods and underscores only (no spaces or @).';
     return null;
+  };
+
+  // Validate Instagram URL format
+  const validateInstagramUrl = (url: string): { valid: boolean; error?: string } => {
+    if (!url || url.trim() === '') return { valid: true }; // Optional field
+    const trimmed = url.trim();
+    
+    // Check if it's a valid Instagram URL
+    const instagramPattern = /^https?:\/\/(www\.)?instagram\.com\/[a-zA-Z0-9._]+\/?/i;
+    
+    if (!instagramPattern.test(trimmed)) {
+      return { 
+        valid: false, 
+        error: 'Please enter a valid Instagram profile URL (e.g., https://www.instagram.com/username/)'
+      };
+    }
+    
+    return { valid: true };
+  };
+
+  // Validate Facebook URL format
+  const validateFacebookUrl = (url: string): { valid: boolean; error?: string } => {
+    if (!url || url.trim() === '') return { valid: true }; // Optional field
+    const trimmed = url.trim();
+    
+    // Check if it's a valid Facebook URL
+    const facebookPattern = /^https?:\/\/(www\.)?(facebook|fb)\.com\/[a-zA-Z0-9.]+\/?/i;
+    
+    if (!facebookPattern.test(trimmed)) {
+      return { 
+        valid: false, 
+        error: 'Please enter a valid Facebook profile URL (e.g., https://www.facebook.com/username/)'
+      };
+    }
+    
+    return { valid: true };
   };
 
   // Only show username error after submit attempt in create mode
@@ -351,6 +389,26 @@ const CreateProfileScreen = ({ route }: any) => {
     return () => clearTimeout(timer);
   }, [username]);
 
+  // Validate Instagram URL on change
+  useEffect(() => {
+    if (instagram && instagram.trim() !== '') {
+      const result = validateInstagramUrl(instagram);
+      setInstagramError(result.error || null);
+    } else {
+      setInstagramError(null);
+    }
+  }, [instagram]);
+
+  // Validate Facebook URL on change
+  useEffect(() => {
+    if (facebook && facebook.trim() !== '') {
+      const result = validateFacebookUrl(facebook);
+      setFacebookError(result.error || null);
+    } else {
+      setFacebookError(null);
+    }
+  }, [facebook]);
+
   // Validate birth date from separate fields
   const validateBirthDate = (): string | null => {
     if (!birthDay || !birthMonth || !birthYear) return 'Please enter your complete birth date.';
@@ -410,6 +468,25 @@ const CreateProfileScreen = ({ route }: any) => {
       setUsernameError(uErr);
       setShowUsernameError(true);
       return;
+    }
+
+    // Validate social media URLs if provided
+    if (instagram && instagram.trim() !== '') {
+      const instagramValidation = validateInstagramUrl(instagram);
+      if (!instagramValidation.valid) {
+        Alert.alert('Invalid Instagram URL', instagramValidation.error || 'Please enter a valid Instagram profile URL.');
+        setInstagramError(instagramValidation.error || null);
+        return;
+      }
+    }
+
+    if (facebook && facebook.trim() !== '') {
+      const facebookValidation = validateFacebookUrl(facebook);
+      if (!facebookValidation.valid) {
+        Alert.alert('Invalid Facebook URL', facebookValidation.error || 'Please enter a valid Facebook profile URL.');
+        setFacebookError(facebookValidation.error || null);
+        return;
+      }
     }
 
     setIsLoading(true);
@@ -874,19 +951,22 @@ const CreateProfileScreen = ({ route }: any) => {
 
       {/* Social Media Section (Optional) */}
       <Text style={styles.subtitle}>Social Media (Optional)</Text>
-      <Text style={styles.helperText}>Add your social links or usernames</Text>
+      <Text style={styles.helperText}>Add your complete profile URLs from Instagram or Facebook</Text>
 
       <View style={styles.socialInputContainer}>
-        <Ionicons name="logo-instagram" size={24} color={theme.primary} style={styles.socialIcon} />
+        <Ionicons name="logo-instagram" size={24} color={instagramError ? '#FF6B6B' : theme.primary} style={styles.socialIcon} />
         <TextInput
           ref={instagramRef}
-          style={styles.socialInput}
-          placeholder="Instagram (link or @username)"
+          style={[styles.socialInput, instagramError && styles.inputError]}
+          placeholder="https://www.instagram.com/username/"
           placeholderTextColor="#999"
           value={instagram}
           onChangeText={setInstagram}
           returnKeyType="next"
           blurOnSubmit={false}
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="url"
           onSubmitEditing={() => facebookRef.current?.focus()}
           onFocus={() => {
             setTimeout(() => {
@@ -894,26 +974,47 @@ const CreateProfileScreen = ({ route }: any) => {
             }, 100);
           }}
         />
+        {instagram.trim() !== '' && !instagramError && (
+          <Ionicons name="checkmark-circle" size={20} color="#4ECDC4" style={{ marginLeft: 8 }} />
+        )}
+        {instagramError && (
+          <Ionicons name="close-circle" size={20} color="#FF6B6B" style={{ marginLeft: 8 }} />
+        )}
       </View>
+      {instagramError && (
+        <Text style={styles.errorText}>{instagramError}</Text>
+      )}
 
       <View style={styles.socialInputContainer}>
-        <Ionicons name="logo-facebook" size={24} color={theme.primary} style={styles.socialIcon} />
+        <Ionicons name="logo-facebook" size={24} color={facebookError ? '#FF6B6B' : theme.primary} style={styles.socialIcon} />
         <TextInput
           ref={facebookRef}
-          style={styles.socialInput}
-          placeholder="Facebook (link or username)"
+          style={[styles.socialInput, facebookError && styles.inputError]}
+          placeholder="https://www.facebook.com/username/"
           placeholderTextColor="#999"
           value={facebook}
           onChangeText={setFacebook}
           returnKeyType="done"
           blurOnSubmit={true}
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="url"
           onFocus={() => {
             setTimeout(() => {
               scrollRef.current?.scrollTo({ y: 1150, animated: true });
             }, 100);
           }}
         />
+        {facebook.trim() !== '' && !facebookError && (
+          <Ionicons name="checkmark-circle" size={20} color="#4ECDC4" style={{ marginLeft: 8 }} />
+        )}
+        {facebookError && (
+          <Ionicons name="close-circle" size={20} color="#FF6B6B" style={{ marginLeft: 8 }} />
+        )}
       </View>
+      {facebookError && (
+        <Text style={styles.errorText}>{facebookError}</Text>
+      )}
 
       {/* Legal Agreements Section (Create mode only) */}
       {!isEdit && (
@@ -1347,6 +1448,10 @@ const createStyles = (t: any) => StyleSheet.create({
   },
   inputDisabled: {
     opacity: 0.6,
+  },
+  inputError: {
+    borderColor: '#FF6B6B',
+    borderWidth: 1,
   },
   subtitle: {
     fontSize: 18,

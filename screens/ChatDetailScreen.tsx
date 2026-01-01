@@ -14,6 +14,7 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import UserAvatar from '../components/UserAvatar';
+import { Image } from 'expo-image';
 import {
   View,
   Text,
@@ -22,7 +23,6 @@ import {
   FlatList,
   TouchableOpacity,
   TouchableWithoutFeedback,
-  Image,
   KeyboardAvoidingView,
   Platform,
   Alert,
@@ -2261,7 +2261,7 @@ const ChatDetailScreen = () => {
       return (
         <>
           {chatMeta.groupMeta.photoUrl ? (
-            <Image source={{ uri: chatMeta.groupMeta.photoUrl }} style={styles.headerImage} />
+            <Image source={{ uri: chatMeta.groupMeta.photoUrl }} style={styles.headerImage} cachePolicy="memory-disk" />
           ) : (
             <View style={[styles.headerImage, styles.headerIconCircle]}>
               <Ionicons name="people" size={22} color={theme.primary} />
@@ -2479,7 +2479,7 @@ const ChatDetailScreen = () => {
             <View style={styles.selectedImagesContainer}>
               {selectedImages.map((uri) => (
                 <View key={uri} style={{ marginRight: 6 }}>
-                  <Image source={{ uri }} style={styles.selectedImage} />
+                  <Image source={{ uri }} style={styles.selectedImage} cachePolicy="memory-disk" />
                   <TouchableOpacity
                     onPress={() => setSelectedImages((prev) => prev.filter((u) => u !== uri))}
                     style={styles.removeImageButton}
@@ -2810,44 +2810,68 @@ const ChatDetailScreen = () => {
           <Modal visible={editVisible && chatMeta.isGroup} transparent animationType="fade" onRequestClose={() => setEditVisible(false)}>
             <View style={styles.modalOverlay}>
               <Pressable style={StyleSheet.absoluteFill} onPress={() => setEditVisible(false)} />
-              <View style={styles.modalPanel} pointerEvents="auto">
-                <Text style={styles.modalTitle}>Edit Group</Text>
+              <View style={styles.inviteModalCard} pointerEvents="auto">
+                {/* Header */}
+                <View style={styles.inviteModalHeader}>
+                  <View style={styles.inviteModalHeaderIcon}>
+                    <Ionicons name="people" size={24} color={theme.primary} />
+                  </View>
+                  <View style={styles.inviteModalHeaderText}>
+                    <Text style={styles.inviteModalTitle}>Edit Group</Text>
+                    <Text style={styles.inviteModalSubtitle}>Update group details</Text>
+                  </View>
+                </View>
                 
-                <TouchableOpacity onPress={handlePickEditPhoto} style={styles.photoPickerRow}>
+                {/* Group Photo */}
+                <TouchableOpacity onPress={handlePickEditPhoto} style={styles.editGroupPhotoSection}>
                   {editPhotoUri || chatMeta.groupMeta?.photoUrl ? (
                     <Image
                       source={{ uri: editPhotoUri || chatMeta.groupMeta?.photoUrl }}
-                      style={styles.headerImage}
+                      style={styles.editGroupPhoto}
                     />
                   ) : (
-                    <View style={[styles.headerImage, styles.headerIconCircle, { backgroundColor: theme.card }]}>
-                      <Ionicons name="image" size={18} color={theme.primary} />
+                    <View style={styles.editGroupPhotoPlaceholder}>
+                      <Ionicons name="camera" size={28} color={theme.primary} />
                     </View>
                   )}
-                  <Text style={{ color: theme.text, marginLeft: 10 }}>Change photo</Text>
+                  <View style={styles.editGroupPhotoOverlay}>
+                    <Ionicons name="pencil" size={14} color="#fff" />
+                  </View>
                 </TouchableOpacity>
+                <Text style={styles.editGroupPhotoHint}>Tap to change photo</Text>
 
+                {/* Group Title */}
+                <Text style={styles.inviteModalSectionLabel}>Group Name</Text>
                 <TextInput
-                  style={styles.input}
+                  style={styles.editGroupInput}
                   value={editTitle}
                   onChangeText={(t) => setEditTitle(t.slice(0, 25))}
-                  placeholder="Group title"
+                  placeholder="Enter group name"
                   placeholderTextColor={theme.muted}
                 />
+                <Text style={styles.editGroupCharCount}>{editTitle.length}/25</Text>
 
-                <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12, gap: 8 }}>
+                {/* Footer */}
+                <View style={styles.inviteModalFooter}>
                   <TouchableOpacity
                     onPress={() => setEditVisible(false)}
-                    style={[styles.modalButton, styles.modalButtonCancel]}
+                    style={styles.inviteModalCancelBtn}
                   >
-                    <Text style={styles.modalButtonCancelText}>Cancel</Text>
+                    <Text style={styles.inviteModalCancelText}>Cancel</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    disabled={busy}
+                    disabled={busy || !editTitle.trim()}
                     onPress={handleEditGroup}
-                    style={[styles.modalButton, styles.modalButtonPrimary, busy && { opacity: 0.6 }]}
+                    style={[styles.inviteModalSendBtn, (busy || !editTitle.trim()) && { opacity: 0.5 }]}
                   >
-                    <Text style={styles.modalButtonPrimaryText}>Save</Text>
+                    {busy ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <>
+                        <Ionicons name="checkmark" size={18} color="#fff" />
+                        <Text style={styles.inviteModalSendText}>Save</Text>
+                      </>
+                    )}
                   </TouchableOpacity>
                 </View>
               </View>
@@ -2858,57 +2882,83 @@ const ChatDetailScreen = () => {
           <Modal visible={addUsersVisible} transparent animationType="fade" onRequestClose={() => setAddUsersVisible(false)}>
             <View style={styles.modalOverlay}>
               <Pressable style={StyleSheet.absoluteFill} onPress={() => setAddUsersVisible(false)} />
-              <View style={styles.modalPanel} pointerEvents="auto">
-                <Text style={styles.modalTitle}>Add Users</Text>
-                <Text style={{ color: theme.muted, marginBottom: 8 }}>Select from your connections</Text>
+              <View style={styles.inviteModalCard} pointerEvents="auto">
+                {/* Header */}
+                <View style={styles.inviteModalHeader}>
+                  <View style={styles.inviteModalHeaderIcon}>
+                    <Ionicons name="person-add" size={24} color={theme.primary} />
+                  </View>
+                  <View style={styles.inviteModalHeaderText}>
+                    <Text style={styles.inviteModalTitle}>Add Members</Text>
+                    <Text style={styles.inviteModalSubtitle}>Select from your connections</Text>
+                  </View>
+                </View>
                 
-                <FlatList
-                  data={friends.filter((f) => !chatMeta.participants.includes(f.uid))}
-                  keyExtractor={(item) => item.uid}
-                  style={{ maxHeight: 260 }}
-                  renderItem={({ item }) => (
-                    <TouchableOpacity
-                      style={styles.userRow}
-                      onPress={() => setAddingUsersMap((prev) => ({ ...prev, [item.uid]: !prev[item.uid] }))}
-                    >
-                      <UserAvatar
-                        photoUrl={item.photo || item.photoURL}
-                        username={item.username || 'User'}
-                        size={44}
-                        style={styles.userRowImage}
-                      />
-                      <Text style={styles.userRowText}>{item.username}</Text>
-                      <Ionicons
-                        name={addingUsersMap[item.uid] ? 'checkbox' : 'square-outline'}
-                        size={22}
-                        color={theme.primary}
-                      />
-                    </TouchableOpacity>
-                  )}
-                  ListEmptyComponent={
-                    <Text style={{ color: theme.muted, textAlign: 'center', marginVertical: 8 }}>
-                      No available friends
-                    </Text>
-                  }
-                />
-
-                <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12, gap: 8 }}>
-                  <TouchableOpacity
-                    onPress={() => {
-                      setAddUsersVisible(false);
-                      setAddingUsersMap({});
+                {friends.filter((f) => !chatMeta.participants.includes(f.uid)).length === 0 ? (
+                  <View style={styles.inviteModalEmptyState}>
+                    <Ionicons name="people-outline" size={48} color={theme.muted} />
+                    <Text style={styles.inviteModalEmptyText}>No connections available to add</Text>
+                  </View>
+                ) : (
+                  <FlatList
+                    data={friends.filter((f) => !chatMeta.participants.includes(f.uid))}
+                    keyExtractor={(item) => item.uid}
+                    style={styles.inviteModalList}
+                    showsVerticalScrollIndicator={false}
+                    renderItem={({ item }) => {
+                      const isSelected = addingUsersMap[item.uid];
+                      return (
+                        <TouchableOpacity
+                          style={[styles.inviteFriendRow, isSelected && styles.inviteFriendRowSelected]}
+                          onPress={() => setAddingUsersMap((prev) => ({ ...prev, [item.uid]: !prev[item.uid] }))}
+                          activeOpacity={0.7}
+                        >
+                          <UserAvatar
+                            photoUrl={item.photo || item.photoURL}
+                            username={item.username || 'User'}
+                            size={44}
+                            style={styles.inviteFriendAvatar}
+                          />
+                          <View style={styles.inviteFriendInfo}>
+                            <Text style={styles.inviteFriendName}>{item.username}</Text>
+                          </View>
+                          <View style={[styles.inviteCheckbox, isSelected && styles.inviteCheckboxSelected]}>
+                            {isSelected && <Ionicons name="checkmark" size={16} color="#fff" />}
+                          </View>
+                        </TouchableOpacity>
+                      );
                     }}
-                    style={[styles.modalButton, styles.modalButtonCancel]}
-                  >
-                    <Text style={styles.modalButtonCancelText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    disabled={busy}
-                    onPress={handleAddUsers}
-                    style={[styles.modalButton, styles.modalButtonPrimary, busy && { opacity: 0.6 }]}
-                  >
-                    <Text style={styles.modalButtonPrimaryText}>Add</Text>
-                  </TouchableOpacity>
+                    ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
+                  />
+                )}
+
+                {/* Footer */}
+                <View style={styles.inviteModalFooter}>
+                  <Text style={styles.inviteModalSelectedCount}>
+                    {Object.values(addingUsersMap).filter(Boolean).length} selected
+                  </Text>
+                  <View style={styles.inviteModalButtons}>
+                    <TouchableOpacity
+                      onPress={() => setAddUsersVisible(false)}
+                      style={styles.inviteModalCancelBtn}
+                    >
+                      <Text style={styles.inviteModalCancelText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      disabled={busy || Object.values(addingUsersMap).filter(Boolean).length === 0}
+                      onPress={handleAddUsers}
+                      style={[styles.inviteModalSendBtn, (busy || Object.values(addingUsersMap).filter(Boolean).length === 0) && { opacity: 0.5 }]}
+                    >
+                      {busy ? (
+                        <ActivityIndicator size="small" color="#fff" />
+                      ) : (
+                        <>
+                          <Ionicons name="person-add" size={18} color="#fff" />
+                          <Text style={styles.inviteModalSendText}>Add</Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                  </View>
                 </View>
               </View>
             </View>
@@ -2924,29 +2974,42 @@ const ChatDetailScreen = () => {
                 setInviteModalVisible(false);
                 setSelectedInvitee(null);
               }} />
-              <View style={styles.modalPanel} pointerEvents="auto">
-                <Text style={styles.modalTitle}>
-                  Invite {(selectedInvitee || chatMeta.dmPeer)?.username || 'user'}
-                </Text>
+              <View style={styles.inviteModalCard} pointerEvents="auto">
+                {/* Header */}
+                <View style={styles.inviteModalHeader}>
+                  <View style={styles.inviteModalHeaderIcon}>
+                    <Ionicons name="paper-plane" size={24} color={theme.primary} />
+                  </View>
+                  <View style={styles.inviteModalHeaderText}>
+                    <Text style={styles.inviteModalTitle}>Invite to Activity</Text>
+                    <Text style={styles.inviteModalSubtitle}>
+                      Send invite to {(selectedInvitee || chatMeta.dmPeer)?.username || 'user'}
+                    </Text>
+                  </View>
+                </View>
                 
                 {myJoinedActivitiesUpcoming.length === 0 ? (
-                  <Text style={{ color: theme.muted, textAlign: 'center', marginVertical: 8 }}>
-                    You haven't joined any upcoming activities
-                  </Text>
+                  <View style={styles.inviteModalEmptyState}>
+                    <Ionicons name="calendar-outline" size={48} color={theme.muted} />
+                    <Text style={styles.inviteModalEmptyText}>You haven't joined any upcoming activities</Text>
+                    <Text style={styles.inviteModalEmptyHint}>Join an activity first to invite others</Text>
+                  </View>
                 ) : (
                   <FlatList
                     data={myJoinedActivitiesUpcoming}
                     keyExtractor={(item: any) => item.id}
-                    style={{ maxHeight: 320, marginVertical: 8 }}
+                    style={styles.inviteModalList}
+                    showsVerticalScrollIndicator={false}
                     renderItem={({ item }: any) => {
                       const targetUser = selectedInvitee || chatMeta.dmPeer;
                       const alreadyJoined = targetUser && 
                         Array.isArray(item?.joinedUserIds) && 
                         item.joinedUserIds.includes(targetUser.uid);
+                      const isSelected = inviteSelection[item.id];
 
                       return (
                         <Pressable
-                          style={[styles.activityRow, alreadyJoined && { opacity: 0.45 }]}
+                          style={[styles.inviteActivityRow, isSelected && !alreadyJoined && styles.inviteActivityRowSelected]}
                           onPress={() => {
                             if (alreadyJoined) {
                               showToast(`${targetUser?.username} is already in this activity`);
@@ -2955,52 +3018,58 @@ const ChatDetailScreen = () => {
                             setInviteSelection((prev) => ({ ...prev, [item.id]: !prev[item.id] }));
                           }}
                         >
-                          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
-                            <View style={styles.activityIconCircle}>
-                              <ActivityIcon activity={item.activity} size={20} color={theme.primary} />
-                            </View>
-                            <View style={{ flex: 1 }}>
-                              <Text style={styles.activityName} numberOfLines={1}>
-                                {item.activity}
-                              </Text>
-                              <Text style={styles.activityMeta}>
-                                {item.date} • {item.time}
-                              </Text>
-                            </View>
+                          <View style={styles.inviteActivityIconCircle}>
+                            <ActivityIcon activity={item.activity} size={22} color={theme.primary} />
+                          </View>
+                          <View style={styles.inviteActivityInfo}>
+                            <Text style={styles.inviteActivityName} numberOfLines={1}>
+                              {item.activity}
+                            </Text>
+                            <Text style={styles.inviteActivityMeta}>
+                              {item.date} • {item.time}
+                            </Text>
                           </View>
                           {alreadyJoined ? (
-                            <Text style={{ color: theme.muted, fontSize: 12, fontWeight: '600' }}>
-                              Joined
-                            </Text>
+                            <View style={styles.inviteAlreadyJoinedBadge}>
+                              <Ionicons name="checkmark-circle" size={14} color={theme.primary} />
+                              <Text style={styles.inviteAlreadyJoinedText}>Joined</Text>
+                            </View>
                           ) : (
-                            <Ionicons
-                              name={inviteSelection[item.id] ? 'checkbox' : 'square-outline'}
-                              size={22}
-                              color={inviteSelection[item.id] ? theme.primary : theme.muted}
-                            />
+                            <View style={[styles.inviteCheckbox, isSelected && styles.inviteCheckboxSelected]}>
+                              {isSelected && <Ionicons name="checkmark" size={16} color="#fff" />}
+                            </View>
                           )}
                         </Pressable>
                       );
                     }}
+                    ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
                   />
                 )}
 
-                <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12, gap: 8 }}>
-                  <TouchableOpacity
-                    onPress={() => {
-                      setInviteModalVisible(false);
-                      setSelectedInvitee(null);
-                    }}
-                    style={[styles.modalButton, styles.modalButtonCancel]}
-                  >
-                    <Text style={styles.modalButtonCancelText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={handleSendInvites}
-                    style={[styles.modalButton, styles.modalButtonPrimary]}
-                  >
-                    <Text style={styles.modalButtonPrimaryText}>Send</Text>
-                  </TouchableOpacity>
+                {/* Footer */}
+                <View style={styles.inviteModalFooter}>
+                  <Text style={styles.inviteModalSelectedCount}>
+                    {Object.values(inviteSelection).filter(Boolean).length} selected
+                  </Text>
+                  <View style={styles.inviteModalButtons}>
+                    <TouchableOpacity
+                      onPress={() => {
+                        setInviteModalVisible(false);
+                        setSelectedInvitee(null);
+                      }}
+                      style={styles.inviteModalCancelBtn}
+                    >
+                      <Text style={styles.inviteModalCancelText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={handleSendInvites}
+                      disabled={Object.values(inviteSelection).filter(Boolean).length === 0}
+                      style={[styles.inviteModalSendBtn, Object.values(inviteSelection).filter(Boolean).length === 0 && { opacity: 0.5 }]}
+                    >
+                      <Ionicons name="paper-plane" size={18} color="#fff" />
+                      <Text style={styles.inviteModalSendText}>Send</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
               </View>
             </View>
@@ -3778,7 +3847,271 @@ const createStyles = (theme: any) => StyleSheet.create({
     borderColor: theme.border,
   },
 
-  // Activity Row (Invite)
+  // ========== INVITE MODAL STYLES (Professional Design) ==========
+  inviteModalCard: {
+    width: '92%',
+    maxWidth: 400,
+    backgroundColor: theme.card,
+    borderRadius: 20,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: theme.border,
+    maxHeight: '80%',
+  },
+  inviteModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 20,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.border,
+  },
+  inviteModalHeaderIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: `${theme.primary}20`,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 14,
+  },
+  inviteModalHeaderText: {
+    flex: 1,
+  },
+  inviteModalTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: theme.text,
+    marginBottom: 2,
+  },
+  inviteModalSubtitle: {
+    fontSize: 14,
+    color: theme.muted,
+  },
+  inviteModalSectionLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: theme.primary,
+    marginBottom: 10,
+    marginTop: 8,
+  },
+  inviteModalList: {
+    maxHeight: 280,
+  },
+  inviteModalEmptyState: {
+    alignItems: 'center',
+    paddingVertical: 32,
+  },
+  inviteModalEmptyText: {
+    color: theme.muted,
+    fontSize: 15,
+    marginTop: 12,
+    textAlign: 'center',
+  },
+  inviteModalEmptyHint: {
+    color: theme.muted,
+    fontSize: 13,
+    marginTop: 4,
+    opacity: 0.7,
+  },
+  inviteModalFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 20,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: theme.border,
+  },
+  inviteModalSelectedCount: {
+    color: theme.muted,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  inviteModalButtons: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  inviteModalCancelBtn: {
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: theme.background,
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
+  inviteModalCancelText: {
+    color: theme.text,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  inviteModalSendBtn: {
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: theme.primary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  inviteModalSendText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+
+  // Friend row in invite modal
+  inviteFriendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: theme.background,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
+  inviteFriendRowSelected: {
+    borderColor: theme.primary,
+    backgroundColor: `${theme.primary}10`,
+  },
+  inviteFriendAvatar: {
+    borderWidth: 2,
+    borderColor: theme.primary,
+  },
+  inviteFriendInfo: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  inviteFriendName: {
+    color: theme.text,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  inviteCheckbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: theme.border,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  inviteCheckboxSelected: {
+    backgroundColor: theme.primary,
+    borderColor: theme.primary,
+  },
+
+  // Activity row in invite modal
+  inviteActivityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: theme.background,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
+  inviteActivityRowSelected: {
+    borderColor: theme.primary,
+    backgroundColor: `${theme.primary}10`,
+  },
+  inviteActivityIconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: `${theme.primary}15`,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  inviteActivityInfo: {
+    flex: 1,
+  },
+  inviteActivityName: {
+    color: theme.text,
+    fontWeight: '600',
+    fontSize: 15,
+  },
+  inviteActivityMeta: {
+    color: theme.muted,
+    fontSize: 13,
+    marginTop: 2,
+  },
+  inviteAlreadyJoinedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: `${theme.primary}15`,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    gap: 4,
+  },
+  inviteAlreadyJoinedText: {
+    color: theme.primary,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+
+  // Edit Group Modal
+  editGroupPhotoSection: {
+    alignSelf: 'center',
+    marginBottom: 8,
+  },
+  editGroupPhoto: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    borderWidth: 3,
+    borderColor: theme.primary,
+  },
+  editGroupPhotoPlaceholder: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    backgroundColor: `${theme.primary}15`,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: theme.border,
+    borderStyle: 'dashed',
+  },
+  editGroupPhotoOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: theme.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: theme.card,
+  },
+  editGroupPhotoHint: {
+    color: theme.muted,
+    fontSize: 13,
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  editGroupInput: {
+    backgroundColor: theme.background,
+    color: theme.text,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 16,
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
+  editGroupCharCount: {
+    color: theme.muted,
+    fontSize: 12,
+    textAlign: 'right',
+    marginTop: 6,
+  },
+
+  // Legacy Activity Row (keep for compatibility)
   activityRow: {
     flexDirection: 'row',
     alignItems: 'center',

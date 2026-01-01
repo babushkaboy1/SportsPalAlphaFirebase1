@@ -27,6 +27,24 @@ https://console.cloud.google.com/apis/credentials?project=sportspal-1b468
 - [ ] iOS client: `797980453879-nm6nq024jdb77gn5euhlrkmmd1t0tu68.apps.googleusercontent.com`
 - [ ] Android client: `797980453879-2s8joa3gkv6n5a70ekuv1jtgmt916hig.apps.googleusercontent.com`
 
+**Add Expo Auth Proxy to Web Client (Authorised redirect URIs):**
+In the Web client, under "Authorised redirect URIs", add:
+- `https://auth.expo.io/@sportspal/SportsPal4`
+
+Keep the existing Firebase handler:
+- `https://sportspal-1b468.firebaseapp.com/__/auth/handler`
+
+This ensures Google accepts the HTTPS redirect while the Expo proxy returns control to the app via `sportspal://`.
+
+**CRITICAL - Android Client Settings:**
+Click on the Android OAuth client and verify:
+- [ ] Package name: `com.sportspal.app` ✓
+- [ ] SHA-1 fingerprint: `A1:44:BD:09:6C:D9:38:6D:FF:00:56:4C:CF:D5:C7:F5:D3:3B:FB:56` ✓
+- [ ] **Enable custom URI scheme** - Toggle this ON if it's currently off
+- [ ] Click SAVE
+
+> **Note:** The custom URI scheme setting allows the app to handle deep links back from Google OAuth!
+
 ---
 
 ## ✅ Facebook Login

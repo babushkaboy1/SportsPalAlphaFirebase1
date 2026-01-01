@@ -41,8 +41,11 @@ export function generateChatLink(chatId: string): string {
  */
 export function parseDeepLink(url: string): DeepLinkParseResult {
   try {
-    // Support both universal links and custom schemes (sportspal:/activity/123)
+    console.log('[DeepLink] Parsing URL:', url);
+    
+    // Support both universal links and custom schemes (sportspal://activity/123)
     const parsed = Linking.parse(url);
+    console.log('[DeepLink] Parsed result:', JSON.stringify(parsed));
 
     // Firebase links may embed the real link in the `link` query param
     const deepLinkParam = parsed.queryParams?.link;
@@ -50,17 +53,48 @@ export function parseDeepLink(url: string): DeepLinkParseResult {
       return parseDeepLink(decodeURIComponent(deepLinkParam));
     }
 
-    const pathSegments = (parsed.path || '').split('/').filter(Boolean);
+    // Get path from parsed URL, or try to extract it manually if Linking.parse fails
+    let pathSegments = (parsed.path || '').split('/').filter(Boolean);
+    
+    // If path is empty, try manual parsing for custom scheme URLs
+    // e.g., sportspal://activity/123 might not parse correctly
+    if (pathSegments.length === 0 && url.includes('://')) {
+      const afterScheme = url.split('://')[1] || '';
+      // Remove any host part (e.g., "open" in sportspal://open/activity/123)
+      const pathPart = afterScheme.replace(/^[^/]*\//, '').replace(/\?.*$/, '');
+      pathSegments = (pathPart || afterScheme).split('/').filter(Boolean);
+      console.log('[DeepLink] Manual path extraction:', pathSegments);
+    }
 
     if (pathSegments.length >= 2) {
       const [typeSegment, idSegment] = pathSegments;
       if (typeSegment === 'activity' && idSegment) {
+        console.log('[DeepLink] Matched activity:', idSegment);
         return { type: 'activity', id: idSegment };
       }
       if (typeSegment === 'profile' && idSegment) {
+        console.log('[DeepLink] Matched profile:', idSegment);
         return { type: 'profile', id: idSegment };
       }
       if (typeSegment === 'chat' && idSegment) {
+        console.log('[DeepLink] Matched chat:', idSegment);
+        return { type: 'chat', id: idSegment };
+      }
+    }
+    
+    // Handle case where first segment might be the host "open" in sportspal://open/activity/123
+    if (pathSegments.length >= 3 && pathSegments[0] === 'open') {
+      const [, typeSegment, idSegment] = pathSegments;
+      if (typeSegment === 'activity' && idSegment) {
+        console.log('[DeepLink] Matched activity (with host):', idSegment);
+        return { type: 'activity', id: idSegment };
+      }
+      if (typeSegment === 'profile' && idSegment) {
+        console.log('[DeepLink] Matched profile (with host):', idSegment);
+        return { type: 'profile', id: idSegment };
+      }
+      if (typeSegment === 'chat' && idSegment) {
+        console.log('[DeepLink] Matched chat (with host):', idSegment);
         return { type: 'chat', id: idSegment };
       }
     }
@@ -80,6 +114,7 @@ export function parseDeepLink(url: string): DeepLinkParseResult {
       return { type: 'chat', id: qp.chatId };
     }
 
+    console.log('[DeepLink] No match found, returning unknown');
     return { type: 'unknown', id: null };
   } catch (error) {
     console.error('Error parsing deep link:', error);
